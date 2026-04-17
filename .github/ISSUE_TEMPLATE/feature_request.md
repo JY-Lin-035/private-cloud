@@ -1,20 +1,28 @@
----
-name: Feature request
-about: Suggest an idea for this project
-title: ''
-labels: ''
-assignees: ''
+name: "Feature Request"
+description: "提出新功能需求"
+title: "[Feature] "
+assignees: []
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 功能說明
+      description: "請簡述該功能的目的與內容"
+    validations:
+      required: true
 
----
+  - type: textarea
+    id: implementation
+    attributes:
+      label: 預計實現方式
+      description: "描述可能的程式或架構實現方式"
+    validations:
+      required: false
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
-
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
-
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
-
-**Additional context**
-Add any other context or screenshots about the feature request here.
+  - type: textarea
+    id: references
+    attributes:
+      label: 相關資料
+      description: "可附上文件、設計稿等"
+    validations:
+      required: false
