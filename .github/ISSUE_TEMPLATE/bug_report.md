@@ -1,38 +1,36 @@
----
-name: Bug report
-about: Create a report to help us improve
-title: ''
-labels: ''
-assignees: ''
+name: "Bug Report"
+description: "回報錯誤或異常狀況"
+title: "[Bug] "
+assignees: []
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 錯誤說明
+      description: "請描述錯誤內容及發生位置"
+    validations:
+      required: true
 
----
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 重現方式
+      description: "請描述可以重現錯誤的步驟"
+    validations:
+      required: false
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+  - type: textarea
+    id: expected
+    attributes:
+      label: 預期行為
+      description: "預期應該出現的結果"
+    validations:
+      required: false
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Go to '...'
-2. Click on '....'
-3. Scroll down to '....'
-4. See error
-
-**Expected behavior**
-A clear and concise description of what you expected to happen.
-
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
-
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
-
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
-
-**Additional context**
-Add any other context about the problem here.
+  - type: textarea
+    id: additional
+    attributes:
+      label: 補充資訊
+      description: "可提供截圖等資料"
+    validations:
+      required: false
