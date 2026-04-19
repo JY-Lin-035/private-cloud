@@ -1,0 +1,27 @@
+services:
+  # MySQL 資料庫服務
+  db:
+    image: mysql:8.0
+    container_name: mysql_service
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: my_database
+      MYSQL_USER: mysql
+      MYSQL_PASSWORD: mysql
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  # Redis 快取服務
+  redis:
+    image: redis:7.0-alpine
+    container_name: redis_service
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning
+
+volumes:
+  mysql_data:
