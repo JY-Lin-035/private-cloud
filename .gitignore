@@ -1,0 +1,11 @@
+**/.venv
+
+backend/.env
+backend/plan.md
+backend/README.md
+backend/backend.md
+
+frontend/node_modules
+frontend/plan.md
+frontend/README.md
+frontend/frontend.md
