@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.schemas.folder import CreateFolderRequest, RenameFolderRequest, FolderCreateResponse, FolderRenameResponse, FolderDeleteResponse
 from app.services.folder_service import FolderService
 from app.api.dependencies import get_db, get_current_user_id
-from app.utils.logger import log_info, log_error
+from app.utils.logger_sample import log_info, log_error
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
 

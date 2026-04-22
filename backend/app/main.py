@@ -1,19 +1,25 @@
+import traceback as tb
+from redis import Redis
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import traceback as tb
-from redis import Redis
-from app.config import settings
-from app.middleware.session_middleware import SessionMiddleware
-from app.middleware.rate_limit_middleware import RateLimitMiddleware
-from app.api.v1 import accounts, files, folders, share
-from app.api.dependencies import get_redis
-from app.models.account import Account
-from app.models.share_link import ShareLink
-from app.models.base import Base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from app.utils.logger import log_info, log_error
+
+
+from app.config import settings
+
+from app.models.base import Base
+from app.models.account import Account
+from app.models.share_link import ShareLink
+
+from app.utils.logger import get_logger
+
+from app.api.dependencies import get_redis
+from app.api.v1 import accounts, files, folders, share
+
+from app.middleware.session_middleware import SessionMiddleware
+from app.middleware.rate_limit_middleware import RateLimitMiddleware
 
 # Create FastAPI app
 app = FastAPI(title="File Management Backend", version="1.0.0")
@@ -21,7 +27,7 @@ app = FastAPI(title="File Management Backend", version="1.0.0")
 # Add CORS middleware - must use explicit origins when credentials=True
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5341", "http://127.0.0.1:5341"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.account import Account
 from app.repositories.account_repository import AccountRepository
 from app.config import settings
-from app.utils.logger import log_info, log_error
+from app.utils.logger_sample import log_info, log_error
 
 
 
