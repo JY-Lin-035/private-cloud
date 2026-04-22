@@ -3,7 +3,7 @@ from fastapi import Request, HTTPException, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from redis import Redis
 from app.config import settings
-from app.utils.logger import log_info, log_error
+from app.utils.logger_sample import log_info, log_error
 import json
 
 
@@ -90,7 +90,8 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 max_age=settings.TOKEN_EXPIRE_TIME * 60,
                 path='/',
                 httponly=True,
-                samesite='lax'
+                samesite='lax',
+                secure=False
             )
         
         return response

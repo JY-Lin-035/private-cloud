@@ -5,7 +5,7 @@ from redis import Redis
 from app.schemas.file import FileUploadRequest, FileListResponse, StorageInfoResponse, FileUploadResponse, FileDeleteResponse
 from app.services.file_service import FileService
 from app.api.dependencies import get_db, get_redis, get_current_user_id
-from app.utils.logger import log_info, log_error
+from app.utils.logger_sample import log_info, log_error
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 

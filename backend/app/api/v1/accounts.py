@@ -11,7 +11,7 @@ from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service
 from app.api.rate_limit import rate_limit
-from app.utils.logger import log_info, log_error
+from app.utils.logger_sample import log_info, log_error
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
