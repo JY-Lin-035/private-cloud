@@ -27,7 +27,7 @@ app = FastAPI(title="File Management Backend", version="1.0.0")
 # Add CORS middleware - must use explicit origins when credentials=True
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5341", "http://127.0.0.1:5341"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
