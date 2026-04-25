@@ -66,7 +66,7 @@ class AccountService:
             account = self.account_repo.get_by_name(username)
             
             if not account:
-                return {'error': '使用者名稱不存在', 'stateCode': 404}
+                return {'error': '使用者名稱不存在', 'stateCode': 401}
             
             if not verify_password(password, account.password):
                 return {'error': '密碼錯誤!', 'stateCode': 401}
