@@ -11,7 +11,7 @@ from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service
 from app.api.rate_limit import rate_limit
-from app.utils.logger import log_info, log_error
+from app.utils.logger_sample import log_info, log_error
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -71,7 +71,11 @@ async def login(
             log_info("Login error", {"error": result['error'], "stateCode": result['stateCode']})
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        response = Response(content='{"message": "登入成功", "email": "' + result['email'] + '"}', media_type="application/json")
+        response = Response(
+            content='{"message": "登入成功", "email": "' + result['email'] + '"}', 
+            media_type="application/json", 
+        )
+
         response.set_cookie(
             key="session",
             value=result['token'],
@@ -248,4 +252,4 @@ async def check_session(user_id: int = Depends(get_current_user_id)):
         return Response(status_code=200)
     except Exception as e:
         log_error("Check session endpoint error", e)
-        raise
+        raise HTTPException(status_code=401, detail="Unauthorized")

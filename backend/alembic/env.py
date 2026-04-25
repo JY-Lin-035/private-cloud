@@ -7,8 +7,9 @@ from alembic import context
 
 from app.config import settings
 from app.models.base import Base
-from app.models.account import Account
-from app.models.share_link import ShareLink
+#from app.models.account import Account
+#from app.models.share_link import ShareLink
+from app.utils.logger import get_logger
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -22,6 +23,8 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 target_metadata = Base.metadata
+logger = get_logger(__name__)
+logger.info(f"Tables: {list(Base.metadata.tables.keys())}")
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
