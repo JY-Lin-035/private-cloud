@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from 'recharts';
+import ReactApexChart from 'react-apexcharts';
 import { useStorage } from '../../store/storage';
 
 
 
-function Dashboard() {
+function Dashboard({ layoutClass }: { layoutClass: string }) {
   const storage = useStorage();
-  const [chartData, setChartData] = useState<any[]>([]);
+  const [chartOptions, setChartOptions] = useState<any>({});
+  const [chartSeries, setChartSeries] = useState<number[]>([]);
 
   const used = useMemo(() => storage.format(storage.usedStorage), [storage.usedStorage]);
   const usedGB = useMemo(() => storage.format(storage.usedStorage, "GB"), [storage.usedStorage]);
@@ -23,52 +24,149 @@ function Dashboard() {
   }, []);
 
   useEffect(() => {
-    setChartData([
-      { name: `${used[0]} ${used[1]} Used`, value: usedGB[0], color: '#E74694' },
-      { name: `${available[0]} ${available[1]} Available`, value: availableGB[0], color: '#16BDCA' },
-    ]);
-  }, [used, available, usedGB, availableGB]);
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white p-2 rounded shadow">
-          <p className="text-sm">{`${payload[0].name}`}</p>
-        </div>
-      );
-    }
-    return null;
-  };
+    setChartSeries([usedGB[0], availableGB[0]]);
+    setChartOptions({
+      series: [usedGB[0], availableGB[0]],
+      colors: ['#E74694', '#16BDCA'],
+      chart: {
+        height: '100%',
+        width: '100%',
+        type: 'donut',
+        animations: {
+          enabled: true,
+          easing: 'easeinout',
+          speed: 350,
+          animateGradually: {
+            enabled: true,
+            delay: 100,
+          },
+        },
+      },
+      states: {
+        active: {
+          allowMultipleDataPointsSelection: false,
+          filter: {
+            type: 'none',
+          },
+        },
+      },
+      stroke: {
+        colors: ['transparent'],
+        lineCap: '',
+      },
+      plotOptions: {
+        pie: {
+          donut: {
+            labels: {
+              show: true,
+              name: {
+                show: true,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '100%',
+                color: 'white',
+                offsetY: 100,
+              },
+              total: {
+                showAlways: true,
+                show: true,
+                label: '',
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '100%',
+                color: 'white',
+                fontWeight: 'bold',
+                formatter: function (_w: any) {
+                  return `${Number(percentage)} %`;
+                },
+              },
+              value: {
+                show: true,
+                fontFamily: 'Inter, sans-serif',
+                fontSize: '100%',
+                color: 'white',
+                offsetY: 0,
+                formatter: function (_w: any) {
+                  return `${Number(percentage)} %`;
+                },
+              },
+            },
+            size: '70%',
+          },
+        },
+      },
+      grid: {
+        padding: {
+          top: -2,
+        },
+      },
+      tooltip: {
+        y: {
+          formatter: function (val: number) {
+            const value = val === usedGB[0] ? used : available;
+            return `${value[0]} ${value[1]}`;
+          },
+          title: {
+            formatter: function () {
+              return '';
+            },
+          },
+        },
+      },
+      labels: [
+        `${used[0]} ${used[1]} Used`,
+        `${available[0]} ${available[1]} Available`,
+      ],
+      dataLabels: {
+        enabled: false,
+      },
+      legend: {
+        position: 'bottom',
+        fontFamily: 'Inter, sans-serif',
+        fontSize: '1rem',
+        labels: {
+          colors: ['white', 'white'],
+        },
+      },
+      yaxis: {
+        labels: {
+          formatter: function () {
+            return '';
+          },
+        },
+      },
+      xaxis: {
+        labels: {
+          formatter: function (value: string) {
+            return value;
+          },
+        },
+        axisTicks: {
+          show: false,
+        },
+        axisBorder: {
+          show: false,
+        },
+      },
+    });
+  }, [used, available, usedGB, availableGB, percentage]);
 
   return (
-    <div className="py-6">
-      <ResponsiveContainer width="100%" height={200}>
-        <PieChart>
-          <Pie
-            data={chartData}
-            cx="50%"
-            cy="50%"
-            innerRadius={60}
-            outerRadius={80}
-            paddingAngle={5}
-            dataKey="value"
-          >
-            {chartData.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={entry.color} />
-            ))}
-          </Pie>
-          <Tooltip content={<CustomTooltip />} />
-          <Legend 
-            verticalAlign="bottom" 
-            height={36}
-            formatter={(value: string) => <span className="text-white">{value}</span>}
-          />
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="text-center text-white text-2xl font-bold mt-4">
-        {Number(percentage)}%
+    <>
+      <style>{`
+        .apexcharts-legend-text {
+          color: white !important;
+          margin-left: -10px !important;
+          margin-right: 15px !important;
+        }
+      `}</style>
+      <div className={`py-6 h-[35vh] ${layoutClass}`} id="donut-chart">
+        <ReactApexChart
+          options={chartOptions}
+          series={chartSeries}
+          type="donut"
+          height="75%"
+        />
       </div>
-    </div>
+    </>
   );
 }
 

@@ -4,9 +4,10 @@ from sqlalchemy.orm import Session
 from app.schemas.share import ShareLinkRequest, ShareListResponse, ShareLinkResponse, ShareDeleteResponse
 from app.services.share_service import ShareService
 from app.api.dependencies import get_db, get_current_user_id
-from app.utils.logger_sample import log_info, log_error
+from app.utils import logger as log
 
 router = APIRouter(prefix="/api/share", tags=["share"])
+logger = log.get_logger("share_api.log")
 
 
 @router.get("/getList")
@@ -16,21 +17,21 @@ async def get_share_list(
 ):
     """Get all share links for a user."""
     try:
-        log_info("Get share list request received", {"user_id": user_id})
+        logger.info(f"Get share list request received, user_id: {user_id}")
         
         share_service = ShareService(db)
         
         result = share_service.get_list(user_id)
-        log_info("Get share list result", {"result": result})
+        logger.info(f"Get share list result: {result}")
         
         if result and 'error' in result:
-            log_info("Get share list error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Get share list error {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         # Match Laravel format: return 'share' key instead of 'list'
         return {'share': result['list']}
     except Exception as e:
-        log_error("Get share list endpoint error", e)
+        logger.error(f"Get share list endpoint error {e}")
         raise
 
 
@@ -42,22 +43,22 @@ async def create_share_link(
 ):
     """Create a share link for a file."""
     try:
-        log_info("Create share link request received", {"user_id": user_id, "dir": request.dir, "filename": request.filename})
+        logger.info(f"Create share link request received, user_id: {user_id}, dir: {request.dir}, filename: {request.filename}")
         
         share_service = ShareService(db)
         
         result = share_service.create_link(user_id, request.dir, request.filename)
-        log_info("Create share link result", {"result": result})
+        logger.info(f"Create share link result: {result}")
         
         if result and 'error' in result:
-            log_info("Create share link error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Create share link error {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Share link created successfully")
+        logger.info("Share link created successfully")
         # Match Laravel format: return plain URL string
         return result['url']
     except Exception as e:
-        log_error("Create share link endpoint error", e)
+        logger.error(f"Create share link endpoint error {e}")
         raise
 
 
@@ -71,21 +72,21 @@ async def delete_share_link(
 ):
     """Delete a share link."""
     try:
-        log_info("Delete share link request received", {"user_id": user_id, "dir": dir, "filename": filename, "link": link})
+        logger.info(f"Delete share link request received, user_id: {user_id}, dir: {dir}, filename: {filename}, link: {link}")
         
         share_service = ShareService(db)
         
         result = share_service.delete_link(user_id, dir, filename, link)
-        log_info("Delete share link result", {"result": result})
+        logger.info(f"Delete share link result: {result}")
         
         if result and 'error' in result:
-            log_info("Delete share link error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Delete share link error {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Share link deleted successfully")
+        logger.info("Share link deleted successfully")
         return result
     except Exception as e:
-        log_error("Delete share link endpoint error", e)
+        logger.error(f"Delete share link endpoint error {e}")
         raise
 
 
@@ -95,20 +96,20 @@ async def download_shared_file(
     db: Session = Depends(get_db)
 ):
     """Download a file via share link (no authentication required)."""
-    try:
-        log_info("Download shared file request received", {"link": link})
-        
+    global logger
+    logger.info(f"Download shared file request received, link: {link}")
+    try:        
         share_service = ShareService(db)
         
         result = share_service.download(link)
-        log_info("Download shared file result", {"result": result})
+        logger.info(f"Download shared file result: {result}")
         
         if result and 'error' in result:
-            log_info("Download shared file error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Download shared file error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Shared file downloaded successfully")
+        logger.info("Shared file downloaded successfully")
         return FileResponse(path=result['real_path'], filename=result['filename'])
     except Exception as e:
-        log_error("Download shared file endpoint error", e)
+        logger.error(f"Download shared file endpoint error: {e}")
         raise

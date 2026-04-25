@@ -87,7 +87,7 @@ function Mail() {
     try {
       const data = {
         email: newEmail,
-        checkEmail: checkNowEmail,
+        check_email: checkNowEmail,
         code: code,
       };
 
@@ -131,7 +131,7 @@ function Mail() {
           placeholder="驗證目前電子信箱"
           value={checkNowEmail}
           onChange={(e) => setCheckNowEmail(e.target.value)}
-          className={`w-[70%] px-3 py-2 border rounded mt-[10px] mr-3 ${valEmail1 || !checkNowEmail ? '' : 'border-red-500'}`}
+          className={`w-[70%] px-3 py-2 bg-white rounded mt-[10px] mr-3 ${valEmail1 || !checkNowEmail ? '' : 'border-red-500'}`}
         />
 
         {!valEmail1 && checkNowEmail !== '' && (
@@ -146,7 +146,7 @@ function Mail() {
             placeholder="電子信箱"
             value={newEmail}
             onChange={(e) => setNewEmail(e.target.value)}
-            className={`w-[70%] px-3 py-2 border rounded mt-[10px] mr-3 ${valEmail2 || !newEmail ? '' : 'border-red-500'}`}
+            className={`w-[70%] px-3 py-2 bg-white rounded mt-[10px] mr-3 ${valEmail2 || !newEmail ? '' : 'border-red-500'}`}
           />
 
           <button
@@ -170,7 +170,7 @@ function Mail() {
             placeholder="輸入驗證碼"
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            className={`px-3 py-2 mt-4 mr-3 border rounded ${valCode ? '' : 'border-red-500'}`}
+            className={`px-3 py-2 mt-4 mr-3 bg-white rounded ${valCode ? '' : 'border-red-500'}`}
           />
 
           <button

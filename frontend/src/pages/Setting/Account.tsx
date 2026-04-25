@@ -4,11 +4,11 @@ import Password from './ModifyOptions/Password';
 
 
 
-function Account() {
+function Account({ layoutClass = "" }: { layoutClass?: string }) {
   const [mode, setMode] = useState(true);
 
   return (
-    <div className="h-screen w-screen flex justify-center items-center">
+    <div className={`h-screen w-screen flex justify-center items-center ${layoutClass}`}>
       <div className="min-h-[70vh] w-[70vw] flex justify-center items-center">
         <div className="flex flex-col mr-6">
           <button

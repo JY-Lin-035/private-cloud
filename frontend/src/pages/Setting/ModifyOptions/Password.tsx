@@ -78,7 +78,7 @@ function Password() {
           placeholder="目前密碼"
           value={nowPW}
           onChange={(e) => setNowPW(e.target.value)}
-          className="w-full px-3 py-2 mt-6 mb-3 border rounded"
+          className="w-full px-3 py-2 mt-6 mb-3 bg-white rounded"
         />
 
         <input
@@ -86,7 +86,7 @@ function Password() {
           placeholder="新密碼"
           value={newPW}
           onChange={(e) => setNewPW(e.target.value)}
-          className={`w-full px-3 py-2 mb-3 border rounded ${valNewPW || !newPW ? '' : 'border-red-500'}`}
+          className={`w-full px-3 py-2 mb-3 bg-white rounded ${valNewPW || !newPW ? '' : 'border-red-500'}`}
         />
         {!valNewPW && newPW !== '' && (
           <p className="text-red-500 text-[12px] mb-4">
@@ -100,7 +100,7 @@ function Password() {
           placeholder="確認新密碼"
           value={cNewPW}
           onChange={(e) => setCNewPW(e.target.value)}
-          className={`w-full px-3 py-2 mb-2 border rounded ${valCNewPW ? '' : 'border-red-500'}`}
+          className={`w-full px-3 py-2 mb-2 bg-white rounded ${valCNewPW ? '' : 'border-red-500'}`}
         />
 
         <div className="flex justify-between">

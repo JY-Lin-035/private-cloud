@@ -20,7 +20,7 @@ def setup_logger(name="app", log_filename=None, log_level=logging.INFO, console_
     log_path = os.path.join(log_dir, actual_filename)
     
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s'
     )
     
     logger = logging.getLogger(name)
