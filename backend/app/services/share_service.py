@@ -11,6 +11,7 @@ from app.models.share_link import ShareLink
 from app.repositories.account_repository import AccountRepository
 from app.repositories.share_link_repository import ShareLinkRepository
 from app.config import settings
+from app.utils import logger as log
 
 
 class ShareService:
@@ -19,6 +20,7 @@ class ShareService:
         self.account_repo = AccountRepository(db)
         self.share_link_repo = ShareLinkRepository(db)
         self.storage_base_path = storage_base_path
+        self.logger = log.get_logger("share_service.log")
     
     def _validate_path(self, user_id: int, dir: str, filename: str = None) -> Optional[Path]:
         """Validate path to prevent directory traversal attacks."""
@@ -139,10 +141,11 @@ class ShareService:
         """Delete a share link."""
         try:
             account = self.account_repo.get_by_id(user_id)
-            
+
             if not account:
+                self.logger.warning(f"User {user_id} not found")
                 return {'error': '使用者不存在', 'stateCode': 404}
-            
+
             if dir and filename:
                 # Delete by path and filename (with padding)
                 if dir:
@@ -157,39 +160,46 @@ class ShareService:
                         dir_decoded = dir.replace('-', '/')
                 else:
                     dir_decoded = ''
-                
+
                 success = self.share_link_repo.delete_by_owner_and_path(user_id, dir_decoded, filename)
             elif link:
                 # Delete by link
                 success = self.share_link_repo.delete_by_link(link)
             else:
+                self.logger.warning(f"Invalid parameters for delete_link: user_id={user_id}, dir={dir}, filename={filename}, link={link}")
                 return {'error': 'Error', 'stateCode': 404}
-            
+
             if success:
                 return {'msg': 'success', 'stateCode': 200}
             else:
+                self.logger.warning(f"Failed to delete share link: user_id={user_id}, dir={dir}, filename={filename}, link={link}")
                 return {'error': 'Error', 'stateCode': 404}
         except Exception as e:
+            self.logger.error(f"Error deleting share link: {str(e)}")
             return {'error': str(e), 'stateCode': 500}
     
     def download(self, link: str) -> Optional[Dict[str, Any]]:
         """Download a file via share link."""
         try:
             share_link = self.share_link_repo.get_by_link(link)
-            
+
             if not share_link:
+                self.logger.warning(f"Share link not found: {link}")
                 return {'error': 'Error', 'stateCode': 404}
-            
+
             # Build file path (path already includes Home/)
             file_path = Path(self.storage_base_path) / "users" / str(share_link.owner_id) / share_link.path / share_link.file_name
-            
+
             if not file_path.exists() or not file_path.is_file():
+                self.logger.warning(f"File not found: {file_path}")
                 return {'error': 'Error', 'stateCode': 404}
-            
+
+            self.logger.info(f"File found: {file_path} filename: {share_link.file_name}")
             return {
                 'real_path': str(file_path),
                 'filename': share_link.file_name,
                 'stateCode': 200
             }
         except Exception as e:
+            self.logger.error(f"Error downloading file: {str(e)}")
             return {'error': str(e), 'stateCode': 500}

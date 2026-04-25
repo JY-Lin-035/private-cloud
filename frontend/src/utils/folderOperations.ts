@@ -1,4 +1,6 @@
-import axios from 'axios';
+import { folderApi } from "../api/folderApi";
+
+
 
 export async function createFolder(dir: string, folderName: string, fileList: any[]): Promise<[string | string[], string, any[]]> {
   try {
@@ -6,17 +8,23 @@ export async function createFolder(dir: string, folderName: string, fileList: an
       dir: dir,
       folderName: folderName,
     };
-    const r = await axios.post(
-      `http://localhost:8000/api/folders/createFolder`, data,
-      {
-        withCredentials: true,
-      }
-    );
+    const r = await folderApi.createFolder(data);
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const localDate = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+
+    const date = r.data?.date || r.data?.time || r.data || localDate;
 
     fileList.unshift({
       name: folderName,
       type: "folder",
-      date: r.data,
+      date: date,
     });
 
     return [['新增成功!'], "text-green-500", fileList];
@@ -33,12 +41,9 @@ export async function renameFolder(dir: string, originName: string, folderName: 
       originName: originName,
       folderName: folderName
     };
-    await axios.put(
-      `http://localhost:8000/api/folders/renameFolder`, data,
-      {
-        withCredentials: true,
-      }
-    );
+    const r = await folderApi.renameFolder(data);
+
+    const date = r.data?.date || r.data?.time || r.data;
 
     const folder = fileList.find(
       (item) =>
@@ -47,6 +52,9 @@ export async function renameFolder(dir: string, originName: string, folderName: 
 
     if (folder) {
       folder.name = folderName;
+      if (date) {
+        folder.date = date;
+      }
     }
 
     return [['改名成功!'], "text-green-500", fileList];
@@ -68,14 +76,9 @@ export async function deleteFolder(dir: string, folderName: string, fileList: an
       return [["操作已取消!"], "text-red-500", false, fileList];
     }
 
-    const r = await axios.delete(
-      `http://localhost:8000/api/folders/deleteFolder?dir=${dir}&folderName=${folderName}`,
-      {
-        withCredentials: true,
-      }
-    );
+    const r = await folderApi.deleteFolder(dir, folderName);
 
-    storage.addUsedStorage(-Number(r.data['size']));
+    storage.addUsedStorage(-Number(r.size));
 
     const folderIndex = fileList.findIndex(
       (item) => item.type === "folder" && item.name === folderName

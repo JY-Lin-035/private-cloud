@@ -6,7 +6,7 @@ import { accountApi } from '../../api/accountApi';
 
 
 
-function ResetPW() {
+function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [PW, setPW] = useState('');
@@ -159,7 +159,7 @@ function ResetPW() {
   }
 
   return (
-    <div className="flex items-center justify-center bg-gray-500">
+    <div className={`flex items-center justify-center bg-gray-500 ${layoutClass}`}>
       <Notices
         inputShow={inputShow}
         notices={response}

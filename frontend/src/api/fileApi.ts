@@ -38,16 +38,7 @@ export const fileApi = {
     a.click();
     window.URL.revokeObjectURL(url);
     document.body.removeChild(a);
-  },
-
-  // Download share file
-  downloadShareFile: async (link: string) => {
-    const response = await api.get('/api/files/downloadFile', {
-      params: { link },
-      responseType: 'blob',
-    });
-    return response.data as Blob;
-  },
+  },  
 
   // Delete file
   deleteFile: async (dir: string, filename: string) => {

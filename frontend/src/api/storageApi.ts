@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { StorageResponse } from '../types';
+import type { StorageResponse } from '../types/index';
 
 export const storageApi = {
   // Get storage information

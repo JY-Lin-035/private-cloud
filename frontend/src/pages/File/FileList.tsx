@@ -19,7 +19,7 @@ import { fileApi } from '../../api/fileApi';
 import UpLoad from './UpLoad';
 
 import {
-  Folder,
+  FolderOpen,
   FileText,
   Download,
   Share2,
@@ -33,7 +33,7 @@ import {
 
 
 
-function FileList() {
+function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
   const { folderName } = useParams();
   const storage = useStorage();
@@ -144,6 +144,7 @@ function FileList() {
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
+    setInputShow(false);
   }
 
   async function callDeleteFile(dir: string, fileName: string, item: any) {
@@ -151,7 +152,8 @@ function FileList() {
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
-    setFileList(fl);
+    setInputShow(false);
+    setFileList([...fl]);
   }
 
   async function callShareFileLink(dir: string, fileName: string) {
@@ -159,6 +161,7 @@ function FileList() {
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
+    setInputShow(false);
     setShareFileLink(link);
     setCopyShow(copy);
   }
@@ -168,6 +171,7 @@ function FileList() {
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
+    setInputShow(false);
   }
 
   const copyFunc = (m: string) => {
@@ -185,7 +189,7 @@ function FileList() {
       );
       setResponse(res);
       setClassName(cn);
-      setFileList(fl);
+      setFileList([...fl]);
     } else if (waitFolderName[2] === 'create') {
       const [res, cn, fl] = await createFolder(
         waitFolderName[0],
@@ -194,7 +198,7 @@ function FileList() {
       );
       setResponse(res);
       setClassName(cn);
-      setFileList(fl);
+      setFileList([...fl]);
     }
 
     setShowMode(true);
@@ -205,13 +209,14 @@ function FileList() {
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
-    setFileList(fl);
+    setInputShow(false);
+    setFileList([...fl]);
   }
 
   return (
     <div
       onClick={() => setCopyShow(false)}
-      className="flex w-full h-full flex-col justify-center items-center"
+      className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
     >
       <Notices
         inputShow={inputShow}
@@ -280,6 +285,7 @@ function FileList() {
               setResponse(res);
               setClassName(cn);
               setShowMode(true);
+              setInputShow(false);
             }}
           />
         </>
@@ -307,6 +313,7 @@ function FileList() {
                 setClassName('text-white');
                 setInputShow(true);
                 setShowMode(true);
+                setFolderNameInput('');
                 setWaitFolderName([`${Base64.encodeURI(PATH)}`, null, 'create']);
               }}
             />
@@ -434,9 +441,9 @@ function FileList() {
                   </td>
                   <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
                     {item.type === 'folder' ? (
-                      <Folder className="inline w-6 h-6 ml-5 text-yellow-200" />
+                      <FolderOpen className="inline w-6 h-6 ml-5 mr-2 text-yellow-200" />
                     ) : (
-                      <FileText className="inline w-6 h-6 ml-5 text-white" />
+                      <FileText className="inline w-6 h-6 ml-5 mr-2 text-white" />
                     )}
                     {item.name}
                   </td>
@@ -466,6 +473,7 @@ function FileList() {
                             setClassName('text-white');
                             setInputShow(true);
                             setShowMode(true);
+                            setFolderNameInput(item.name);
                             setWaitFolderName([
                               `${Base64.encodeURI(PATH)}`,
                               item.name,

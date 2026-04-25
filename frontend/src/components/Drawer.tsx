@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import { Base64 } from 'js-base64';
 import { Menu, Cloud, Settings, LogOut, Folder, Share2, User } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
+import { authApi } from '../api/authApi';
+
 
 function Drawer() {
   const [isOpen, setIsOpen] = useState(false);
@@ -13,11 +14,7 @@ function Drawer() {
 
   async function signOut() {
     try {
-      await axios.post(
-        `http://localhost:8000/api/accounts/signOut`,
-        {},
-        { withCredentials: true }
-      );
+      await authApi.signOut();
 
       localStorage.clear();
       window.location.href = "/";
@@ -39,49 +36,49 @@ function Drawer() {
         </button>
       </div>
 
-      {isOpen && (
-        <div className="fixed inset-0 z-50 flex">
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50"
-            onClick={() => setIsOpen(false)}
-          />
-          <div className="relative z-10 fixed top-0 right-0 h-full w-80 bg-white shadow-xl">
-            <div className="flex items-center justify-between p-4 border-b">
-              <h2 className="text-lg font-semibold">Menu</h2>
-              <button
-                onClick={() => setIsOpen(false)}
-                className="p-2 text-gray-500 hover:text-gray-700"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+      <div className={`fixed inset-0 z-50 flex justify-end transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+        <div
+          className={`fixed inset-0 bg-black/50 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0'}`}
+          onClick={() => setIsOpen(false)}
+        />
+        <div className={`relative z-10 fixed h-full w-80 bg-gray-800 shadow-xl transition-transform duration-300 ease-in-out ${isOpen ? 'translate-x-0' : 'translate-x-[20rem]'}`} style={{ position: 'fixed', top: 0, right: 0, left: 'auto' }}>
+          <div className="flex items-center justify-between p-4 border-b border-gray-700">
+            <h2 className="text-lg font-semibold text-white">Menu</h2>
+            <button
+              onClick={() => setIsOpen(false)}
+              className="p-2 text-gray-400 bg-transparent hover:bg-gray-600 hover:text-white rounded-lg text-sm w-8 h-8 inline-flex items-center justify-center"
+            >
+              <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6" />
+              </svg>
+            </button>
+          </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
+          <div className="flex flex-col h-[100vh] px-4">
+            <div className="flex-grow overflow-y-auto">
               <ul className="space-y-2">
                 <li>
                   <button
                     onClick={() => setCloudOpen(!cloudOpen)}
-                    className="flex items-center justify-between w-full p-3 text-left bg-gray-100 rounded-lg hover:bg-gray-200"
+                    className="flex items-center justify-between w-full p-2 text-base text-white transition duration-75 rounded-lg group hover:bg-gray-700 cursor-pointer"
                   >
                     <div className="flex items-center">
-                      <Cloud className="w-5 h-5 mr-3 text-gray-600" />
-                      <span className="font-medium">Cloud</span>
+                      <Cloud className="w-6 h-6 mr-3 text-white" />
+                      <span className="flex-1 text-left font-medium">Cloud</span>
                     </div>
-                    <svg className={`w-4 h-4 transition-transform ${cloudOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    <svg className={`w-3 h-3 transition-transform ${cloudOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 10 6">
+                      <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 4 4 4-4" />
                     </svg>
                   </button>
 
                   {cloudOpen && (
-                    <ul className="mt-2 ml-4 space-y-1">
+                    <ul className="py-2 space-y-2">
                       <li>
                         <button
                           onClick={() => { navigate(`/fileList/${Base64.encodeURI('Home')}`); setIsOpen(false); }}
-                          className="flex items-center w-full p-2 text-left rounded-lg hover:bg-gray-100"
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
                         >
-                          <Folder className="w-5 h-5 mr-3 text-gray-600" />
+                          <Folder className="w-6 h-6 mr-2 text-white" />
                           <span>File</span>
                         </button>
                       </li>
@@ -89,9 +86,9 @@ function Drawer() {
                       <li>
                         <button
                           onClick={() => { navigate('/shareList'); setIsOpen(false); }}
-                          className="flex items-center w-full p-2 text-left rounded-lg hover:bg-gray-100"
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
                         >
-                          <Share2 className="w-5 h-5 mr-3 text-gray-600" />
+                          <Share2 className="w-6 h-6 mr-2 text-white" />
                           <span>Share List</span>
                         </button>
                       </li>
@@ -102,25 +99,25 @@ function Drawer() {
                 <li>
                   <button
                     onClick={() => setSettingOpen(!settingOpen)}
-                    className="flex items-center justify-between w-full p-3 text-left bg-gray-100 rounded-lg hover:bg-gray-200"
+                    className="flex items-center justify-between w-full p-2 text-base text-white transition duration-75 rounded-lg group hover:bg-gray-700 cursor-pointer"
                   >
                     <div className="flex items-center">
-                      <Settings className="w-5 h-5 mr-3 text-gray-600" />
-                      <span className="font-medium">Setting</span>
+                      <Settings className="w-6 h-6 mr-3 text-white" />
+                      <span className="flex-1 text-left font-medium">Setting</span>
                     </div>
-                    <svg className={`w-4 h-4 transition-transform ${settingOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    <svg className={`w-3 h-3 transition-transform ${settingOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 10 6">
+                      <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 4 4 4-4" />
                     </svg>
                   </button>
 
                   {settingOpen && (
-                    <ul className="mt-2 ml-4 space-y-1">
+                    <ul className="py-2 space-y-2">
                       <li>
                         <button
                           onClick={() => { navigate('/setting/account'); setIsOpen(false); }}
-                          className="flex items-center w-full p-2 text-left rounded-lg hover:bg-gray-100"
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
                         >
-                          <User className="w-5 h-5 mr-3 text-gray-600" />
+                          <User className="w-6 h-6 mr-2 text-white" />
                           <span>Account</span>
                         </button>
                       </li>
@@ -128,24 +125,21 @@ function Drawer() {
                   )}
                 </li>
 
-                <li className="pt-4 border-t">
+                <li>
                   <button
                     onClick={signOut}
-                    className="flex items-center w-full p-3 text-left rounded-lg hover:bg-red-50 text-red-600"
+                    className="flex items-center w-full p-2 text-red-600 border border-red-600 rounded-lg hover:bg-gray-700 group cursor-pointer"
                   >
-                    <LogOut className="w-5 h-5 mr-3" />
-                    <span className="font-medium">Sign Out</span>
+                    <LogOut className="w-6 h-6 mr-3" />
+                    <span className="flex-1 whitespace-nowrap font-medium text-left">Sign Out</span>
                   </button>
                 </li>
               </ul>
             </div>
-
-            <div className="p-4 border-t">
-              <Dashboard />
-            </div>
+            <Dashboard layoutClass="mt-auto" />
           </div>
         </div>
-      )}
+      </div>
     </>
   );
 }

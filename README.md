@@ -38,3 +38,15 @@
 7. uv run main.py
 8. 啟動寄信佇列
     - uv run celery -A app.tasks.email_tasks worker --loglevel=info (新視窗)
+
+
+### Frontend
+
+1. cd frontend
+2. pnpm install
+3. cp .env.example .env
+4. 編輯 .env 中 API 基底網址
+5. pnpm dev
+
+
+

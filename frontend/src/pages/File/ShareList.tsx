@@ -6,7 +6,7 @@ import { shareApi } from '../../api/shareApi';
 
 
 
-function ShareList() {
+function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [shareList, setShareList] = useState<any[]>([]);
@@ -85,7 +85,7 @@ function ShareList() {
 
   async function deleteLink(link: string) {
     try {
-      await shareApi.deleteLink(link);
+      await shareApi.deleteLink_by_link(link);
 
       const share = shareList.findIndex(
         (item) => item.link === link
@@ -114,7 +114,7 @@ function ShareList() {
   return (
     <div
       onClick={() => setCopyShow(false)}
-      className="flex w-full h-full flex-col justify-center items-center"
+      className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
     >
       <Notices
         notices={response}
@@ -134,7 +134,7 @@ function ShareList() {
               onChange={(e) => setSearch(e.target.value)}
               type="text"
               placeholder="搜尋"
-              className="border rounded px-3 py-1 w-64"
+              className="border border-white rounded px-3 py-1 w-64"
             />
           </span>
 
@@ -143,7 +143,7 @@ function ShareList() {
             <select
               value={perPage}
               onChange={(e) => setPerPage(Number(e.target.value))}
-              className="border rounded px-1 py-1"
+              className="border border-white rounded px-1 py-1"
             >
               {[5, 10, 15, 20, 50].map((n) => (
                 <option key={n} value={n}>
@@ -158,12 +158,12 @@ function ShareList() {
         <div
           className="max-h-[60vh] hide-scrollbar overflow-x-auto overflow-y-auto shadow-[0.8rem_0.8rem_2.5rem_white] rounded-[2rem] border-2 border-white"
         >
-          <table className="w-full table-fixed text-left border border-collapse rounded-[2rem]">
+          <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>
               <tr className="bg-blue-200 text-[1.5rem] text-center">
                 <th
                   onClick={() => changeSortType('date')}
-                  className="cursor-pointer p-2 w-[10%] border"
+                  className="cursor-pointer p-2 w-[10%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     時間
@@ -188,7 +188,7 @@ function ShareList() {
                 </th>
                 <th
                   onClick={() => changeSortType('name')}
-                  className="cursor-pointer p-2 w-[35%] border"
+                  className="cursor-pointer p-2 w-[35%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     名稱
@@ -213,7 +213,7 @@ function ShareList() {
                 </th>
                 <th
                   onClick={() => changeSortType('path')}
-                  className="cursor-pointer p-2 w-[35%] border"
+                  className="cursor-pointer p-2 w-[35%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     路徑
@@ -236,7 +236,7 @@ function ShareList() {
                     </svg>
                   </span>
                 </th>
-                <th className="p-2 w-[20%] border">操作</th>
+                <th className="p-2 w-[20%] border border-white">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -245,17 +245,17 @@ function ShareList() {
                   key={item.link}
                   className="bg-gray-300 hover:bg-blue-200"
                 >
-                  <td className="p-2 text-[1.2rem] text-center border break-words whitespace-normal">
+                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
                     {item.date}
                   </td>
-                  <td className="p-2 text-[1.2rem] border break-words whitespace-normal">
+                  <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
                     <FileText className="inline w-6 h-6 ml-5 text-white" />
                     {item.name}
                   </td>
-                  <td className="p-2 text-[1.2rem] border break-words whitespace-normal">
+                  <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
                     {item.path}
                   </td>
-                  <td className="p-2 text-[1.2rem] text-center border break-words whitespace-normal">
+                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
                     <span className="flex justify-center sm:gap-2 md:gap-6 lg:gap-10">
                       <div className="relate w-max text-sm text-white rounded">
                         <span>
@@ -286,7 +286,7 @@ function ShareList() {
         <button
           disabled={page === 1}
           onClick={() => setPage(page - 1)}
-          className="px-3 py-1 border rounded disabled:opacity-50"
+          className="px-3 py-1 border border-white rounded disabled:opacity-50"
         >
           <ChevronLeft className="w-5 h-5 rtl:rotate-180" />
         </button>
@@ -294,7 +294,7 @@ function ShareList() {
         <button
           disabled={page === totalPages || totalPages === 0}
           onClick={() => setPage(page + 1)}
-          className="px-3 py-1 border rounded disabled:opacity-50"
+          className="px-3 py-1 border border-white rounded disabled:opacity-50"
         >
           <ChevronRight className="w-5 h-5 rtl:rotate-180" />
         </button>

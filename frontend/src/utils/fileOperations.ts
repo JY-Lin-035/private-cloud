@@ -1,4 +1,7 @@
-import axios from 'axios';
+import { fileApi } from '../api/fileApi';
+import { shareApi } from '../api/shareApi';
+
+
 
 // 下載
 export function downloadFile(dir: string, fileName: string): [string | string[], string, boolean] {
@@ -29,19 +32,14 @@ export async function deleteFile(dir: string, fileName: string, deleteItem: any,
       return [["操作已取消!"], "text-red-500", false, fileList];
     }
 
-    const r = await axios.delete(
-      `http://localhost:8000/api/files/delete?dir=${dir}&filename=${fileName}`,
-      {
-        withCredentials: true,
-      }
-    );
+    const r = await fileApi.deleteFile(dir, fileName);
 
     const index = fl.findIndex((item) => item === deleteItem);
     if (index !== -1) {
       fl.splice(index, 1);
     }
 
-    storage.addUsedStorage(-Number(r.data['size']));
+    storage.addUsedStorage(-Number(r.size));
 
     return [["刪除成功！"], "text-red-500", true, fl];
   } catch (e) {
@@ -57,15 +55,10 @@ export async function getShareFileLink(dir: string, fileName: string): Promise<[
       dir: dir,
       filename: fileName,
     };
-    const r = await axios.post(
-      `http://localhost:8000/api/share/getLink`, data,
-      {
-        withCredentials: true,
-      }
-    );
+    const r = await shareApi.getLink(data);
 
     // response className showMode shareLink copyShow
-    return [fileName, "text-green-500", false, r.data, true];
+    return [fileName, "text-green-500", false, r, true];
   } catch (e) {
     console.error(e);
     return [["連結生成失敗, 請稍後再試!"], "text-red-500", true, "", false];
@@ -75,16 +68,11 @@ export async function getShareFileLink(dir: string, fileName: string): Promise<[
 // 移除檔案分享
 export async function deleteShareFileLink(dir: string, fileName: string): Promise<[string | string[], string, boolean]> {
   try {
-    await axios.delete(
-      `http://localhost:8000/api/share/deleteLink?dir=${dir}&filename=${fileName}`,
-      {
-        withCredentials: true,
-      }
-    );
+    await shareApi.deleteLink_by_filename(dir, fileName);
 
     return [['移除成功!'], "text-red-500", true];
   } catch (e) {
-    // console.error(e);
+    console.error(e);
     return [["連結移除失敗, 請稍後再試!"], "text-red-500", true];
   }
 }

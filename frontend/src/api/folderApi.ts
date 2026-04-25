@@ -1,5 +1,5 @@
 import { api } from './api';
-import type { CreateFolderRequest, RenameFolderRequest, DeleteResponse } from '../types';
+import type { CreateFolderRequest, RenameFolderRequest, DeleteResponse } from '../types/index';
 
 export const folderApi = {
   // Create folder
