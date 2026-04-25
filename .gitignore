@@ -1,14 +1,15 @@
 **/.venv
 
 backend/.env
+backend/backend.md
 backend/plan.md
 backend/README-Backend.md
 backend/README.md
-backend/backend.md
 
-frontend/node_modules
+frontend/.env
 frontend/frontend.md
 frontend/plan.md
-frontend/.env
-
-**/frontend-v1
+frontend/node_modules
+frontend/README.md
+frontend/README-Plan.md
+frontend/README-Frontend.md
