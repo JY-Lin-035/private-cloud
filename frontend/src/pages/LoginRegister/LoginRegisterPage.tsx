@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Base64 } from 'js-base64';
 import Login from './Login';
 import Register from './Register';
 import Notices from '../../components/Notices';
@@ -17,15 +16,15 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
   const checkSession = async () => {
     try {
       await authApi.checkSession();
-      const PATH = localStorage.getItem('previousPath');
-      if (!PATH) {
-        navigate(`/fileList/${Base64.encodeURI('Home')}`);
+      const previousFolderUuid = localStorage.getItem('previousFolderUuid');
+      if (!previousFolderUuid) {
+        navigate('/fileList');
       } else {
-        navigate(PATH);
+        navigate(`/fileList/${previousFolderUuid}`);
       }
     } catch (e) {
       localStorage.clear();
-      localStorage.setItem('previousPath', '/');
+      localStorage.setItem('previousFolderUuid', '');
     }
   };
 

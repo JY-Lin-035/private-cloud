@@ -46,7 +46,10 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = ""
-    
+
+    # Storage
+    STORAGE_BASE_PATH: str = "storage/app/private/files"
+
     class Config:
         env_file = ".env"
         case_sensitive = True

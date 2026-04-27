@@ -3,8 +3,11 @@ from fastapi import Request, HTTPException, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from redis import Redis
 from app.config import settings
-from app.utils.logger_sample import log_info, log_error
+from app.utils import logger as log
+from app.constants import HTTPStatus
 import json
+
+logger = log.get_logger("session_middleware.log")
 
 
 class SessionMiddleware(BaseHTTPMiddleware):
@@ -21,27 +24,27 @@ class SessionMiddleware(BaseHTTPMiddleware):
         # Extract session cookie
         session_token = request.cookies.get('session')
 
-        log_info(f"Session middleware - Request: {request.url.path}", {"has_session_cookie": session_token is not None})
+        logger.info(f"Session middleware - Request: {request.url.path}, has_session_cookie: {session_token is not None}")
         
         if session_token:
             # Validate session format (id|token)
             if '|' not in session_token:
-                log_info("Session middleware - Invalid session format", {"session_token": session_token})
-                return Response(status_code=401)
+                logger.info(f"Session middleware - Invalid session format, session_token: {session_token}")
+                return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             user_id, token_value = session_token.split('|', 1)
             
             try:
                 user_id = int(user_id)
             except ValueError:
-                log_info("Session middleware - Invalid user_id in session", {"session_token": session_token})
-                return Response(status_code=401)
+                logger.info(f"Session middleware - Invalid user_id in session, session_token: {session_token}")
+                return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             # Check session in Redis
             stored_token = self.redis.get(f"session:{user_id}")
             if not stored_token:
-                log_info("Session middleware - Session not found in Redis", {"user_id": user_id})
-                return Response(status_code=401)
+                logger.info(f"Session middleware - Session not found in Redis, user_id: {user_id}")
+                return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             # Handle both string and bytes
             if isinstance(stored_token, bytes):
@@ -50,8 +53,8 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 stored_token_str = stored_token
             
             if stored_token_str != session_token:
-                log_info("Session middleware - Session token mismatch", {"user_id": user_id})
-                return Response(status_code=401)
+                logger.info(f"Session middleware - Session token mismatch, user_id: {user_id}")
+                return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             # Get user data from Redis
             user_data = self.redis.get(f"session_data:{user_id}")
@@ -65,19 +68,19 @@ class SessionMiddleware(BaseHTTPMiddleware):
                     # Inject user into request state
                     request.state.user = user_dict
                     request.state.user_id = user_id
-                    log_info("Session middleware - Session validated", {"user_id": user_id})
+                    logger.info(f"Session middleware - Session validated, user_id: {user_id}")
                 except json.JSONDecodeError as e:
-                    log_error("Session middleware - Failed to parse user data", e)
-                    return Response(status_code=401)
+                    logger.error(f"Session middleware - Failed to parse user data: {e}")
+                    return Response(status_code=HTTPStatus.UNAUTHORIZED)
             else:
-                log_info("Session middleware - User data not found in Redis", {"user_id": user_id})
-                return Response(status_code=401)
+                logger.info(f"Session middleware - User data not found in Redis, user_id: {user_id}")
+                return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             # Extend session expiration
             self.redis.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
             self.redis.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
         else:
-            log_info("Session middleware - No session cookie provided", {"path": request.url.path})
+            logger.info(f"Session middleware - No session cookie provided, path: {request.url.path}")
         
         # Process request
         response = await call_next(request)

@@ -7,6 +7,7 @@ class ShareItem(BaseModel):
     path: str
     link: str
     date: str
+    type: str  # 'folder' or 'file'
 
 
 class ShareListResponse(BaseModel):
@@ -14,8 +15,8 @@ class ShareListResponse(BaseModel):
 
 
 class ShareLinkRequest(BaseModel):
-    dir: str
-    filename: str
+    item_uuid: str
+    item_type: str  # 'folder' or 'file'
 
 
 class ShareLinkResponse(BaseModel):
