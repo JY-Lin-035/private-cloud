@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Base64 } from 'js-base64';
 import { authApi } from '../../api/authApi';
 
 
@@ -36,7 +35,7 @@ function Login({ onFlip, onNotice }: LoginProps) {
       localStorage.setItem("email", r.email);
       setUserName('');
       setPW('');
-      navigate(`/fileList/${Base64.encodeURI("Home")}`);
+      navigate('/fileList');
     } catch (e: any) {
       onNotice([e.message], 'text-red-500');
     }
@@ -66,16 +65,16 @@ function Login({ onFlip, onNotice }: LoginProps) {
       />
       <button
         onClick={login}
-        className="bg-blue-500 text-white px-4 py-2 rounded w-full mt-[30px]"
+        className={`bg-blue-500 text-white px-4 py-2 rounded w-full mt-[30px] ${userName && PW && lock ? 'cursor-pointer' : 'cursor-not-allowed'}`}
         disabled={!(userName && PW && lock)}
       >
         登入
       </button>
       <span className="flex justify-between w-full mt-[30px]">
-        <button onClick={goForgetPW} className="text-blue-500" disabled={!lock}>
+        <button onClick={goForgetPW} className={`text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
           忘記密碼?
         </button>
-        <button onClick={onFlip} className="text-blue-500" disabled={!lock}>
+        <button onClick={onFlip} className={`text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
           註冊
         </button>
       </span>

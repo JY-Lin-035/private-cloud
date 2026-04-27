@@ -36,7 +36,7 @@ const router = createBrowserRouter([
     ),
   },
   {
-    path: '/fileList/:folderName',
+    path: '/fileList/:folderUuid?',
     element: (
       <>
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>

@@ -1,14 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import Notices from '../../components/Notices';
-import { FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileText, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
 import { shareApi } from '../../api/shareApi';
 
 
 
 function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
-  const location = useLocation();
   const [shareList, setShareList] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [sortType, setSortType] = useState('name');
@@ -26,7 +25,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
     try {
       const r = await shareApi.getList();
       setShareList(r.share);
-      localStorage.setItem('previousPath', location.pathname);
+      localStorage.setItem('previousFolderUuid', '');
     } catch (e) {
       localStorage.clear();
       navigate('/');
@@ -83,22 +82,22 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
     return filterShareList.slice(start, start + perPage);
   }, [perPage, previousPerPage, page, filterShareList]);
 
-  async function deleteLink(link: string) {
+  async function deleteLink(item: any) {
     try {
-      await shareApi.deleteLink_by_link(link);
+      await shareApi.deleteLink(item.uuid, item.type);
 
-      const share = shareList.findIndex(
-        (item) => item.link === link
+      const shareIndex = shareList.findIndex(
+        (listItem) => listItem.link === item.link
       );
 
-      if (share !== -1) {
+      if (shareIndex !== -1) {
         const newList = [...shareList];
-        newList.splice(share, 1);
+        newList.splice(shareIndex, 1);
         setShareList(newList);
       }
 
       setResponse(['移除成功!']);
-    } catch (e) {
+    } catch (e: any) {
       setResponse([e.message]);
     }
 
@@ -249,7 +248,11 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                     {item.date}
                   </td>
                   <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
-                    <FileText className="inline w-6 h-6 ml-5 text-white" />
+                    {item.type === 'folder' ? (
+                      <FolderOpen className="inline w-6 h-6 ml-5 text-yellow-200" />
+                    ) : (
+                      <FileText className="inline w-6 h-6 ml-5 text-white" />
+                    )}
                     {item.name}
                   </td>
                   <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
@@ -260,14 +263,14 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                       <div className="relate w-max text-sm text-white rounded">
                         <span>
                           <button
-                            className="mr-8 p-2 rounded-[0.5rem] bg-blue-400"
+                            className="mr-8 p-2 rounded-[0.5rem] bg-blue-400 cursor-pointer"
                             onClick={() => copyFunc(item.link)}
                           >
                             複製連結
                           </button>
                           <button
-                            className="p-2 rounded-[0.5rem] bg-red-400"
-                            onClick={() => deleteLink(item.link)}
+                            className="p-2 rounded-[0.5rem] bg-red-400 cursor-pointer"
+                            onClick={() => deleteLink(item)}
                           >
                             移除
                           </button>

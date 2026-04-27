@@ -25,15 +25,15 @@ function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
   async function checkSession() {
     try {
       await authApi.checkSession();
-      const PATH = localStorage.getItem('previousPath');
-      if (!PATH) {
+      const previousFolderUuid = localStorage.getItem('previousFolderUuid');
+      if (!previousFolderUuid) {
         navigate('/fileList');
       } else {
-        navigate(PATH);
+        navigate(`/fileList/${previousFolderUuid}`);
       }
     } catch (e) {
       localStorage.clear();
-      localStorage.setItem('previousPath', '/');
+      localStorage.setItem('previousFolderUuid', '');
     }
   }
 
@@ -222,7 +222,7 @@ function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
 
             <button
               onClick={getCode}
-              className={`px-4 py-2 text-white rounded ${waitCode ? 'bg-gray-500' : 'bg-blue-500'}`}
+              className={`px-4 py-2 text-white rounded ${waitCode ? 'bg-gray-500 cursor-not-allowed' : 'bg-blue-500 cursor-pointer'}`}
               disabled={!(valEmail) || waitCode}
             >
               {waitCode ? `傳送驗證碼(${waitTime})` : '傳送驗證碼'}
@@ -237,12 +237,12 @@ function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
 
           <button
             onClick={resetPW}
-            className="bg-blue-500 text-white px-4 py-2 rounded w-full mt-[25px]"
+            className={`bg-blue-500 text-white px-4 py-2 rounded w-full mt-[25px] ${PW && lock && code && valEmail ? 'cursor-pointer' : 'cursor-not-allowed'}`}
             disabled={!(PW && lock && code && valEmail)}
           >
             送出
           </button>
-          <button onClick={back} className="mt-2 text-blue-500" disabled={!lock}>
+          <button onClick={back} className={`mt-2 text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
             返回
           </button>
         </div>

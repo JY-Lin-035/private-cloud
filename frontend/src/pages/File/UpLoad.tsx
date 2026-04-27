@@ -11,13 +11,13 @@ import { API_BASE_URL } from '../../config/api';
 
 
 interface UpLoadProps {
-  PATH: string;
+  parentFolderUuid: string | null;
   onHidden: () => void;
   onRefresh: () => void;
   onComplete: (res: string | string[], cn: string) => void;
 }
 
-function UpLoad({ PATH, onHidden, onRefresh, onComplete }: UpLoadProps) {
+function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadProps) {
   const storage = useStorage();
   const uppyContainer = useRef<HTMLDivElement>(null);
   const uppyInstance = useRef<Uppy | null>(null);
@@ -56,7 +56,7 @@ function UpLoad({ PATH, onHidden, onRefresh, onComplete }: UpLoadProps) {
 
     uppy.on('file-added', (file) => {
       uppy.setFileMeta(file.id, {
-        dir: PATH,
+        parent_folder_uuid: parentFolderUuid,
       });
     });
 
@@ -96,7 +96,7 @@ function UpLoad({ PATH, onHidden, onRefresh, onComplete }: UpLoadProps) {
         uppyInstance.current = null;
       }
     };
-  }, [PATH, storage, onRefresh, onComplete]);
+  }, [parentFolderUuid, storage, onRefresh, onComplete]);
 
   return (
     <div className="fixed inset-0 z-20 flex items-center justify-center">

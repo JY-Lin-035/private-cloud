@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Base64 } from 'js-base64';
 import Breadcrumb from './Breadcrumb';
 import {
   downloadFile,
@@ -16,6 +15,7 @@ import {
 import Notices from '../../components/Notices';
 import { useStorage } from '../../store/storage';
 import { fileApi } from '../../api/fileApi';
+import { folderApi } from '../../api/folderApi';
 import UpLoad from './UpLoad';
 
 import {
@@ -35,10 +35,9 @@ import {
 
 function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
-  const { folderName } = useParams();
+  const { folderUuid } = useParams();
   const storage = useStorage();
   const [showUpLoad, setShowUpLoad] = useState(false);
-  const [PATH, setPATH] = useState('');
   const [fileList, setFileList] = useState<any[]>([]);
   const [IN, setIN] = useState(false);
   const [search, setSearch] = useState('');
@@ -55,12 +54,13 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [folderNameInput, setFolderNameInput] = useState('');
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
+  const [currentFolderUuid, setCurrentFolderUuid] = useState<string | null>(null);
 
-  async function getFileList(base: string) {
+  async function getFileList(parent_folder_uuid: string | null) {
     try {
-      const r = await fileApi.getFileList(base);
-      setFileList(r.file);
-      setPATH(Base64.decode(base));
+      const r = await fileApi.list(parent_folder_uuid || undefined);
+      setFileList(r.files || []);
+      setCurrentFolderUuid(parent_folder_uuid);
     } catch (e) {
       localStorage.clear();
       navigate('/');
@@ -68,10 +68,23 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   useEffect(() => {
-    if (folderName) {
-      getFileList(folderName);
+    async function loadInitialFolder() {
+      if (folderUuid !== undefined) {
+        getFileList(folderUuid || null);
+      } else {
+        // Load Home folder when no UUID provided
+        try {
+          const homeFolder = await folderApi.getHome();
+          getFileList(homeFolder.uuid);
+          navigate(`/fileList/${homeFolder.uuid}`, { replace: true });
+        } catch (e) {
+          localStorage.clear();
+          navigate('/');
+        }
+      }
     }
-  }, [folderName]);
+    loadInitialFolder();
+  }, [folderUuid]);
 
   useEffect(() => {
     setTimeout(() => {
@@ -139,16 +152,16 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     return filterList.slice(start, start + perPage);
   }, [perPage, previousPerPage, page, filterList]);
 
-  function callDownloadFile(dir: string, fileName: string) {
-    const [res, cn, show] = downloadFile(dir, fileName);
+  async function callDownloadFile(file_uuid: string) {
+    const [res, cn, show] = await downloadFile(file_uuid);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
     setInputShow(false);
   }
 
-  async function callDeleteFile(dir: string, fileName: string, item: any) {
-    const [res, cn, show, fl] = await deleteFile(dir, fileName, item, fileList, storage);
+  async function callDeleteFile(item_uuid: string, item_type: string, item: any) {
+    const [res, cn, show, fl] = await deleteFile(item_uuid, item_type, item, fileList, storage);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -156,8 +169,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setFileList([...fl]);
   }
 
-  async function callShareFileLink(dir: string, fileName: string) {
-    const [res, cn, show, link, copy] = await getShareFileLink(dir, fileName);
+  async function callShareFileLink(item_uuid: string, item_type: string) {
+    const [res, cn, show, link, copy] = await getShareFileLink(item_uuid, item_type);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -166,8 +179,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setCopyShow(copy);
   }
 
-  async function callDeleteShareFileLink(dir: string, fileName: string) {
-    const [res, cn, show] = await deleteShareFileLink(dir, fileName);
+  async function callDeleteShareFileLink(item_uuid: string, item_type: string) {
+    const [res, cn, show] = await deleteShareFileLink(item_uuid, item_type);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -182,8 +195,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   async function emitFolderName() {
     if (waitFolderName[2] === 'rename') {
       const [res, cn, fl] = await renameFolder(
-        waitFolderName[0],
-        waitFolderName[1],
+        waitFolderName[1], // folder_uuid
         folderNameInput,
         fileList
       );
@@ -192,7 +204,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
       setFileList([...fl]);
     } else if (waitFolderName[2] === 'create') {
       const [res, cn, fl] = await createFolder(
-        waitFolderName[0],
+        waitFolderName[0] || null, // parent_folder_uuid
         folderNameInput,
         fileList
       );
@@ -204,8 +216,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setShowMode(true);
   }
 
-  async function callDeleteFolder(dir: string, itemName: string) {
-    const [res, cn, show, fl] = await deleteFolder(dir, itemName, fileList, storage);
+  async function callDeleteFolder(folder_uuid: string) {
+    const [res, cn, show, fl] = await deleteFolder(folder_uuid, fileList, storage);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -250,14 +262,14 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   for (let i = 0; i < files.length; i++) {
                     formData.append('file', files[i]);
                   }
-                  formData.append('dir', PATH);
+                  formData.append('parent_folder_uuid', currentFolderUuid || '');
 
                   try {
                     const r = await fileApi.uploadFile(formData);
                     setResponse([r.message]);
                     setClassName('text-green-500');
                     setShowMode(true);
-                    getFileList(folderName || '');
+                    getFileList(currentFolderUuid);
                   } catch (e) {
                     setResponse([e.message]);
                     setClassName('text-red-500');
@@ -278,9 +290,9 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
           {/* 使用 Uppy 上傳組件 */}
           <UpLoad
-            PATH={PATH}
+            parentFolderUuid={currentFolderUuid}
             onHidden={() => setShowUpLoad(false)}
-            onRefresh={() => getFileList(folderName || '')}
+            onRefresh={() => getFileList(currentFolderUuid)}
             onComplete={(res, cn) => {
               setResponse(res);
               setClassName(cn);
@@ -291,7 +303,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         </>
       )}
 
-      <Breadcrumb PATH={PATH} />
+      <Breadcrumb currentFolderUuid={currentFolderUuid} />
 
       <div
         className={`w-[80vw] mx-auto mt-[1%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
@@ -314,7 +326,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                 setInputShow(true);
                 setShowMode(true);
                 setFolderNameInput('');
-                setWaitFolderName([`${Base64.encodeURI(PATH)}`, null, 'create']);
+                setWaitFolderName([currentFolderUuid, null, 'create']);
               }}
             />
 
@@ -428,11 +440,11 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
             <tbody>
               {pageList.map((item) => (
                 <tr
-                  key={PATH + item.name + item.date}
+                  key={item.uuid + item.name + item.date}
                   className={`bg-gray-300 hover:bg-blue-200 ${item.type === 'folder' ? 'cursor-pointer' : ''}`}
                   onClick={() => {
                     if (item.type === 'folder') {
-                      navigate(`/fileList/${Base64.encodeURI(PATH + '-' + item.name)}`);
+                      navigate(`/fileList/${item.uuid}`);
                     }
                   }}
                 >
@@ -450,7 +462,10 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   <td
                     className={`p-2 text-[1.2rem] border border-white break-words whitespace-normal ${item.type === 'folder' ? 'text-center' : 'text-right'}`}
                   >
-                    {item.size || '-'}
+                    {item.type === 'folder' ? '-' : (() => {
+                      const [value, unit] = storage.format(item.size);
+                      return `${value} ${unit}`;
+                    })()}
                   </td>
                   <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
                     <span className="flex justify-center sm:gap-2 md:gap-6 lg:gap-10">
@@ -459,7 +474,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                           className="w-6 h-6 text-green-600 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation();
-                            callDownloadFile(`${Base64.encodeURI(PATH)}`, item.name);
+                            callDownloadFile(item.uuid);
                           }}
                         />
                       )}
@@ -475,8 +490,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                             setShowMode(true);
                             setFolderNameInput(item.name);
                             setWaitFolderName([
-                              `${Base64.encodeURI(PATH)}`,
-                              item.name,
+                              null, // parent_folder_uuid (not used for rename)
+                              item.uuid, // folder_uuid
                               'rename',
                             ]);
                           }}
@@ -489,7 +504,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                             className="w-6 h-6 text-blue-500 cursor-pointer"
                             onClick={(e) => {
                               e.stopPropagation();
-                              callShareFileLink(`${Base64.encodeURI(PATH)}`, item.name);
+                              callShareFileLink(item.uuid, item.type);
                             }}
                           />
 
@@ -511,8 +526,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                                   className="p-2 rounded-[0.5rem] bg-red-400"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    callDeleteShareFileLink(`${Base64.encodeURI(PATH)}`, item.name);
-                                    setCopyShow(false);
+                                    callDeleteShareFileLink(item.uuid, item.type);
                                   }}
                                 >
                                   移除
@@ -528,9 +542,9 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                         onClick={(e) => {
                           e.stopPropagation();
                           if (item.type === 'file') {
-                            callDeleteFile(`${Base64.encodeURI(PATH)}`, item.name, item);
+                            callDeleteFile(item.uuid, 'file', item);
                           } else {
-                            callDeleteFolder(`${Base64.encodeURI(PATH)}`, item.name);
+                            callDeleteFolder(item.uuid);
                           }
                         }}
                       />
