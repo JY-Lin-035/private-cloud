@@ -76,7 +76,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         try {
           const homeFolder = await folderApi.getHome();
           getFileList(homeFolder.uuid);
-          navigate(`/fileList/${homeFolder.uuid}`, { replace: true });
+          navigate(`/file-list/${homeFolder.uuid}`, { replace: true });
         } catch (e) {
           localStorage.clear();
           navigate('/');
@@ -444,7 +444,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   className={`bg-gray-300 hover:bg-blue-200 ${item.type === 'folder' ? 'cursor-pointer' : ''}`}
                   onClick={() => {
                     if (item.type === 'folder') {
-                      navigate(`/fileList/${item.uuid}`);
+                      navigate(`/file-list/${item.uuid}`);
                     }
                   }}
                 >

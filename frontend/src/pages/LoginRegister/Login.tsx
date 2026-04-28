@@ -35,7 +35,7 @@ function Login({ onFlip, onNotice }: LoginProps) {
       localStorage.setItem("email", r.email);
       setUserName('');
       setPW('');
-      navigate('/fileList');
+      navigate('/file-list');
     } catch (e: any) {
       onNotice([e.message], 'text-red-500');
     }
@@ -43,7 +43,7 @@ function Login({ onFlip, onNotice }: LoginProps) {
     setLock(true);
   }
 
-  const goForgetPW = () => navigate('/forgetPassword');
+  const goForgetPW = () => navigate('/forget-password');
 
   return (
     <div className="absolute w-full h-full bg-white rounded-xl shadow-md flex flex-col justify-center items-center gap-4 p-6 [backface-visibility:hidden] [transform:translateZ(250px)]">

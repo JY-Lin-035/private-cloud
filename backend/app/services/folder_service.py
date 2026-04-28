@@ -25,7 +25,8 @@ class FolderService:
     
     def _validate_folder_name(self, name: str) -> bool:
         """Validate folder name (alphanumeric and Chinese characters only)."""
-        return bool(re.match(r'^[A-Za-z0-9\u4e00-\u9fa5\s\-_\.]{{{FolderValidation.MIN_LENGTH},{FolderValidation.MAX_LENGTH}}}$', name))
+        pattern = f'^[A-Za-z0-9\u4e00-\u9fa5\\s\\-_\\.]{{{FolderValidation.MIN_LENGTH},{FolderValidation.MAX_LENGTH}}}$'
+        return bool(re.match(pattern, name))
     
     def _update_parent_folder_size(self, folder_uuid: str, size_delta: int):
         """Recursively update parent folder sizes."""

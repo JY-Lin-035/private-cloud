@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Menu, Cloud, Settings, LogOut, Folder, Share2, User } from 'lucide-react';
+import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import { authApi } from '../api/authApi';
 
@@ -57,6 +57,7 @@ function Drawer() {
             <div className="flex-grow overflow-y-auto">
               <ul className="space-y-2">
                 <li>
+                  {/* Cloud */}
                   <button
                     onClick={() => setCloudOpen(!cloudOpen)}
                     className="flex items-center justify-between w-full p-2 text-base text-white transition duration-75 rounded-lg group hover:bg-gray-700 cursor-pointer"
@@ -70,31 +71,57 @@ function Drawer() {
                     </svg>
                   </button>
 
+                  {/* Cloud submenu */}
                   {cloudOpen && (
                     <ul className="py-2 space-y-2">
+                      {/* File List */}
                       <li>
                         <button
-                          onClick={() => { navigate('/fileList'); setIsOpen(false); }}
+                          onClick={() => { navigate('/file-list'); setIsOpen(false); }}
                           className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
                         >
-                          <Folder className="w-6 h-6 mr-2 text-white" />
-                          <span>File</span>
+                          <FolderTree className="w-6 h-6 mr-2 text-white" />
+                          <span>My Space</span>
                         </button>
                       </li>
 
+                      {/* Share List */}
                       <li>
                         <button
-                          onClick={() => { navigate('/shareList'); setIsOpen(false); }}
+                          onClick={() => { navigate('/share-list'); setIsOpen(false); }}
                           className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
                         >
                           <Share2 className="w-6 h-6 mr-2 text-white" />
                           <span>Share List</span>
                         </button>
                       </li>
+
+                      {/* Shared With Me */}
+                      <li>
+                        <button
+                          onClick={() => { navigate('/shared-with-me'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
+                        >
+                          <FolderInput className="w-6 h-6 mr-2 text-white" />
+                          <span>Shared With Me</span>
+                        </button>
+                      </li>
+
+                      {/* Trash */}
+                      <li>
+                        <button
+                          onClick={() => { navigate('/trash'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
+                        >
+                          <Trash2 className="w-6 h-6 mr-2 text-white" />
+                          <span>Trash</span>
+                        </button>
+                      </li>
                     </ul>
                   )}
                 </li>
 
+                {/* Setting */}
                 <li>
                   <button
                     onClick={() => setSettingOpen(!settingOpen)}
@@ -109,6 +136,7 @@ function Drawer() {
                     </svg>
                   </button>
 
+                  {/* Setting submenu */}
                   {settingOpen && (
                     <ul className="py-2 space-y-2">
                       <li>
@@ -124,6 +152,7 @@ function Drawer() {
                   )}
                 </li>
 
+                {/* Sign Out */}
                 <li>
                   <button
                     onClick={signOut}
