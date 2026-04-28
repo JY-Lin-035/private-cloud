@@ -60,34 +60,40 @@ class FolderService:
         for child_file in child_files:
             file_repo.soft_delete(child_file.uuid)
     
-    def _hard_delete_children(self, folder_uuid: str):
-        """Recursively hard delete all children (folders and files) and their storage files."""
+    def _hard_delete_children(self, folder_uuid: str) -> int:
+        """Recursively hard delete all children (folders and files) and their storage files.
+        Returns total size of all deleted items."""
         from app.repositories.file_repository import FileRepository
         from app.models.file import File
         import os
-        
+
         file_repo = FileRepository(self.db)
-        
+        total_size = 0
+
         # Get all child folders
         child_folders = self.db.execute(
             select(Folder).where(Folder.parent_id == folder_uuid)
         ).scalars().all()
-        
+
         for child_folder in child_folders:
-            self._hard_delete_children(child_folder.uuid)
+            total_size += self._hard_delete_children(child_folder.uuid)
+            total_size += child_folder.size
             self.folder_repo.hard_delete(child_folder.uuid)
-        
+
         # Get all child files (including deleted ones)
         child_files = self.db.execute(
             select(File).where(File.parent_folder_id == folder_uuid)
         ).scalars().all()
-        
+
         for child_file in child_files:
             # Delete actual file from storage
             file_path = os.path.join(self.storage_base_path, child_file.uuid)
             if os.path.exists(file_path):
                 os.remove(file_path)
+            total_size += child_file.size
             self.file_repo.hard_delete(child_file.uuid)
+
+        return total_size
     
     def create(self, user_id: int, parent_folder_uuid: Optional[str], name: str) -> Optional[Dict[str, Any]]:
         """Create a new folder."""
@@ -173,20 +179,25 @@ class FolderService:
 
             if permanent:
                 # Hard delete: recursively delete all children and storage files
-                self._hard_delete_children(folder_uuid)
+                children_size = self._hard_delete_children(folder_uuid)
+                total_size = folder_size + children_size
                 self.folder_repo.hard_delete(folder_uuid)
+
+                # Update account used size only on hard delete (folder + all children)
+                account.used_size = max(0, account.used_size - total_size)
+                self.account_repo.update(account)
+
+                # Update parent folder size with total size (folder + all children)
+                if folder.parent_id:
+                    self._update_parent_folder_size(folder.parent_id, -total_size)
             else:
                 # Soft delete: recursively mark all children as deleted
                 self._soft_delete_children(folder_uuid)
                 self.folder_repo.soft_delete(folder_uuid)
 
-            # Update parent folder size
-            if folder.parent_id:
-                self._update_parent_folder_size(folder.parent_id, -folder_size)
-
-            # Update account used size
-            account.used_size = max(0, account.used_size - folder_size)
-            self.account_repo.update(account)
+                # Update parent folder size (for soft delete, only folder size)
+                if folder.parent_id:
+                    self._update_parent_folder_size(folder.parent_id, -folder_size)
 
             return {
                 'uuid': folder_uuid,
@@ -272,6 +283,7 @@ class FolderService:
                         'uuid': f.uuid,
                         'name': f.name,
                         'size': f.size,
+                        'parent_id': f.parent_id,
                         'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None
                     }
                     for f in folders

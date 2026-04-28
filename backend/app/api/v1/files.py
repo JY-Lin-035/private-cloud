@@ -193,18 +193,43 @@ async def list_trash(
     """Get soft-deleted files by owner."""
     try:
         logger.info(f"List trash files request received, user_id: {user_id}")
-        
+
         file_service = FileService(db)
-        
+
         result = file_service.get_trash(user_id)
         logger.info(f"List trash files result: {result}")
-        
+
         if result and 'error' in result:
             logger.error(f"List trash files error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
-        
+
         logger.info("Trash files listed successfully")
         return result
     except Exception as e:
         logger.error(f"List trash files endpoint error: {e}")
+        raise
+
+
+@router.post("/recalculate-storage")
+async def recalculate_storage(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Recalculate used storage from actual non-deleted files."""
+    try:
+        logger.info(f"Recalculate storage request received, user_id: {user_id}")
+
+        file_service = FileService(db)
+
+        result = file_service.recalculate_used_storage(user_id)
+        logger.info(f"Recalculate storage result: {result}")
+
+        if result and 'error' in result:
+            logger.error(f"Recalculate storage error: {result['error']}, stateCode: {result['stateCode']}")
+            raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+
+        logger.info("Storage recalculated successfully")
+        return result
+    except Exception as e:
+        logger.error(f"Recalculate storage endpoint error: {e}")
         raise

@@ -160,8 +160,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setInputShow(false);
   }
 
-  async function callDeleteFile(item_uuid: string, item_type: string, item: any) {
-    const [res, cn, show, fl] = await deleteFile(item_uuid, item_type, item, fileList, storage);
+  async function callDeleteFile(item_uuid: string, _item_type: string, item: any) {
+    const [res, cn, show, fl] = await deleteFile(item_uuid, item, fileList);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -217,7 +217,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   async function callDeleteFolder(folder_uuid: string) {
-    const [res, cn, show, fl] = await deleteFolder(folder_uuid, fileList, storage);
+    const [res, cn, show, fl] = await deleteFolder(folder_uuid, fileList);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);

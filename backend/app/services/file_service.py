@@ -88,38 +88,68 @@ class FileService:
         """Upload a file."""
         try:
             account = self.account_repo.get_by_id(user_id)
-            
+
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
-            
+
             # Validate file size
             if file_size > account.signal_file_size:
                 return {'error': '檔案大小超過限制', 'stateCode': HTTPStatus.FORBIDDEN}
-            
+
             # Validate parent folder (if provided)
             if parent_folder_uuid:
                 parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
                 if not parent_folder or parent_folder.owner_id != user_id:
                     return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
-            
+
             # Validate filename
             filename = file.filename
             if '..' in filename or filename.startswith('.') or filename.startswith('/') or filename.startswith('\\'):
                 return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
-            
+
+            # Check if file with same name exists in same location
+            from sqlalchemy import select
+            existing_file = self.db.execute(
+                select(File).where(
+                    File.owner_id == user_id,
+                    File.parent_folder_id == parent_folder_uuid,
+                    File.name == filename,
+                    File.deleted_at.is_(None)
+                )
+            ).scalar_one_or_none()
+
+            # If exists, hard delete the old file
+            old_file_size = 0
+            if existing_file:
+                old_file_size = existing_file.size
+                # Delete old file from storage
+                old_storage_path = os.path.join(self.storage_base_path, existing_file.uuid)
+                if os.path.exists(old_storage_path):
+                    os.remove(old_storage_path)
+                # Hard delete from database
+                self.file_repo.hard_delete(existing_file.uuid)
+
+                # Update account used storage (remove old file size)
+                account.used_size = max(0, account.used_size - old_file_size)
+                self.account_repo.update(account)
+
+                # Update parent folder size (remove old file size)
+                if parent_folder_uuid:
+                    self.folder_service._update_parent_folder_size(parent_folder_uuid, -old_file_size)
+
             # Generate UUID for file
             file_uuid = str(uuid.uuid4())
-            
+
             # Create storage path
             storage_path = os.path.join(self.storage_base_path, file_uuid)
-            
+
             # Ensure storage directory exists
             os.makedirs(self.storage_base_path, exist_ok=True)
-            
+
             # Save file to storage
             with open(storage_path, 'wb') as f:
                 f.write(file.file.read())
-            
+
             # Create file record
             new_file = File(
                 uuid=file_uuid,
@@ -130,13 +160,13 @@ class FileService:
                 mime_type=self._get_mime_type(filename),
                 storage_path=storage_path
             )
-            
+
             created_file = self.file_repo.create_with_uuid_retry(new_file)
-            
+
             # Update parent folder size
             if parent_folder_uuid:
                 self.folder_service._update_parent_folder_size(parent_folder_uuid, file_size)
-            
+
             # Update account used storage
             account.used_size += file_size
             self.account_repo.update(account)
@@ -193,17 +223,17 @@ class FileService:
                 if os.path.exists(file_path):
                     os.remove(file_path)
                 self.file_repo.hard_delete(file_uuid)
+
+                # Update account used storage only on hard delete
+                account.used_size = max(0, account.used_size - file_size)
+                self.account_repo.update(account)
             else:
                 # Soft delete
                 self.file_repo.soft_delete(file_uuid)
-            
-            # Update parent folder size
+
+            # Update parent folder size (for both soft and hard delete)
             if file.parent_folder_id:
                 self.folder_service._update_parent_folder_size(file.parent_folder_id, -file_size)
-            
-            # Update account used storage
-            account.used_size = max(0, account.used_size - file_size)
-            self.account_repo.update(account)
             
             return {
                 'uuid': file_uuid,
@@ -272,10 +302,42 @@ class FileService:
                         'name': f.name,
                         'size': f.size,
                         'mime_type': f.mime_type,
+                        'parent_folder_id': f.parent_folder_id,
                         'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None
                     }
                     for f in files
                 ]
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def recalculate_used_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Recalculate used storage from actual non-deleted files."""
+        try:
+            account = self.account_repo.get_by_id(user_id)
+
+            if not account:
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            # Get all non-deleted files for the user
+            from sqlalchemy import select
+            files = self.db.execute(
+                select(File).where(
+                    File.owner_id == user_id,
+                    File.deleted_at.is_(None)
+                )
+            ).scalars().all()
+
+            # Sum up all file sizes
+            total_used = sum(f.size for f in files)
+
+            # Update account used_size
+            account.used_size = total_used
+            self.account_repo.update(account)
+
+            return {
+                'used_storage': total_used,
+                'stateCode': HTTPStatus.OK
             }
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

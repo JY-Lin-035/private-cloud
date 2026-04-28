@@ -40,7 +40,8 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         name: f.name,
         size: f.size,
         type: 'folder' as const,
-        deleted_at: f.deleted_at
+        deleted_at: f.deleted_at,
+        parent_id: f.parent_id
       })) || [];
 
       const files = filesRes.files?.map((f: any) => ({
@@ -49,10 +50,18 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         size: f.size,
         type: 'file' as const,
         mime_type: f.mime_type,
-        deleted_at: f.deleted_at
+        deleted_at: f.deleted_at,
+        parent_folder_id: f.parent_folder_id
       })) || [];
 
-      setTrashList([...folders, ...files]);
+      // Filter out files whose parent folder is also deleted
+      const deletedFolderUuids = new Set(folders.map((f) => f.uuid));
+      const filteredFiles = files.filter((f) => !f.parent_folder_id || !deletedFolderUuids.has(f.parent_folder_id));
+
+      // Filter out folders whose parent folder is also deleted
+      const filteredFolders = folders.filter((f) => !f.parent_id || !deletedFolderUuids.has(f.parent_id));
+
+      setTrashList([...filteredFolders, ...filteredFiles]);
       localStorage.setItem('previousFolderUuid', '');
     } catch (e) {
       localStorage.clear();
@@ -132,7 +141,20 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
 
   async function hardDeleteItem(item: TrashItem) {
     try {
+      const firstConfirmMessage = item.type === 'folder'
+        ? '此操作將永久刪除資料夾且無法還原'
+        : '此操作將永久刪除檔案且無法還原';
+
+      const firstCheck = confirm(firstConfirmMessage);
+      if (!firstCheck) {
+        return;
+      }
+
       if (item.type === 'folder') {
+        const secondCheck = confirm('此操作將一併永久刪除所有子項目');
+        if (!secondCheck) {
+          return;
+        }
         await folderApi.delete({ folder_uuid: item.uuid, permanent: true });
       } else {
         await fileApi.delete({ file_uuid: item.uuid, permanent: true });
