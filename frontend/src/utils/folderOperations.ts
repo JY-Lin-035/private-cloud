@@ -56,7 +56,7 @@ export async function renameFolder(folder_uuid: string, folderName: string, file
   }
 }
 
-export async function deleteFolder(folder_uuid: string, fileList: any[], storage: any): Promise<[string | string[], string, boolean, any[]]> {
+export async function deleteFolder(folder_uuid: string, fileList: any[]): Promise<[string | string[], string, boolean, any[]]> {
   try {
     const check = confirm("確定要刪除嗎?");
     if (!check) {
@@ -68,9 +68,7 @@ export async function deleteFolder(folder_uuid: string, fileList: any[], storage
       return [["操作已取消!"], "text-red-500", false, fileList];
     }
 
-    const r = await folderApi.delete({ folder_uuid, permanent: false });
-
-    storage.addUsedStorage(-Number(r.size));
+    await folderApi.delete({ folder_uuid, permanent: false });
 
     const folderIndex = fileList.findIndex(
       (item) => item.type === "folder" && item.uuid === folder_uuid
