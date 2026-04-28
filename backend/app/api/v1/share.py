@@ -1,13 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from app.schemas.share import ShareLinkRequest, ShareListResponse, ShareLinkResponse, ShareDeleteResponse
+from pydantic import BaseModel
 from app.services.share_service import ShareService
 from app.api.dependencies import get_db, get_current_user_id
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/share", tags=["share"])
 logger = log.get_logger("share_api.log")
+
+
+class ShareLinkRequest(BaseModel):
+    item_uuid: str
+    item_type: str  # 'folder' or 'file'
 
 
 @router.get("/getList")
@@ -41,13 +46,13 @@ async def create_share_link(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
-    """Create a share link for a file."""
+    """Create a share link for a folder or file."""
     try:
-        logger.info(f"Create share link request received, user_id: {user_id}, dir: {request.dir}, filename: {request.filename}")
+        logger.info(f"Create share link request received, user_id: {user_id}, item_uuid: {request.item_uuid}, item_type: {request.item_type}")
         
         share_service = ShareService(db)
         
-        result = share_service.create_link(user_id, request.dir, request.filename)
+        result = share_service.create_link(user_id, request.item_uuid, request.item_type)
         logger.info(f"Create share link result: {result}")
         
         if result and 'error' in result:
@@ -64,19 +69,18 @@ async def create_share_link(
 
 @router.delete("/deleteLink")
 async def delete_share_link(
-    dir: str = Query(None),
-    filename: str = Query(None),
-    link: str = Query(None),
+    item_uuid: str = Query(...),
+    item_type: str = Query(...),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """Delete a share link."""
     try:
-        logger.info(f"Delete share link request received, user_id: {user_id}, dir: {dir}, filename: {filename}, link: {link}")
+        logger.info(f"Delete share link request received, user_id: {user_id}, item_uuid: {item_uuid}, item_type: {item_type}")
         
         share_service = ShareService(db)
         
-        result = share_service.delete_link(user_id, dir, filename, link)
+        result = share_service.delete_link(user_id, item_uuid, item_type)
         logger.info(f"Delete share link result: {result}")
         
         if result and 'error' in result:
@@ -109,7 +113,11 @@ async def download_shared_file(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         logger.info("Shared file downloaded successfully")
-        return FileResponse(path=result['real_path'], filename=result['filename'])
+        return FileResponse(
+            path=result['real_path'], 
+            filename=result['filename'],
+            media_type=result.get('mime_type', 'application/octet-stream')
+        )
     except Exception as e:
         logger.error(f"Download shared file endpoint error: {e}")
         raise

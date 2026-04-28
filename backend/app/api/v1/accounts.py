@@ -11,9 +11,10 @@ from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service
 from app.api.rate_limit import rate_limit
-from app.utils.logger_sample import log_info, log_error
+from app.utils import logger as log
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+logger = log.get_logger("accounts_api.log")
 
 
 @router.post("/register", dependencies=[Depends(rate_limit(5, 300))])
@@ -25,29 +26,29 @@ async def register(
 ):
     """Register a new account."""
     try:
-        log_info("Register request received", {"username": request.username, "email": request.email})
+        logger.info(f"Register request received, username: {request.username}, email: {request.email}")
         
         account_service = AccountService(db, redis_client)
         
-        log_info("Calling account service register")
+        logger.info("Calling account service register")
         result = account_service.register(request.username, request.email, request.password)
-        log_info("Account service result", {"result": result})
+        logger.info(f"Account service result: {result}")
         
         if result and 'error' in result:
-            log_info("Registration error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Registration error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         # Queue verification email
-        log_info("Getting account by name")
+        logger.info("Getting account by name")
         account = account_service.account_repo.get_by_name(request.username)
         if account:
-            log_info("Sending verification email", {"account_id": account.id, "email": account.email})
+            logger.info(f"Sending verification email, account_id: {account.id}, email: {account.email}")
             email_service.send_verification_email(account.id, account.email)
         
-        log_info("Registration successful")
+        logger.info("Registration successful")
         return {"message": "success"}
     except Exception as e:
-        log_error("Register endpoint error", e)
+        logger.error(f"Register endpoint error: {e}")
         raise
 
 
@@ -60,15 +61,15 @@ async def login(
 ):
     """Login user."""
     try:
-        log_info("Login request received", {"username": request.username})
+        logger.info(f"Login request received, username: {request.username}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.login(request.username, request.password, email_service)
-        log_info("Login result", {"result": result})
+        logger.info(f"Login result: {result}")
         
         if result and 'error' in result:
-            log_info("Login error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Login error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         response = Response(
@@ -86,10 +87,10 @@ async def login(
             secure=False
         )
         
-        log_info("Login successful")
+        logger.info("Login successful")
         return response
     except Exception as e:
-        log_error("Login endpoint error", e)
+        logger.error(f"Login endpoint error: {e}")
         raise
 
 
@@ -102,24 +103,24 @@ async def sign_out(
 ):
     """Sign out user."""
     try:
-        log_info("Sign out request received", {"user_id": user_id})
+        logger.info(f"Sign out request received, user_id: {user_id}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.sign_out(user_id)
-        log_info("Sign out result", {"result": result})
+        logger.info(f"Sign out result: {result}")
         
         if result and 'error' in result:
-            log_info("Sign out error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Sign out error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         response = Response(status_code=200)
         response.delete_cookie(key="session", path="/")
         
-        log_info("Sign out successful")
+        logger.info("Sign out successful")
         return response
     except Exception as e:
-        log_error("Sign out endpoint error", e)
+        logger.error(f"Sign out endpoint error: {e}")
         raise
 
 
@@ -131,16 +132,16 @@ async def get_code(
 ):
     """Get verification code."""
     try:
-        log_info("Get code request received", {"email": request.email, "mode": request.mode})
+        logger.info(f"Get code request received, email: {request.email}, mode: {request.mode}")
         
         account_service = AccountService(db, redis_client)
         email_service = EmailService(celery_app)
         
         result = account_service.get_code(request.email, request.mode)
-        log_info("Get code result", {"result": result})
+        logger.info(f"Get code result: {result}")
         
         if result and 'error' in result:
-            log_info("Get code error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Get code error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         # Queue code email
@@ -155,10 +156,10 @@ async def get_code(
         mode_titles = {'pw': '密碼重置通知', 'mail': '信箱變更驗證通知'}
         email_service.send_code_email(request.email, code, mode_titles.get(request.mode, '驗證碼通知'))
         
-        log_info("Verification code sent")
+        logger.info("Verification code sent")
         return {"message": "請至信箱查看通知"}
     except Exception as e:
-        log_error("Get code endpoint error", e)
+        logger.error(f"Get code endpoint error: {e}")
         raise
 
 
@@ -171,21 +172,21 @@ async def modify_mail(
 ):
     """Modify user email."""
     try:
-        log_info("Modify mail request received", {"user_id": user_id, "email": request.email})
+        logger.info(f"Modify mail request received, user_id: {user_id}, email: {request.email}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.modify_email(user_id, request.email, request.check_email, request.code)
-        log_info("Modify mail result", {"result": result})
+        logger.info(f"Modify mail result: {result}")
         
         if result and 'error' in result:
-            log_info("Modify mail error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Modify mail error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Email modified successfully")
+        logger.info("Email modified successfully")
         return {"email": result['email']}
     except Exception as e:
-        log_error("Modify mail endpoint error", e)
+        logger.error(f"Modify mail endpoint error: {e}")
         raise
 
 
@@ -199,21 +200,21 @@ async def modify_password(
 ):
     """Modify user password."""
     try:
-        log_info("Modify password request received", {"user_id": user_id})
+        logger.info(f"Modify password request received, user_id: {user_id}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.modify_password(user_id, request.now_pw, request.new_pw)
-        log_info("Modify password result", {"result": result})
+        logger.info(f"Modify password result: {result}")
         
         if result and 'error' in result:
-            log_info("Modify password error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Modify password error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Password modified successfully")
+        logger.info("Password modified successfully")
         return {"message": "success"}
     except Exception as e:
-        log_error("Modify password endpoint error", e)
+        logger.error(f"Modify password endpoint error: {e}")
         raise
 
 
@@ -225,21 +226,21 @@ async def reset_password(
 ):
     """Reset password with verification code."""
     try:
-        log_info("Reset password request received", {"email": request.email})
+        logger.info(f"Reset password request received, email: {request.email}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.reset_password(request.email, request.code, request.password)
-        log_info("Reset password result", {"result": result})
+        logger.info(f"Reset password result: {result}")
         
         if result and 'error' in result:
-            log_info("Reset password error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Reset password error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Password reset successfully")
+        logger.info("Password reset successfully")
         return {"message": "success"}
     except Exception as e:
-        log_error("Reset password endpoint error", e)
+        logger.error(f"Reset password endpoint error: {e}")
         raise
 
 
@@ -247,9 +248,9 @@ async def reset_password(
 async def check_session(user_id: int = Depends(get_current_user_id)):
     """Check if user session is valid."""
     try:
-        log_info("Check session request received", {"user_id": user_id})
-        log_info("Session valid")
+        logger.info(f"Check session request received, user_id: {user_id}")
+        logger.info("Session valid")
         return Response(status_code=200)
     except Exception as e:
-        log_error("Check session endpoint error", e)
+        logger.error(f"Check session endpoint error: {e}")
         raise HTTPException(status_code=401, detail="Unauthorized")

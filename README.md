@@ -31,14 +31,13 @@
 2. uv sync
 3. cp .env.example .env
 4. 編輯 .env 中 MySQL、Redis、Gmail 相關設定
-5. 建表
-    - uv run alembic revision --autogenerate -m "init"
-6. 遷移至 DB
-    - uv run alembic upgrade head
+5. 定義表
+   - uv run alembic revision --autogenerate -m "init"
+6. 建表
+   - uv run alembic upgrade head
 7. uv run main.py
 8. 啟動寄信佇列
-    - uv run celery -A app.tasks.email_tasks worker --loglevel=info (新視窗)
-
+   - uv run celery -A app.tasks.email_tasks worker --loglevel=info (新視窗)
 
 ### Frontend
 
@@ -47,6 +46,3 @@
 3. cp .env.example .env
 4. 編輯 .env 中 API 基底網址
 5. pnpm dev
-
-
-

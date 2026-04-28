@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Base64 } from 'js-base64';
 import { Menu, Cloud, Settings, LogOut, Folder, Share2, User } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import { authApi } from '../api/authApi';
@@ -75,7 +74,7 @@ function Drawer() {
                     <ul className="py-2 space-y-2">
                       <li>
                         <button
-                          onClick={() => { navigate(`/fileList/${Base64.encodeURI('Home')}`); setIsOpen(false); }}
+                          onClick={() => { navigate('/fileList'); setIsOpen(false); }}
                           className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
                         >
                           <Folder className="w-6 h-6 mr-2 text-white" />

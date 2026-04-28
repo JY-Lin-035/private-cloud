@@ -1,5 +1,4 @@
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Base64 } from 'js-base64';
 import Drawer from './Drawer';
 
 import logoImage from '../assets/J.png';
@@ -19,7 +18,7 @@ function Nav({ layoutClass = "" }: { layoutClass?: string }) {
     if (location.pathname === '/' || location.pathname === '/forgetPassword') {
       navigate('/');
     } else {
-      navigate(`/fileList/${Base64.encodeURI('Home')}`);
+      navigate('/fileList');
     }
   }
 

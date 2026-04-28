@@ -1,9 +1,9 @@
 import { api } from './api';
-import type { ShareLinkRequest, ShareListResponse } from '../types/index';
+import type { ShareListResponse } from '../types/index';
 
 export const shareApi = {
   // Get share link
-  getLink: async (data: ShareLinkRequest) => {
+  getLink: async (data: { item_uuid: string; item_type: string }) => {
     const response = await api.post('/api/share/getLink', data);
     return response.data as string;
   },
@@ -24,16 +24,9 @@ export const shareApi = {
   },
 
   // Delete share link
-  deleteLink_by_filename: async (dir: string, fileName: string) => {
+  deleteLink: async (item_uuid: string, item_type: string) => {
     const response = await api.delete('/api/share/deleteLink', {
-      params: { dir: dir, filename: fileName },
-    });
-    return response.data;
-  },
-
-  deleteLink_by_link: async (link: string) => {
-    const response = await api.delete('/api/share/deleteLink', {
-      params: { link: link },
+      params: { item_uuid: item_uuid.trim(), item_type: item_type.trim() },
     });
     return response.data;
   },

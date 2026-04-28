@@ -1,71 +1,34 @@
+import uuid
 import os
-import base64
+import mimetypes
 from datetime import datetime
-from typing import Optional, Dict, Any, List
-from pathlib import Path
+from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from app.models.account import Account
+from app.models.file import File
+from app.models.folder import Folder
 from app.repositories.account_repository import AccountRepository
-from app.utils.file_utils import format_file_size
+from app.repositories.file_repository import FileRepository
+from app.repositories.folder_repository import FolderRepository
+from app.services.folder_service import FolderService
+from app.constants import StorageLimits, HTTPStatus
 from app.config import settings
-from app.utils.logger_sample import log_info, log_error
 
 
 class FileService:
-    def __init__(self, db: Session, storage_base_path: str = "storage/app/private"):
+    def __init__(self, db: Session):
         self.db = db
         self.account_repo = AccountRepository(db)
-        self.storage_base_path = storage_base_path
+        self.file_repo = FileRepository(db)
+        self.folder_repo = FolderRepository(db)
+        self.folder_service = FolderService(db)
+        self.storage_base_path = settings.STORAGE_BASE_PATH
     
-    def _validate_path(self, user_id: int, dir: str, filename: str = None) -> Optional[Path]:
-        """Validate path to prevent directory traversal attacks."""
-        try:
-            # Decode base64 path (match Laravel logic: decode first, then replace)
-            # Fallback: if not valid base64, treat as plain text with '-' as path separator
-            if dir:
-                try:
-                    # Add padding for URL-safe base64
-                    padding = 4 - len(dir) % 4
-                    if padding != 4:
-                        dir += '=' * padding
-                    dir = base64.b64decode(dir.replace('-', '+').replace('_', '/')).decode('utf-8')
-                    dir = dir.replace('-', '/')
-                except Exception:
-                    # Not valid base64, treat as plain text (replace '-' with '/')
-                    dir = dir.replace('-', '/')
-            
-            # Build full path
-            user_path = Path(self.storage_base_path) / "users" / str(user_id)
-            
-            full_path = user_path / dir
-            
-            if filename:
-                full_path = full_path / filename
-            
-            # Get real path and validate
-            real_path = full_path.resolve()
-            log_info("get_file_list - real_path: " + str(real_path))
-            
-            # Check if path is within user's Home directory
-            try:
-                real_path.relative_to(user_path.resolve())
-            except ValueError:
-                log_info("get_file_list - path traversal attempt", {"user_id": user_id, "path": str(full_path)})
-                return None
-            
-            # Check for path traversal attempts
-            if '..' in str(full_path) or str(full_path).startswith('/') or str(full_path).startswith('\\'):
-                log_info("get_file_list - path traversal attempt", {"user_id": user_id, "path": str(full_path)})
-                return None
-            
-            if filename and ('..' in filename or filename.startswith('.') or filename.startswith('/') or filename.startswith('\\')):
-                log_info("get_file_list - filename traversal attempt", {"user_id": user_id, "filename": filename})
-                return None
-            
-            return real_path
-        except Exception as e:
-            log_info("get_file_list - exception", {"user_id": user_id, "dir": dir, "filename": filename, "error": str(e)})
-            return None
+    def _get_mime_type(self, filename: str) -> str:
+        """Get MIME type for a file."""
+        mime_type, _ = mimetypes.guess_type(filename)
+        return mime_type or 'application/octet-stream'
     
     def get_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Get storage usage information."""
@@ -73,149 +36,246 @@ class FileService:
             account = self.account_repo.get_by_id(user_id)
             
             if not account:
-                return {'error': '使用者不存在', 'stateCode': 404}
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
-            # Ensure totalStorage is never 0 to prevent frontend NaN
-            total_storage = account.total_file_size or 10737418240
+            total_storage = account.total_file_size or StorageLimits.DEFAULT_TOTAL_FILE_SIZE
             return {
-                'usedStorage': account.used_size,
-                'signalStorage': account.signal_file_size,
-                'totalStorage': total_storage
+                'used_storage': account.used_size,
+                'signal_storage': account.signal_file_size,
+                'total_storage': total_storage
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def get_file_list(self, user_id: int, folder: str) -> Optional[Dict[str, Any]]:
+    def get_file_list(self, user_id: int, parent_folder_uuid: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get list of files in a folder."""
         try:
-            folder_path = self._validate_path(user_id, folder)
-            log_info(f"get_file_list - folder_path: {folder_path}")
-
-            if not folder_path:
-                log_info("get_file_list - folder_path is None after validation")
-                return {'error': 'Error', 'stateCode': 404}
-
-            if not folder_path.exists():
-                log_info(f"get_file_list - folder_path does not exist: {folder_path}")
-                return {'error': 'Error', 'stateCode': 404}
-
-            log_info(f"get_file_list - folder_path exists, is_dir: {folder_path.is_dir()}")
-
+            files = self.file_repo.get_by_folder(parent_folder_uuid) if parent_folder_uuid else []
+            folders = self.folder_repo.get_by_parent(parent_folder_uuid) if parent_folder_uuid else self.folder_repo.get_by_owner(user_id)
+            
+            # Filter root-level folders (no parent)
+            if not parent_folder_uuid:
+                folders = [f for f in folders if f.parent_id is None]
+            
             file_list = []
-            item_count = 0
-
-            for item in folder_path.iterdir():
-                item_count += 1
-                log_info(f"get_file_list - found item: {item.name}, is_file: {item.is_file()}, is_dir: {item.is_dir()}")
-                if item.is_file():
-                    size, unit = format_file_size(item.stat().st_size)
-                    size_str = f"{size} {unit}" if unit else str(size)
-                    # Match Laravel date format: Y-m-d H:i:s (local timezone)
-                    date_str = datetime.fromtimestamp(item.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                    file_list.append({
-                        'type': 'file',
-                        'name': item.name,
-                        'size': size_str,
-                        'date': date_str
-                    })
-                elif item.is_dir():
-                    date_str = datetime.fromtimestamp(item.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                    file_list.append({
-                        'type': 'folder',
-                        'name': item.name,
-                        'size': '-',
-                        'date': date_str
-                    })
-
-            log_info(f"get_file_list - total items found: {item_count}, file_list length: {len(file_list)}")
-            return {'file': file_list, 'stateCode': 200}
+            
+            for folder in folders:
+                file_list.append({
+                    'type': 'folder',
+                    'uuid': folder.uuid,
+                    'name': folder.name,
+                    'size': folder.size,
+                    'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'shared': folder.shared
+                })
+            
+            for file in files:
+                file_list.append({
+                    'type': 'file',
+                    'uuid': file.uuid,
+                    'name': file.name,
+                    'size': file.size,
+                    'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'mime_type': file.mime_type,
+                    'shared': file.shared
+                })
+            
+            return {'files': file_list, 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def upload_file(self, user_id: int, dir: str, file, file_size: int) -> Optional[Dict[str, Any]]:
+    def upload_file(self, user_id: int, parent_folder_uuid: Optional[str], file, file_size: int) -> Optional[Dict[str, Any]]:
         """Upload a file."""
         try:
             account = self.account_repo.get_by_id(user_id)
             
             if not account:
-                return {'error': '使用者不存在', 'stateCode': 404}
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
             # Validate file size
             if file_size > account.signal_file_size:
-                return {'error': '檔案大小超過限制', 'stateCode': 403}
+                return {'error': '檔案大小超過限制', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Validate path (default to Home if dir is empty or 'Home')
-            # Use base64 encoded 'Home' (SG9tZQ) to match normal flow
-            if not dir or dir == "Home":
-                dir_path = self._validate_path(user_id, "SG9tZQ")
-            else:
-                dir_path = self._validate_path(user_id, dir)
-            
-            if not dir_path or not dir_path.exists():
-                return {'error': 'Error', 'stateCode': 403}
+            # Validate parent folder (if provided)
+            if parent_folder_uuid:
+                parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
+                if not parent_folder or parent_folder.owner_id != user_id:
+                    return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
             
             # Validate filename
             filename = file.filename
             if '..' in filename or filename.startswith('.') or filename.startswith('/') or filename.startswith('\\'):
-                return {'error': 'Error', 'stateCode': 403}
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Check if file already exists with same size
-            file_path = dir_path / filename
-            if file_path.exists():
-                if file_path.stat().st_size == file_size:
-                    return {'message': 'success'}
+            # Generate UUID for file
+            file_uuid = str(uuid.uuid4())
             
-            # Save file
-            with open(file_path, 'wb') as f:
+            # Create storage path
+            storage_path = os.path.join(self.storage_base_path, file_uuid)
+            
+            # Ensure storage directory exists
+            os.makedirs(self.storage_base_path, exist_ok=True)
+            
+            # Save file to storage
+            with open(storage_path, 'wb') as f:
                 f.write(file.file.read())
             
-            # Update used storage
+            # Create file record
+            new_file = File(
+                uuid=file_uuid,
+                owner_id=user_id,
+                parent_folder_id=parent_folder_uuid,
+                name=filename,
+                size=file_size,
+                mime_type=self._get_mime_type(filename),
+                storage_path=storage_path
+            )
+            
+            created_file = self.file_repo.create_with_uuid_retry(new_file)
+            
+            # Update parent folder size
+            if parent_folder_uuid:
+                self.folder_service._update_parent_folder_size(parent_folder_uuid, file_size)
+            
+            # Update account used storage
             account.used_size += file_size
             self.account_repo.update(account)
             
-            return {'message': 'success'}
-        except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
-    
-    def download(self, user_id: int, dir: str, filename: str) -> Optional[Dict[str, Any]]:
-        """Download a file."""
-        try:
-            file_path = self._validate_path(user_id, dir, filename)
-            
-            if not file_path or not file_path.exists() or not file_path.is_file():
-                return {'error': 'NotFound', 'stateCode': 404}
-            
             return {
-                'real_path': str(file_path),
-                'filename': filename,
-                'stateCode': 200
+                'uuid': created_file.uuid,
+                'name': created_file.name,
+                'size': created_file.size,
+                'mime_type': created_file.mime_type,
+                'created_at': created_file.created_at.strftime('%Y-%m-%d %H:%M:%S')
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def delete(self, user_id: int, dir: str, filename: str) -> Optional[Dict[str, Any]]:
-        """Delete a file."""
+    def download(self, user_id: int, file_uuid: str) -> Optional[Dict[str, Any]]:
+        """Download a file."""
+        try:
+            file = self.file_repo.get_by_uuid(file_uuid)
+
+            if not file or file.owner_id != user_id or file.deleted_at:
+                return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            file_path = os.path.join(self.storage_base_path, file.uuid)
+            if not os.path.exists(file_path):
+                return {'error': 'File not found on disk', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            return {
+                'real_path': file_path,
+                'filename': file.name,
+                'mime_type': file.mime_type,
+                'stateCode': HTTPStatus.OK
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_ERROR}
+    
+    def delete(self, user_id: int, file_uuid: str, permanent: bool = False) -> Optional[Dict[str, Any]]:
+        """Delete a file (soft or hard)."""
         try:
             account = self.account_repo.get_by_id(user_id)
             
             if not account:
-                return {'error': '使用者不存在', 'stateCode': 404}
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
-            file_path = self._validate_path(user_id, dir, filename)
+            file = self.file_repo.get_by_uuid(file_uuid)
             
-            if not file_path or not file_path.exists() or not file_path.is_file():
-                return {'error': 'NotFound', 'stateCode': 404}
+            if not file or file.owner_id != user_id:
+                return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
             
-            # Get file size
-            file_size = file_path.stat().st_size
+            file_size = file.size
+
+            if permanent:
+                # Hard delete: remove from storage and database
+                file_path = os.path.join(self.storage_base_path, file.uuid)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                self.file_repo.hard_delete(file_uuid)
+            else:
+                # Soft delete
+                self.file_repo.soft_delete(file_uuid)
             
-            # Delete file
-            file_path.unlink()
+            # Update parent folder size
+            if file.parent_folder_id:
+                self.folder_service._update_parent_folder_size(file.parent_folder_id, -file_size)
             
-            # Update used storage
+            # Update account used storage
             account.used_size = max(0, account.used_size - file_size)
             self.account_repo.update(account)
             
-            return {'size': file_size}
+            return {
+                'uuid': file_uuid,
+                'size': file_size,
+                'permanent': permanent
+            }
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def restore(self, user_id: int, file_uuid: str) -> Optional[Dict[str, Any]]:
+        """Restore a soft-deleted file."""
+        try:
+            file = self.db.execute(
+                select(File).where(File.uuid == file_uuid)
+            ).scalar_one_or_none()
+            
+            if not file or file.owner_id != user_id:
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+            
+            if not file.deleted_at:
+                return {'error': 'File not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
+            
+            restored = self.file_repo.restore(file_uuid)
+            
+            # Update parent folder size
+            if file.parent_folder_id:
+                self.folder_service._update_parent_folder_size(file.parent_folder_id, file.size)
+            
+            return {
+                'uuid': file_uuid,
+                'restored': restored
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def get_by_owner(self, user_id: int) -> Dict[str, Any]:
+        """Get all files by owner."""
+        try:
+            files = self.file_repo.get_by_owner(user_id)
+            return {
+                'files': [
+                    {
+                        'uuid': f.uuid,
+                        'name': f.name,
+                        'size': f.size,
+                        'mime_type': f.mime_type,
+                        'parent_folder_id': f.parent_folder_id,
+                        'shared': f.shared,
+                        'created_at': f.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                        'updated_at': f.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    for f in files
+                ]
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def get_trash(self, user_id: int) -> Dict[str, Any]:
+        """Get soft-deleted files by owner."""
+        try:
+            files = self.file_repo.get_trash_by_owner(user_id)
+            return {
+                'files': [
+                    {
+                        'uuid': f.uuid,
+                        'name': f.name,
+                        'size': f.size,
+                        'mime_type': f.mime_type,
+                        'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None
+                    }
+                    for f in files
+                ]
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

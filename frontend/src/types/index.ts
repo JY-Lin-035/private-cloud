@@ -1,4 +1,4 @@
-// File and Folder Items
+// File and Folder Items (Legacy - path-based)
 export interface FileItem {
   name: string;
   type: 'file';
@@ -13,6 +13,30 @@ export interface FolderItem {
 }
 
 export type FileOrFolderItem = FileItem | FolderItem;
+
+// New UUID-based File and Folder Items
+export interface FileItemUUID {
+  uuid: string;
+  name: string;
+  type: 'file';
+  size: number;
+  date: string;
+  mime_type?: string;
+  shared?: string;
+  deleted_at?: string;
+}
+
+export interface FolderItemUUID {
+  uuid: string;
+  name: string;
+  type: 'folder';
+  size: number;
+  date: string;
+  shared?: string;
+  deleted_at?: string;
+}
+
+export type FileOrFolderItemUUID = FileItemUUID | FolderItemUUID;
 
 // Storage State
 export interface StorageState {
@@ -62,6 +86,52 @@ export interface CreateFolderResponse {
   date: string;
 }
 
+// New UUID-based API Response Types
+export interface FolderResponse {
+  uuid: string;
+  owner_id: number;
+  parent_id: string | null;
+  name: string;
+  size: number;
+  shared: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface FileResponse {
+  uuid: string;
+  owner_id: number;
+  parent_folder_id: string | null;
+  name: string;
+  size: number;
+  mime_type: string | null;
+  storage_path: string;
+  shared: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface FileListResponseUUID {
+  files: FileOrFolderItemUUID[];
+}
+
+export interface FolderListResponse {
+  folders: FolderItemUUID[];
+}
+
+export interface DeleteResponseUUID {
+  uuid: string;
+  size: number;
+  permanent: boolean;
+}
+
+export interface RestoreResponse {
+  uuid: string;
+  restored: boolean;
+}
+
 // User Types
 export interface User {
   email?: string;
@@ -83,6 +153,35 @@ export interface RenameFolderRequest {
   dir: string;
   originName: string;
   folderName: string;
+}
+
+// New UUID-based API Request Types
+export interface CreateFolderRequestUUID {
+  parent_folder_uuid?: string;
+  name: string;
+}
+
+export interface RenameFolderRequestUUID {
+  folder_uuid: string;
+  name: string;
+}
+
+export interface DeleteFolderRequestUUID {
+  folder_uuid: string;
+  permanent: boolean;
+}
+
+export interface RestoreFolderRequestUUID {
+  folder_uuid: string;
+}
+
+export interface DeleteFileRequestUUID {
+  file_uuid: string;
+  permanent: boolean;
+}
+
+export interface RestoreFileRequestUUID {
+  file_uuid: string;
 }
 
 export interface LoginRequest {
