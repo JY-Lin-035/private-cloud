@@ -321,12 +321,10 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                       <RotateCcw
                         className="w-6 h-6 text-green-600 cursor-pointer"
                         onClick={() => restoreItem(item)}
-                        title="還原"
                       />
                       <Trash2
                         className="w-6 h-6 text-red-500 cursor-pointer"
                         onClick={() => hardDeleteItem(item)}
-                        title="永久刪除"
                       />
                     </span>
                   </td>

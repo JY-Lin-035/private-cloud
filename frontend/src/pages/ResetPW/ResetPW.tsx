@@ -27,9 +27,9 @@ function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
       await authApi.checkSession();
       const previousFolderUuid = localStorage.getItem('previousFolderUuid');
       if (!previousFolderUuid) {
-        navigate('/fileList');
+        navigate('/file-list');
       } else {
-        navigate(`/fileList/${previousFolderUuid}`);
+        navigate(`/file-list/${previousFolderUuid}`);
       }
     } catch (e) {
       localStorage.clear();
