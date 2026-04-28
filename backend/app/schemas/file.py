@@ -1,20 +1,52 @@
 from pydantic import BaseModel, Field
 from typing import Optional
+from datetime import datetime
+from app.constants import FileValidation
 
 
 class FileUploadRequest(BaseModel):
-    dir: str = Field(..., min_length=1, max_length=255)
+    parent_folder_uuid: Optional[str] = None
+    name: str
+
+
+class DeleteFileRequest(BaseModel):
+    file_uuid: str
+    permanent: bool = False
+
+
+class RestoreFileRequest(BaseModel):
+    file_uuid: str
+
+
+class FileResponse(BaseModel):
+    uuid: str
+    owner_id: int
+    parent_folder_id: Optional[str]
+    name: str
+    size: int
+    mime_type: Optional[str]
+    storage_path: str
+    shared: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
 
 
 class FileItem(BaseModel):
     type: str  # 'file' or 'folder'
+    uuid: str
     name: str
-    size: str  # Human-readable size or '-'
-    date: str  # ISO format datetime
+    size: int
+    mime_type: Optional[str] = None
+    date: datetime
+    shared: Optional[str] = None
 
 
 class FileListResponse(BaseModel):
-    file: list[FileItem]
+    files: list[FileItem]
 
 
 class StorageInfoResponse(BaseModel):
@@ -24,8 +56,19 @@ class StorageInfoResponse(BaseModel):
 
 
 class FileUploadResponse(BaseModel):
-    message: str
+    uuid: str
+    name: str
+    size: int
+    mime_type: str
+    created_at: datetime
 
 
 class FileDeleteResponse(BaseModel):
+    uuid: str
     size: int
+    permanent: bool
+
+
+class FileRestoreResponse(BaseModel):
+    uuid: str
+    restored: bool

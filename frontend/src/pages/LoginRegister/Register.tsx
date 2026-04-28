@@ -123,12 +123,12 @@ function Register({ onFlip, onNotice }: RegisterProps) {
 
       <button
         onClick={register}
-        className="w-full px-4 py-2 text-white bg-green-500 rounded"
+        className={`w-full px-4 py-2 text-white bg-green-500 rounded ${valUserName && valEmail && valPW && valCPW && lock ? 'cursor-pointer' : 'cursor-not-allowed'}`}
         disabled={!(valUserName && valEmail && valPW && valCPW && lock)}
       >
         註冊
       </button>
-      <button onClick={onFlip} className="mt-2 text-blue-500" disabled={!lock}>
+      <button onClick={onFlip} className={`mt-2 text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
         返回登入
       </button>
     </div>

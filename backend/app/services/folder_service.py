@@ -1,170 +1,280 @@
-import os
-import base64
+import uuid
 import re
+import os
 from datetime import datetime
 from typing import Optional, Dict, Any
-from pathlib import Path
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from app.models.account import Account
+from app.models.folder import Folder
+from app.models.file import File
 from app.repositories.account_repository import AccountRepository
+from app.repositories.folder_repository import FolderRepository
+from app.repositories.file_repository import FileRepository
+from app.constants import FolderValidation, HTTPStatus
 from app.config import settings
-from app.utils.logger_sample import log_info, log_error
-
 
 
 class FolderService:
-    def __init__(self, db: Session, storage_base_path: str = "storage/app/private"):
+    def __init__(self, db: Session):
         self.db = db
         self.account_repo = AccountRepository(db)
-        self.storage_base_path = storage_base_path
-    
-    def _validate_path(self, user_id: int, dir: str) -> Optional[Path]:
-        """Validate path to prevent directory traversal attacks."""
-        try:
-            # Decode base64 path (match Laravel logic: replace characters first, then decode)
-            # Fallback: if not valid base64, treat as plain text with '-' as path separator
-            if dir:
-                try:
-                    # Replace URL-safe characters (match Laravel strtr)
-                    dir = dir.replace('-', '+').replace('_', '/')
-                    # Add padding for URL-safe base64
-                    padding = 4 - len(dir) % 4
-                    if padding != 4:
-                        dir += '=' * padding
-                    # Decode base64
-                    dir = base64.b64decode(dir).decode('utf-8')
-                    # Replace remaining dashes with slashes (match Laravel str_replace)
-                    dir = dir.replace('-', '/')
-                except Exception:
-                    # Not valid base64, treat as plain text (replace '-' with '/')
-                    dir = dir.replace('-', '/')
-            
-            # Build full path
-            user_path = Path(self.storage_base_path) / "users" / str(user_id)
-            
-            full_path = user_path / dir
-            
-            # Get real path and validate
-            real_path = full_path.resolve()
-            
-            # Check if path is within user's Home directory
-            try:
-                real_path.relative_to(user_path.resolve())
-            except ValueError:
-                return None
-            
-            # Check for path traversal attempts
-            if '..' in str(full_path) or str(full_path).startswith('/') or str(full_path).startswith('\\'):
-                return None
-            
-            return real_path
-        except Exception:
-            return None
+        self.folder_repo = FolderRepository(db)
+        self.file_repo = FileRepository(db)
+        self.storage_base_path = settings.STORAGE_BASE_PATH
     
     def _validate_folder_name(self, name: str) -> bool:
         """Validate folder name (alphanumeric and Chinese characters only)."""
-        return bool(re.match(r'^[A-Za-z0-9\u4e00-\u9fa5\s\-_\.]{1,30}$', name))
+        return bool(re.match(r'^[A-Za-z0-9\u4e00-\u9fa5\s\-_\.]{{{FolderValidation.MIN_LENGTH},{FolderValidation.MAX_LENGTH}}}$', name))
     
-    def _calculate_folder_size(self, folder_path: Path) -> int:
-        """Calculate total size of a folder recursively."""
-        total_size = 0
-        for item in folder_path.rglob('*'):
-            if item.is_file():
-                total_size += item.stat().st_size
-        return total_size
+    def _update_parent_folder_size(self, folder_uuid: str, size_delta: int):
+        """Recursively update parent folder sizes."""
+        folder = self.folder_repo.get_by_uuid(folder_uuid)
+        if not folder:
+            return
+        
+        # Update current folder size
+        folder.size = max(0, folder.size + size_delta)
+        self.folder_repo.update(folder)
+        
+        # Recursively update parent
+        if folder.parent_id:
+            self._update_parent_folder_size(folder.parent_id, size_delta)
     
-    def create(self, user_id: int, dir: str, new_name: str) -> Optional[Dict[str, Any]]:
+    def _soft_delete_children(self, folder_uuid: str):
+        """Recursively soft delete all children (folders and files)."""
+        from app.repositories.file_repository import FileRepository
+        from app.models.file import File
+        
+        file_repo = FileRepository(self.db)
+        
+        # Get all child folders
+        child_folders = self.folder_repo.get_by_parent(folder_uuid)
+        for child_folder in child_folders:
+            self._soft_delete_children(child_folder.uuid)
+            self.folder_repo.soft_delete(child_folder.uuid)
+        
+        # Get all child files
+        child_files = file_repo.get_by_folder(folder_uuid)
+        for child_file in child_files:
+            file_repo.soft_delete(child_file.uuid)
+    
+    def _hard_delete_children(self, folder_uuid: str):
+        """Recursively hard delete all children (folders and files) and their storage files."""
+        from app.repositories.file_repository import FileRepository
+        from app.models.file import File
+        import os
+        
+        file_repo = FileRepository(self.db)
+        
+        # Get all child folders
+        child_folders = self.db.execute(
+            select(Folder).where(Folder.parent_id == folder_uuid)
+        ).scalars().all()
+        
+        for child_folder in child_folders:
+            self._hard_delete_children(child_folder.uuid)
+            self.folder_repo.hard_delete(child_folder.uuid)
+        
+        # Get all child files (including deleted ones)
+        child_files = self.db.execute(
+            select(File).where(File.parent_folder_id == folder_uuid)
+        ).scalars().all()
+        
+        for child_file in child_files:
+            # Delete actual file from storage
+            file_path = os.path.join(self.storage_base_path, child_file.uuid)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            self.file_repo.hard_delete(child_file.uuid)
+    
+    def create(self, user_id: int, parent_folder_uuid: Optional[str], name: str) -> Optional[Dict[str, Any]]:
         """Create a new folder."""
         try:
             # Validate folder name
-            if not self._validate_folder_name(new_name):
-                return {'error': 'Error', 'stateCode': 403}
+            if not self._validate_folder_name(name):
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Validate path
-            dir_path = self._validate_path(user_id, dir)
+            # Check if account exists
+            account = self.account_repo.get_by_id(user_id)
+            if not account:
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
-            if not dir_path or not dir_path.exists():
-                return {'error': 'Error', 'stateCode': 403}
+            # Check if parent folder exists (if provided)
+            if parent_folder_uuid:
+                parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
+                if not parent_folder or parent_folder.owner_id != user_id:
+                    return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Check if folder already exists
-            new_folder_path = dir_path / new_name
-            if new_folder_path.exists():
-                return {'error': 'Error', 'stateCode': 403}
+            # Create new folder
+            new_folder = Folder(
+                uuid=str(uuid.uuid4()),
+                owner_id=user_id,
+                parent_id=parent_folder_uuid,
+                name=name,
+                size=0
+            )
             
-            # Create folder
-            new_folder_path.mkdir()
+            created_folder = self.folder_repo.create_with_uuid_retry(new_folder)
             
-            # Match Laravel date format: Y-m-d H:i:s (local timezone)
-            date_str = datetime.fromtimestamp(new_folder_path.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-            return date_str
+            # Update parent folder size (folder size is 0 initially)
+            if parent_folder_uuid:
+                self._update_parent_folder_size(parent_folder_uuid, 0)
+            
+            return {
+                'uuid': created_folder.uuid,
+                'name': created_folder.name,
+                'created_at': created_folder.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            }
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def rename(self, user_id: int, dir: str, origin_name: str, new_name: str) -> Optional[Dict[str, Any]]:
+    def rename(self, user_id: int, folder_uuid: str, new_name: str) -> Optional[Dict[str, Any]]:
         """Rename a folder."""
         try:
-            # Validate folder names
-            if not self._validate_folder_name(origin_name) or not self._validate_folder_name(new_name):
-                return {'error': 'Error', 'stateCode': 403}
+            # Validate folder name
+            if not self._validate_folder_name(new_name):
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Validate path
-            dir_path = self._validate_path(user_id, dir)
+            # Get folder
+            folder = self.folder_repo.get_by_uuid(folder_uuid)
+            if not folder or folder.owner_id != user_id:
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            if not dir_path or not dir_path.exists():
-                return {'error': 'Error', 'stateCode': 403}
+            # Update name
+            folder.name = new_name
+            self.folder_repo.update(folder)
             
-            # Get origin and new folder paths
-            origin_folder_path = dir_path / origin_name
-            new_folder_path = dir_path / new_name
-            
-            if not origin_folder_path.exists() or not origin_folder_path.is_dir():
-                return {'error': 'Error', 'stateCode': 403}
-            
-            if new_folder_path.exists():
-                return {'error': 'Error', 'stateCode': 403}
-            
-            # Rename folder
-            origin_folder_path.rename(new_folder_path)
-            
-            return {'msg': 'success', 'stateCode': 200}
+            return {
+                'uuid': folder.uuid,
+                'name': folder.name,
+                'updated_at': folder.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+            }
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def delete(self, user_id: int, dir: str, folder_name: str) -> Optional[Dict[str, Any]]:
-        """Delete a folder recursively."""
+    def delete(self, user_id: int, folder_uuid: str, permanent: bool = False) -> Optional[Dict[str, Any]]:
+        """Delete a folder (soft or hard)."""
         try:
             account = self.account_repo.get_by_id(user_id)
-            
             if not account:
-                return {'error': '使用者不存在', 'stateCode': 404}
-            
-            # Validate path
-            dir_path = self._validate_path(user_id, dir)
-            
-            if not dir_path or not dir_path.exists():
-                return {'error': 'Error', 'stateCode': 403}
-            
-            # Get folder path
-            folder_path = dir_path / folder_name
-            
-            if not folder_path.exists() or not folder_path.is_dir():
-                return {'error': 'Error', 'stateCode': 403}
-            
-            # Calculate folder size before deletion
-            folder_size = self._calculate_folder_size(folder_path)
-            
-            # Delete folder recursively
-            for item in folder_path.rglob('*'):
-                if item.is_file():
-                    item.unlink()
-                elif item.is_dir():
-                    item.rmdir()
-            folder_path.rmdir()
-            
-            # Update used storage
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            folder = self.folder_repo.get_by_uuid(folder_uuid)
+            if not folder or folder.owner_id != user_id:
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            # Prevent deletion of system folders (e.g., Home)
+            if folder.is_system:
+                return {'error': '系統資料夾無法刪除', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            folder_size = folder.size
+
+            if permanent:
+                # Hard delete: recursively delete all children and storage files
+                self._hard_delete_children(folder_uuid)
+                self.folder_repo.hard_delete(folder_uuid)
+            else:
+                # Soft delete: recursively mark all children as deleted
+                self._soft_delete_children(folder_uuid)
+                self.folder_repo.soft_delete(folder_uuid)
+
+            # Update parent folder size
+            if folder.parent_id:
+                self._update_parent_folder_size(folder.parent_id, -folder_size)
+
+            # Update account used size
             account.used_size = max(0, account.used_size - folder_size)
             self.account_repo.update(account)
-            
-            return {'size': folder_size}
+
+            return {
+                'uuid': folder_uuid,
+                'size': folder_size,
+                'permanent': permanent
+            }
         except Exception as e:
-            return {'error': str(e), 'stateCode': 500}
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def restore(self, user_id: int, folder_uuid: str) -> Optional[Dict[str, Any]]:
+        """Restore a soft-deleted folder."""
+        try:
+            folder = self.db.execute(
+                select(Folder).where(Folder.uuid == folder_uuid)
+            ).scalar_one_or_none()
+            
+            if not folder or folder.owner_id != user_id:
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+            
+            if not folder.deleted_at:
+                return {'error': 'Folder not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
+            
+            # Restore folder
+            restored = self.folder_repo.restore(folder_uuid)
+            
+            # Restore all children
+            from app.repositories.file_repository import FileRepository
+            file_repo = FileRepository(self.db)
+            
+            child_folders = self.db.execute(
+                select(Folder).where(Folder.parent_id == folder_uuid)
+            ).scalars().all()
+            
+            for child_folder in child_folders:
+                self.restore(user_id, child_folder.uuid)
+            
+            child_files = self.db.execute(
+                select(File).where(File.parent_folder_id == folder_uuid)
+            ).scalars().all()
+            
+            for child_file in child_files:
+                file_repo.restore(child_file.uuid)
+            
+            # Update parent folder size
+            if folder.parent_id:
+                self._update_parent_folder_size(folder.parent_id, folder.size)
+            
+            return {
+                'uuid': folder_uuid,
+                'restored': restored
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def get_by_owner(self, user_id: int) -> Dict[str, Any]:
+        """Get all folders by owner."""
+        try:
+            folders = self.folder_repo.get_by_owner(user_id)
+            return {
+                'folders': [
+                    {
+                        'uuid': f.uuid,
+                        'name': f.name,
+                        'size': f.size,
+                        'parent_id': f.parent_id,
+                        'shared': f.shared,
+                        'created_at': f.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                        'updated_at': f.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+                    }
+                    for f in folders
+                ]
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def get_trash(self, user_id: int) -> Dict[str, Any]:
+        """Get soft-deleted folders by owner."""
+        try:
+            folders = self.folder_repo.get_trash_by_owner(user_id)
+            return {
+                'folders': [
+                    {
+                        'uuid': f.uuid,
+                        'name': f.name,
+                        'size': f.size,
+                        'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None
+                    }
+                    for f in folders
+                ]
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

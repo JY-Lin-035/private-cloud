@@ -1,38 +1,66 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Base64 } from 'js-base64';
+import { folderApi } from '../../api/folderApi';
 
 
 
 interface BreadcrumbProps {
-  PATH: string;
+  currentFolderUuid: string | null;
 }
 
-function Breadcrumb({ PATH }: BreadcrumbProps) {
+function Breadcrumb({ currentFolderUuid }: BreadcrumbProps) {
   const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [folderPath, setFolderPath] = useState<Array<{uuid: string, name: string}>>([]);
+
+  useEffect(() => {
+    async function fetchFolderPath(retries = 3) {
+      if (currentFolderUuid) {
+        let lastError;
+        for (let i = 0; i < retries; i++) {
+          try {
+            const response = await folderApi.getPath(currentFolderUuid);
+            if (response.path && response.path.length > 0) {
+              setFolderPath(response.path);
+              return;
+            }
+          } catch (e) {
+            lastError = e;
+            console.error(`Failed to fetch folder path (attempt ${i + 1}/${retries}):`, e);
+            if (i < retries - 1) {
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
+          }
+        }
+        // Fallback: show just the current folder UUID if all retries fail
+        console.error('All retries failed for folder path:', lastError);
+        setFolderPath([{ uuid: currentFolderUuid, name: 'Current Folder' }]);
+      } else {
+        setFolderPath([]);
+      }
+    }
+    fetchFolderPath();
+  }, [currentFolderUuid]);
 
   const breadcrumb = useMemo(() => {
-    const splitPath = PATH.split('-');
-    return splitPath.map((p, index) => {
-      return {
-        name: p,
-        path:
-          '/fileList/' +
-          Base64.encodeURI(splitPath.slice(0, index + 1).join('-')),
-      };
-    });
-  }, [PATH]);
+    if (!folderPath || folderPath.length === 0) {
+      return [{ name: 'Home', path: '/fileList' }];
+    }
+
+    return folderPath.map((folder) => ({
+      name: folder.name,
+      path: `/fileList/${folder.uuid}`,
+    }));
+  }, [folderPath]);
 
   const hiddenBreadcrumbs = useMemo(() => {
-    localStorage.setItem(
-      'previousPath',
-      breadcrumb[breadcrumb.length - 1]['path']
-    );
+    if (currentFolderUuid) {
+      localStorage.setItem('previousFolderUuid', currentFolderUuid);
+    }
 
     if (breadcrumb.length <= 5) return [];
     return breadcrumb.slice(1, breadcrumb.length - 3);
-  }, [breadcrumb]);
+  }, [breadcrumb, currentFolderUuid]);
 
   const visibleEndBreadcrumbs = useMemo(() => {
     if (breadcrumb.length <= 5) return breadcrumb.slice(1);

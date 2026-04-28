@@ -1,16 +1,24 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Notices from '../../components/Notices';
-import { FileText, FolderOpen, ChevronLeft, ChevronRight } from 'lucide-react';
-import { shareApi } from '../../api/shareApi';
+import { FileText, FolderOpen, ChevronLeft, ChevronRight, RotateCcw, Trash2 } from 'lucide-react';
+import { folderApi } from '../../api/folderApi';
+import { fileApi } from '../../api/fileApi';
 
+interface TrashItem {
+  uuid: string;
+  name: string;
+  size: number;
+  type: 'folder' | 'file';
+  mime_type?: string;
+  deleted_at: string;
+}
 
-
-function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
+function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
-  const [shareList, setShareList] = useState<any[]>([]);
+  const [trashList, setTrashList] = useState<TrashItem[]>([]);
   const [search, setSearch] = useState('');
-  const [sortType, setSortType] = useState('name');
+  const [sortType, setSortType] = useState('deleted_at');
   const [sortUpDown, setSortUpDown] = useState(true);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(10);
@@ -19,12 +27,32 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   const [className, setClassName] = useState('');
   const [response, setResponse] = useState<string | string[]>([]);
   const [IN, setIN] = useState(false);
-  const [_copyShow, setCopyShow] = useState(false);
 
-  async function getShareList() {
+  async function getTrashList() {
     try {
-      const r = await shareApi.getList();
-      setShareList(r.share);
+      const [foldersRes, filesRes] = await Promise.all([
+        folderApi.trash(),
+        fileApi.trash()
+      ]);
+
+      const folders = foldersRes.folders?.map((f: any) => ({
+        uuid: f.uuid,
+        name: f.name,
+        size: f.size,
+        type: 'folder' as const,
+        deleted_at: f.deleted_at
+      })) || [];
+
+      const files = filesRes.files?.map((f: any) => ({
+        uuid: f.uuid,
+        name: f.name,
+        size: f.size,
+        type: 'file' as const,
+        mime_type: f.mime_type,
+        deleted_at: f.deleted_at
+      })) || [];
+
+      setTrashList([...folders, ...files]);
       localStorage.setItem('previousFolderUuid', '');
     } catch (e) {
       localStorage.clear();
@@ -33,7 +61,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   useEffect(() => {
-    getShareList();
+    getTrashList();
   }, []);
 
   useEffect(() => {
@@ -42,20 +70,20 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
     }, 200);
   }, []);
 
-  const filterShareList = useMemo(() => {
+  const filterTrashList = useMemo(() => {
     setPage(1);
-    let fList = shareList.filter((f) =>
+    let fList = trashList.filter((f) =>
       f.name.toLowerCase().includes(search.toLowerCase())
     );
 
     fList.sort((a, b) => {
       return sortUpDown
-        ? a[sortType].localeCompare(b[sortType])
-        : b[sortType].localeCompare(a[sortType]);
+        ? a[sortType as keyof TrashItem].toString().localeCompare(b[sortType as keyof TrashItem].toString())
+        : b[sortType as keyof TrashItem].toString().localeCompare(a[sortType as keyof TrashItem].toString());
     });
 
     return fList;
-  }, [shareList, search, sortType, sortUpDown]);
+  }, [trashList, search, sortType, sortUpDown]);
 
   function changeSortType(type: string) {
     if (sortType === type) {
@@ -67,8 +95,8 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   const totalPages = useMemo(() =>
-    Math.ceil(shareList.length / perPage),
-    [shareList.length, perPage]
+    Math.ceil(filterTrashList.length / perPage),
+    [filterTrashList.length, perPage]
   );
 
   const pageList = useMemo(() => {
@@ -79,40 +107,70 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
       setPreviousPerPage(perPage);
     }
     const start = (page - 1) * perPage;
-    return filterShareList.slice(start, start + perPage);
-  }, [perPage, previousPerPage, page, filterShareList]);
+    return filterTrashList.slice(start, start + perPage);
+  }, [perPage, previousPerPage, page, filterTrashList]);
 
-  async function deleteLink(item: any) {
+  async function restoreItem(item: TrashItem) {
     try {
-      await shareApi.deleteLink(item.uuid, item.type);
-
-      const shareIndex = shareList.findIndex(
-        (listItem) => listItem.link === item.link
-      );
-
-      if (shareIndex !== -1) {
-        const newList = [...shareList];
-        newList.splice(shareIndex, 1);
-        setShareList(newList);
+      if (item.type === 'folder') {
+        await folderApi.restore({ folder_uuid: item.uuid });
+      } else {
+        await fileApi.restore({ file_uuid: item.uuid });
       }
 
-      setResponse(['移除成功!']);
+      const newList = trashList.filter((i) => i.uuid !== item.uuid);
+      setTrashList(newList);
+      setResponse(['還原成功!']);
+      setClassName('text-green-500');
+      setShowMode(true);
     } catch (e: any) {
       setResponse([e.message]);
+      setClassName('text-red-500');
+      setShowMode(true);
     }
-
-    setClassName('text-red-500');
-    setShowMode(true);
   }
 
-  const copyFunc = (m: string) => {
-    navigator.clipboard.writeText(window.location.origin + '/share/' + m);
-    setCopyShow(false);
-  };
+  async function hardDeleteItem(item: TrashItem) {
+    try {
+      if (item.type === 'folder') {
+        await folderApi.delete({ folder_uuid: item.uuid, permanent: true });
+      } else {
+        await fileApi.delete({ file_uuid: item.uuid, permanent: true });
+      }
+
+      const newList = trashList.filter((i) => i.uuid !== item.uuid);
+      setTrashList(newList);
+      setResponse(['永久刪除成功!']);
+      setClassName('text-green-500');
+      setShowMode(true);
+    } catch (e: any) {
+      setResponse([e.message]);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+  }
+
+  function formatSize(size: number): string {
+    if (size === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(size) / Math.log(k));
+    return Math.round(size / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+  }
+
+  function formatDate(dateString: string): string {
+    const date = new Date(dateString);
+    return date.toLocaleString('zh-TW', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
 
   return (
     <div
-      onClick={() => setCopyShow(false)}
       className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
     >
       <Notices
@@ -138,7 +196,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
           </span>
 
           <span className="text-sm text-gray-500">
-            共 {shareList.length} 筆, 每頁 &nbsp;
+            共 {trashList.length} 筆, 每頁 &nbsp;
             <select
               value={perPage}
               onChange={(e) => setPerPage(Number(e.target.value))}
@@ -161,11 +219,11 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
             <thead>
               <tr className="bg-blue-200 text-[1.5rem] text-center">
                 <th
-                  onClick={() => changeSortType('date')}
-                  className="cursor-pointer p-2 w-[10%] border border-white"
+                  onClick={() => changeSortType('deleted_at')}
+                  className="cursor-pointer p-2 w-[15%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
-                    時間
+                    刪除時間
                     <svg
                       className="w-6 h-6 text-gray-800"
                       aria-hidden="true"
@@ -211,11 +269,11 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                   </span>
                 </th>
                 <th
-                  onClick={() => changeSortType('path')}
-                  className="cursor-pointer p-2 w-[35%] border border-white"
+                  onClick={() => changeSortType('size')}
+                  className="cursor-pointer p-2 w-[20%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
-                    路徑
+                    大小
                     <svg
                       className="w-6 h-6 text-gray-800 inline-block"
                       aria-hidden="true"
@@ -235,47 +293,41 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
-                <th className="p-2 w-[20%] border border-white">操作</th>
+                <th className="p-2 w-[30%] border border-white">操作</th>
               </tr>
             </thead>
             <tbody>
               {pageList.map((item) => (
                 <tr
-                  key={item.link}
+                  key={item.uuid}
                   className="bg-gray-300 hover:bg-blue-200"
                 >
                   <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
-                    {item.date}
+                    {formatDate(item.deleted_at)}
                   </td>
                   <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
                     {item.type === 'folder' ? (
-                      <FolderOpen className="inline w-6 h-6 ml-5 text-yellow-200" />
+                      <FolderOpen className="inline w-6 h-6 ml-5 mr-2 text-yellow-200" />
                     ) : (
-                      <FileText className="inline w-6 h-6 ml-5 text-white" />
+                      <FileText className="inline w-6 h-6 ml-5 mr-2 text-white" />
                     )}
                     {item.name}
                   </td>
-                  <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
-                    {item.path}
+                  <td className="p-2 text-[1.2rem] text-right border border-white break-words whitespace-normal">
+                    {formatSize(item.size)}
                   </td>
                   <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
                     <span className="flex justify-center sm:gap-2 md:gap-6 lg:gap-10">
-                      <div className="relate w-max text-sm text-white rounded">
-                        <span>
-                          <button
-                            className="mr-8 p-2 rounded-[0.5rem] bg-blue-400 cursor-pointer"
-                            onClick={() => copyFunc(item.link)}
-                          >
-                            複製連結
-                          </button>
-                          <button
-                            className="p-2 rounded-[0.5rem] bg-red-400 cursor-pointer"
-                            onClick={() => deleteLink(item)}
-                          >
-                            移除
-                          </button>
-                        </span>
-                      </div>
+                      <RotateCcw
+                        className="w-6 h-6 text-green-600 cursor-pointer"
+                        onClick={() => restoreItem(item)}
+                        title="還原"
+                      />
+                      <Trash2
+                        className="w-6 h-6 text-red-500 cursor-pointer"
+                        onClick={() => hardDeleteItem(item)}
+                        title="永久刪除"
+                      />
                     </span>
                   </td>
                 </tr>
@@ -306,4 +358,4 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   );
 }
 
-export default ShareList;
+export default TrashList;

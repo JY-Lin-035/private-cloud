@@ -11,9 +11,8 @@ from app.config import settings
 
 from app.models.base import Base
 from app.models.account import Account
-from app.models.share_link import ShareLink
 
-from app.utils.logger import get_logger
+from app.utils import logger as log
 
 from app.api.dependencies import get_redis
 from app.api.v1 import accounts, files, folders, share
@@ -23,6 +22,9 @@ from app.middleware.rate_limit_middleware import RateLimitMiddleware
 
 # Create FastAPI app
 app = FastAPI(title="File Management Backend", version="1.0.0")
+
+# Logger
+logger = log.get_logger("main.log")
 
 # Add CORS middleware - must use explicit origins when credentials=True
 app.add_middleware(
@@ -76,19 +78,19 @@ async def verify_email(user_id: int, hash: str, signature: str = None):
     
     db = SessionLocal()
     try:
-        log_info("Email verification request received", {"user_id": user_id})
+        logger.info(f"Email verification request received, user_id: {user_id}")
         
         account_service = AccountService(db, redis_client)
         result = account_service.verify_email(user_id, hash, signature)
         
         if result and 'error' in result:
-            log_info("Email verification error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Email verification error: {result['error']}, stateCode: {result['stateCode']}")
             return JSONResponse(status_code=result['stateCode'], content={"error": result['error']})
         
-        log_info("Email verified successfully")
+        logger.info("Email verified successfully")
         return {"message": "Email verified successfully."}
     except Exception as e:
-        log_error("Email verification endpoint error", e)
+        logger.error(f"Email verification endpoint error: {e}")
         raise
     finally:
         db.close()

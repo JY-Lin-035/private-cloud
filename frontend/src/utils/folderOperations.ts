@@ -2,52 +2,44 @@ import { folderApi } from "../api/folderApi";
 
 
 
-export async function createFolder(dir: string, folderName: string, fileList: any[]): Promise<[string | string[], string, any[]]> {
+export async function createFolder(parent_folder_uuid: string | null, folderName: string, fileList: any[]): Promise<[string | string[], string, any[]]> {
   try {
     const data = {
-      dir: dir,
-      folderName: folderName,
+      parent_folder_uuid: parent_folder_uuid,
+      name: folderName,
     };
-    const r = await folderApi.createFolder(data);
+    const r = await folderApi.create(data);
 
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    const localDate = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-
-    const date = r.data?.date || r.data?.time || r.data || localDate;
-
-    fileList.unshift({
+    const newFolder = {
+      uuid: r.uuid,
       name: folderName,
       type: "folder",
-      date: date,
-    });
+      date: r.created_at,
+      size: 0,
+    };
+
+    fileList.unshift(newFolder);
 
     return [['新增成功!'], "text-green-500", fileList];
   } catch (e) {
-    // console.error(e);
+    console.error('Create folder error:', e);
     return [["新增失敗, 請稍後再試!"], "text-red-500", fileList];
   }
 }
 
-export async function renameFolder(dir: string, originName: string, folderName: string, fileList: any[]): Promise<[string | string[], string, any[]]> {
+export async function renameFolder(folder_uuid: string, folderName: string, fileList: any[]): Promise<[string | string[], string, any[]]> {
   try {
     const data = {
-      dir: dir,
-      originName: originName,
-      folderName: folderName
+      folder_uuid: folder_uuid,
+      name: folderName
     };
-    const r = await folderApi.renameFolder(data);
+    const r = await folderApi.rename(data);
 
     const date = r.data?.date || r.data?.time || r.data;
 
     const folder = fileList.find(
       (item) =>
-        item.type === "folder" && item.name === originName
+        item.type === "folder" && item.uuid === folder_uuid
     );
 
     if (folder) {
@@ -64,7 +56,7 @@ export async function renameFolder(dir: string, originName: string, folderName: 
   }
 }
 
-export async function deleteFolder(dir: string, folderName: string, fileList: any[], storage: any): Promise<[string | string[], string, boolean, any[]]> {
+export async function deleteFolder(folder_uuid: string, fileList: any[], storage: any): Promise<[string | string[], string, boolean, any[]]> {
   try {
     const check = confirm("確定要刪除嗎?");
     if (!check) {
@@ -76,12 +68,12 @@ export async function deleteFolder(dir: string, folderName: string, fileList: an
       return [["操作已取消!"], "text-red-500", false, fileList];
     }
 
-    const r = await folderApi.deleteFolder(dir, folderName);
+    const r = await folderApi.delete({ folder_uuid, permanent: false });
 
     storage.addUsedStorage(-Number(r.size));
 
     const folderIndex = fileList.findIndex(
-      (item) => item.type === "folder" && item.name === folderName
+      (item) => item.type === "folder" && item.uuid === folder_uuid
     );
 
     if (folderIndex !== -1) {

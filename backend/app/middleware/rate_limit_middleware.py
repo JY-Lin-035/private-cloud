@@ -5,6 +5,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from redis import Redis
 from app.config import settings
+from app.constants import HTTPStatusExtra
 import json
 
 
@@ -41,7 +42,7 @@ class RateLimitMiddleware:
         
         # Check if limit exceeded
         if current >= max_requests:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            raise HTTPException(status_code=HTTPStatusExtra.TOO_MANY_REQUESTS, detail="Rate limit exceeded")
         
         # Increment counter
         pipe = self.redis.pipeline()

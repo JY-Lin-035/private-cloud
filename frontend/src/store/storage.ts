@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import axios from 'axios';
+import { API_BASE_URL } from '../config/api';
 
 interface StorageState {
   signalStorage: number;
@@ -23,12 +24,12 @@ export const useStorage = create<StorageState>((set, get) => ({
 
   getFromAPI: async () => {
     try {
-      const r = await axios.get(`http://localhost:8000/api/files/getStorage`, { withCredentials: true });
-      const signalStorage = r.data['signalStorage'];
-      const totalStorage = r.data['totalStorage'];
-      const usedStorage = r.data['usedStorage'];
+      const r = await axios.get(`${API_BASE_URL}/api/files/storage`, { withCredentials: true });
+      const signalStorage = r.data['signal_storage'] || 0;
+      const totalStorage = r.data['total_storage'] || 0;
+      const usedStorage = r.data['used_storage'] || 0;
       const availableStorage = totalStorage - usedStorage;
-      const percentage = (usedStorage / totalStorage * 100).toFixed(2);
+      const percentage = totalStorage > 0 ? (usedStorage / totalStorage * 100).toFixed(2) : '0';
 
       set({
         signalStorage,
@@ -40,7 +41,7 @@ export const useStorage = create<StorageState>((set, get) => ({
 
       get().saveToLocalStorage();
     } catch (e) {
-      // console.error(e);
+      console.error('Failed to fetch storage data:', e);
     }
   },
 
