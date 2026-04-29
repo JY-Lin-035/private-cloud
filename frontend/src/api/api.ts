@@ -29,9 +29,10 @@ api.interceptors.response.use(
     }
 
     const message =
-      error.response?.status === 429 ? "請求過多，請稍後再試" :
-        error.response?.status >= 500 ? "伺服器錯誤，請稍後再試" :
-          error.response?.data?.detail ?? "發生錯誤，請稍後再試";
+      error.response?.status === 400 ? error.response?.data?.error ?? error.response?.data?.detail ?? "發生錯誤，請稍後再試" :
+        error.response?.status === 429 ? "請求過多，請稍後再試" :
+          error.response?.status >= 500 ? "伺服器錯誤，請稍後再試" :
+            error.response?.data?.detail ?? "發生錯誤，請稍後再試";
 
     return Promise.reject(new Error(message));
   }

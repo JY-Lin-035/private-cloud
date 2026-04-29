@@ -462,7 +462,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   <td
                     className={`p-2 text-[1.2rem] border border-white break-words whitespace-normal ${item.type === 'folder' ? 'text-center' : 'text-right'}`}
                   >
-                    {item.type === 'folder' ? '-' : (() => {
+                    {(() => {
                       const [value, unit] = storage.format(item.size);
                       return `${value} ${unit}`;
                     })()}

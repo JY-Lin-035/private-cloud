@@ -4,6 +4,7 @@ import Notices from '../../components/Notices';
 import { FileText, FolderOpen, ChevronLeft, ChevronRight, RotateCcw, Trash2 } from 'lucide-react';
 import { folderApi } from '../../api/folderApi';
 import { fileApi } from '../../api/fileApi';
+import { useStorage } from '../../store/storage';
 
 interface TrashItem {
   uuid: string;
@@ -12,6 +13,7 @@ interface TrashItem {
   type: 'folder' | 'file';
   mime_type?: string;
   deleted_at: string;
+  path?: string;
 }
 
 function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
@@ -27,6 +29,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
   const [className, setClassName] = useState('');
   const [response, setResponse] = useState<string | string[]>([]);
   const [IN, setIN] = useState(false);
+  const storage = useStorage();
 
   async function getTrashList() {
     try {
@@ -41,7 +44,8 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         size: f.size,
         type: 'folder' as const,
         deleted_at: f.deleted_at,
-        parent_id: f.parent_id
+        parent_id: f.parent_id,
+        path: f.path
       })) || [];
 
       const files = filesRes.files?.map((f: any) => ({
@@ -51,7 +55,8 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         type: 'file' as const,
         mime_type: f.mime_type,
         deleted_at: f.deleted_at,
-        parent_folder_id: f.parent_folder_id
+        parent_folder_id: f.parent_folder_id,
+        path: f.path
       })) || [];
 
       // Filter out files whose parent folder is also deleted
@@ -160,6 +165,12 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         await fileApi.delete({ file_uuid: item.uuid, permanent: true });
       }
 
+      // Immediate local update for instant user feedback
+      storage.addUsedStorage(-item.size);
+
+      // Background sync with backend
+      storage.getFromAPI();
+
       const newList = trashList.filter((i) => i.uuid !== item.uuid);
       setTrashList(newList);
       setResponse(['永久刪除成功!']);
@@ -242,7 +253,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
               <tr className="bg-blue-200 text-[1.5rem] text-center">
                 <th
                   onClick={() => changeSortType('deleted_at')}
-                  className="cursor-pointer p-2 w-[15%] border border-white"
+                  className="cursor-pointer p-2 w-[12%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     刪除時間
@@ -267,7 +278,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                 </th>
                 <th
                   onClick={() => changeSortType('name')}
-                  className="cursor-pointer p-2 w-[35%] border border-white"
+                  className="cursor-pointer p-2 w-[25%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     名稱
@@ -290,9 +301,10 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
+                <th className="p-2 w-[25%] border border-white">原始位置</th>
                 <th
                   onClick={() => changeSortType('size')}
-                  className="cursor-pointer p-2 w-[20%] border border-white"
+                  className="cursor-pointer p-2 w-[15%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     大小
@@ -315,7 +327,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
-                <th className="p-2 w-[30%] border border-white">操作</th>
+                <th className="p-2 w-[23%] border border-white">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -334,6 +346,9 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                       <FileText className="inline w-6 h-6 ml-5 mr-2 text-white" />
                     )}
                     {item.name}
+                  </td>
+                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
+                    {item.path || '-'}
                   </td>
                   <td className="p-2 text-[1.2rem] text-right border border-white break-words whitespace-normal">
                     {formatSize(item.size)}

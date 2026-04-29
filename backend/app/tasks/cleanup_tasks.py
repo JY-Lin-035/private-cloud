@@ -41,6 +41,10 @@ celery_app.conf.update(
             'task': 'app.tasks.cleanup_tasks.cleanup_soft_deleted_items',
             'schedule': 604800.0,  # 7 days in seconds (weekly)
         },
+        'recalculate-all-users-storage': {
+            'task': 'app.tasks.cleanup_tasks.recalculate_all_users_storage',
+            'schedule': settings.STORAGE_RECALCULATION_PERIOD,  # Configurable period
+        },
     },
 )
 
@@ -119,4 +123,88 @@ def cleanup_soft_deleted_items(self):
             
     except Exception as e:
         logger.error(f"Cleanup task failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task(bind=True, max_retries=3)
+def recalculate_all_users_storage(self):
+    """Recalculate storage usage for all users."""
+    try:
+        logger.info("Starting storage recalculation for all users")
+        
+        # Get database session
+        db = next(get_db())
+        
+        try:
+            from app.repositories.account_repository import AccountRepository
+            from app.repositories.file_repository import FileRepository
+            from app.repositories.folder_repository import FolderRepository
+            from app.services.account_service import AccountService
+            from app.models.file import File
+            from app.models.folder import Folder
+            from sqlalchemy import select
+            
+            account_repo = AccountRepository(db)
+            file_repo = FileRepository(db)
+            folder_repo = FolderRepository(db)
+            account_service = AccountService(account_repo)
+            
+            # Get all users
+            all_users = account_repo.get_all()
+            
+            total_users_processed = 0
+            total_folders_updated = 0
+            
+            for user in all_users:
+                logger.info(f"Processing user: {user.username}")
+                
+                # Get all folders for the user
+                folders = db.execute(
+                    select(Folder).where(Folder.owner_id == user.id)
+                ).scalars().all()
+                
+                user_total_size = 0
+                
+                # Recalculate each folder size
+                for folder in folders:
+                    # Calculate actual size from files in this folder
+                    files = db.execute(
+                        select(File).where(
+                            File.parent_folder_id == folder.uuid,
+                            File.deleted_at.is_(None)
+                        )
+                    ).scalars().all()
+                    
+                    actual_size = sum(file.size for file in files)
+                    
+                    # Update folder size
+                    folder.size = actual_size
+                    user_total_size += actual_size
+                
+                # Update account used size
+                user.used_size = user_total_size
+                
+                total_users_processed += 1
+                total_folders_updated += len(folders)
+                
+                logger.info(f"Updated user {user.username}: {user_total_size} bytes, {len(folders)} folders")
+            
+            db.commit()
+            
+            logger.info(
+                f"Storage recalculation completed: {total_users_processed} users, "
+                f"{total_folders_updated} folders updated"
+            )
+            
+            return {
+                "status": "success",
+                "users_processed": total_users_processed,
+                "folders_updated": total_folders_updated
+            }
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.error(f"Storage recalculation task failed: {str(e)}")
         return {"status": "error", "error": str(e)}
