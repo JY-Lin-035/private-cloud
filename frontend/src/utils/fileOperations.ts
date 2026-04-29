@@ -15,7 +15,7 @@ export async function downloadFile(file_uuid: string): Promise<[string | string[
 }
 
 // 刪除
-export async function deleteFile(item_uuid: string, item_type: string, deleteItem: any, fileList: any[], storage: any): Promise<[string | string[], string, boolean, any[]]> {
+export async function deleteFile(item_uuid: string, deleteItem: any, fileList: any[]): Promise<[string | string[], string, boolean, any[]]> {
   try {
     const fl = fileList;
     const check = confirm("確定要刪除嗎?");
@@ -23,14 +23,12 @@ export async function deleteFile(item_uuid: string, item_type: string, deleteIte
       return [["操作已取消!"], "text-red-500", false, fileList];
     }
 
-    const r = await fileApi.delete({ file_uuid: item_uuid, permanent: false });
+    await fileApi.delete({ file_uuid: item_uuid, permanent: false });
 
     const index = fl.findIndex((item) => item === deleteItem);
     if (index !== -1) {
       fl.splice(index, 1);
     }
-
-    storage.addUsedStorage(-Number(r.size));
 
     return [["刪除成功！"], "text-red-500", true, fl];
   } catch (e) {

@@ -9,7 +9,7 @@ from app.schemas.account import (
 from app.services.account_service import AccountService
 from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
-from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service
+from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service, get_account_service
 from app.api.rate_limit import rate_limit
 from app.utils import logger as log
 
@@ -254,3 +254,85 @@ async def check_session(user_id: int = Depends(get_current_user_id)):
     except Exception as e:
         logger.error(f"Check session endpoint error: {e}")
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@router.post("/admin/recalculate-user-storage")
+async def recalculate_user_storage(
+    username: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+    account_service: AccountService = Depends(get_account_service)
+):
+    """Recalculate storage usage for a specific user (admin only)."""
+    try:
+        # Check if user is admin (identity == 1)
+        account = account_service.get_by_id(user_id)
+        if not account or account.identity != 1:
+            raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Get target user by username
+        target_user = account_service.get_by_username(username)
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Recalculate storage for the target user
+        from app.services.file_service import FileService
+        from app.services.folder_service import FolderService
+        from app.repositories.file_repository import FileRepository
+        from app.repositories.folder_repository import FolderRepository
+        from app.models.file import File
+        from app.models.folder import Folder
+        from sqlalchemy import select
+        import os
+        
+        file_repo = FileRepository(db)
+        folder_repo = FolderRepository(db)
+        file_service = FileService(db, file_repo, folder_repo)
+        folder_service = FolderService(db, folder_repo, account_repo)
+        
+        logger.info(f"Starting storage recalculation for user: {username}")
+        
+        # Get all folders for the user
+        folders = db.execute(
+            select(Folder).where(Folder.owner_id == target_user.id)
+        ).scalars().all()
+        
+        total_size = 0
+        
+        # Recalculate each folder size
+        for folder in folders:
+            # Calculate actual size from files in this folder
+            files = db.execute(
+                select(File).where(
+                    File.parent_folder_id == folder.uuid,
+                    File.deleted_at.is_(None)
+                )
+            ).scalars().all()
+            
+            actual_size = sum(file.size for file in files)
+            
+            # Update folder size
+            folder.size = actual_size
+            total_size += actual_size
+        
+            logger.info(f"Updated folder {folder.name}: {actual_size} bytes")
+        
+        # Update account used size
+        target_user.used_size = total_size
+        
+        db.commit()
+        
+        logger.info(f"Storage recalculation completed for user {username}: {total_size} bytes")
+        
+        return {
+            "message": "Storage recalculation completed",
+            "username": username,
+            "total_size": total_size,
+            "folders_updated": len(folders)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Storage recalculation error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")

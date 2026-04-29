@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import Drawer from './Drawer';
 
-import logoImage from '../assets/J.png';
+import logoImage from '../assets/Logo.png';
 
 
 
@@ -11,14 +11,14 @@ function Nav({ layoutClass = "" }: { layoutClass?: string }) {
 
   const shouldShowDrawer =
     location.pathname !== '/' &&
-    location.pathname !== '/forgetPassword' &&
+    location.pathname !== '/forget-password' &&
     !location.pathname.startsWith('/share/');
 
   function handleLogoClick() {
-    if (location.pathname === '/' || location.pathname === '/forgetPassword') {
+    if (location.pathname === '/' || location.pathname === '/forget-password') {
       navigate('/');
     } else {
-      navigate('/fileList');
+      navigate('/file-list');
     }
   }
 
