@@ -231,8 +231,8 @@ class FileService:
                 # Soft delete
                 self.file_repo.soft_delete(file_uuid)
 
-            # Update parent folder size (for both soft and hard delete)
-            if file.parent_folder_id:
+            # Update parent folder size only for hard delete (soft delete items still occupy space)
+            if permanent and file.parent_folder_id:
                 self.folder_service._update_parent_folder_size(file.parent_folder_id, -file_size)
             
             return {
@@ -256,15 +256,36 @@ class FileService:
             if not file.deleted_at:
                 return {'error': 'File not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
             
-            restored = self.file_repo.restore(file_uuid)
-            
-            # Update parent folder size
+            # Check for name conflict with existing files in the same folder
             if file.parent_folder_id:
-                self.folder_service._update_parent_folder_size(file.parent_folder_id, file.size)
+                existing_files = self.db.execute(
+                    select(File).where(
+                        File.parent_folder_id == file.parent_folder_id,
+                        File.deleted_at.is_(None)
+                    )
+                ).scalars().all()
+                existing_file_names = {f.name for f in existing_files}
+                
+                if file.name in existing_file_names:
+                    # Rename file with (1) suffix
+                    name_parts = file.name.rsplit('.', 1)
+                    if len(name_parts) == 2:
+                        # Has extension
+                        file.name = f"{name_parts[0]} (1).{name_parts[1]}"
+                    else:
+                        # No extension
+                        file.name = f"{file.name} (1)"
+            
+            # Restore the file (clear deleted_at)
+            file.deleted_at = None
+            
+            self.db.commit()
+            
+            # Don't update parent folder size for restore (soft delete didn't change parent size)
             
             return {
                 'uuid': file_uuid,
-                'restored': restored
+                'restored': True
             }
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
@@ -295,21 +316,52 @@ class FileService:
         """Get soft-deleted files by owner."""
         try:
             files = self.file_repo.get_trash_by_owner(user_id)
+            
+            # Build path information for each file
+            files_with_path = []
+            for f in files:
+                # Get the folder path for the file
+                path = self._get_file_path(f.parent_folder_id, user_id) if f.parent_folder_id else 'Home'
+                
+                files_with_path.append({
+                    'uuid': f.uuid,
+                    'name': f.name,
+                    'size': f.size,
+                    'mime_type': f.mime_type,
+                    'parent_folder_id': f.parent_folder_id,
+                    'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None,
+                    'path': path
+                })
+            
             return {
-                'files': [
-                    {
-                        'uuid': f.uuid,
-                        'name': f.name,
-                        'size': f.size,
-                        'mime_type': f.mime_type,
-                        'parent_folder_id': f.parent_folder_id,
-                        'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None
-                    }
-                    for f in files
-                ]
+                'files': files_with_path
             }
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+    
+    def _get_file_path(self, folder_uuid: str, user_id: int) -> str:
+        """Get the full path of a folder as a string."""
+        try:
+            from app.models.folder import Folder
+            path_parts = []
+            current_folder = self.db.execute(
+                select(Folder).where(Folder.uuid == folder_uuid)
+            ).scalar_one_or_none()
+            
+            while current_folder:
+                path_parts.append(current_folder.name)
+                if current_folder.parent_id:
+                    current_folder = self.db.execute(
+                        select(Folder).where(Folder.uuid == current_folder.parent_id)
+                    ).scalar_one_or_none()
+                else:
+                    break
+            
+            # Reverse to get the correct order (from root to current)
+            path_parts.reverse()
+            return ' / '.join(path_parts)
+        except Exception:
+            return 'Unknown'
 
     def recalculate_used_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Recalculate used storage from actual non-deleted files."""

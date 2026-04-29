@@ -23,7 +23,8 @@ export async function createFolder(parent_folder_uuid: string | null, folderName
     return [['新增成功!'], "text-green-500", fileList];
   } catch (e) {
     console.error('Create folder error:', e);
-    return [["新增失敗, 請稍後再試!"], "text-red-500", fileList];
+    const errorMessage = e instanceof Error ? e.message : "新增失敗, 請稍後再試!";
+    return [[errorMessage], "text-red-500", fileList];
   }
 }
 
