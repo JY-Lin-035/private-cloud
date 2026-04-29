@@ -76,7 +76,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         try {
           const homeFolder = await folderApi.getHome();
           getFileList(homeFolder.uuid);
-          navigate(`/fileList/${homeFolder.uuid}`, { replace: true });
+          navigate(`/file-list/${homeFolder.uuid}`, { replace: true });
         } catch (e) {
           localStorage.clear();
           navigate('/');
@@ -160,8 +160,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setInputShow(false);
   }
 
-  async function callDeleteFile(item_uuid: string, item_type: string, item: any) {
-    const [res, cn, show, fl] = await deleteFile(item_uuid, item_type, item, fileList, storage);
+  async function callDeleteFile(item_uuid: string, _item_type: string, item: any) {
+    const [res, cn, show, fl] = await deleteFile(item_uuid, item, fileList);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -217,7 +217,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   async function callDeleteFolder(folder_uuid: string) {
-    const [res, cn, show, fl] = await deleteFolder(folder_uuid, fileList, storage);
+    const [res, cn, show, fl] = await deleteFolder(folder_uuid, fileList);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
@@ -444,7 +444,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   className={`bg-gray-300 hover:bg-blue-200 ${item.type === 'folder' ? 'cursor-pointer' : ''}`}
                   onClick={() => {
                     if (item.type === 'folder') {
-                      navigate(`/fileList/${item.uuid}`);
+                      navigate(`/file-list/${item.uuid}`);
                     }
                   }}
                 >
@@ -462,7 +462,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   <td
                     className={`p-2 text-[1.2rem] border border-white break-words whitespace-normal ${item.type === 'folder' ? 'text-center' : 'text-right'}`}
                   >
-                    {item.type === 'folder' ? '-' : (() => {
+                    {(() => {
                       const [value, unit] = storage.format(item.size);
                       return `${value} ${unit}`;
                     })()}

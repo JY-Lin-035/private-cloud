@@ -11,7 +11,7 @@ interface BreadcrumbProps {
 function Breadcrumb({ currentFolderUuid }: BreadcrumbProps) {
   const navigate = useNavigate();
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [folderPath, setFolderPath] = useState<Array<{uuid: string, name: string}>>([]);
+  const [folderPath, setFolderPath] = useState<Array<{ uuid: string, name: string }>>([]);
 
   useEffect(() => {
     async function fetchFolderPath(retries = 3) {
@@ -44,12 +44,12 @@ function Breadcrumb({ currentFolderUuid }: BreadcrumbProps) {
 
   const breadcrumb = useMemo(() => {
     if (!folderPath || folderPath.length === 0) {
-      return [{ name: 'Home', path: '/fileList' }];
+      return [{ name: 'Home', path: '/file-list' }];
     }
 
     return folderPath.map((folder) => ({
       name: folder.name,
-      path: `/fileList/${folder.uuid}`,
+      path: `/file-list/${folder.uuid}`,
     }));
   }, [folderPath]);
 

@@ -50,7 +50,7 @@ class AccountService:
             
             self.account_repo.create(account)
             
-            # Create Home folder for the user
+            # Create Home folder for the user (database record only, no physical directory)
             home_folder = Folder(
                 uuid=str(uuid_lib.uuid4()),
                 owner_id=account.id,
@@ -60,10 +60,6 @@ class AccountService:
                 is_system=True  # Home folder cannot be deleted
             )
             self.folder_repo.create(home_folder)
-            
-            # Create physical directory
-            user_folder = os.path.join('storage', 'app', 'private', 'users', str(account.id), 'Home')
-            os.makedirs(user_folder, exist_ok=True)
             
             # Generate verification data and store in Redis
             hash_value, signature, timestamp, secret_key = generate_signed_url(account.id, account.email)

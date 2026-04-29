@@ -6,6 +6,8 @@ from app.config import settings
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.services.email_service import EmailService
+from app.services.account_service import AccountService
+from app.repositories.account_repository import AccountRepository
 from app.tasks.email_tasks import celery_app
 
 # Database engine
@@ -45,6 +47,16 @@ def get_current_user(request: Request):
     if not hasattr(request.state, 'user'):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return request.state.user
+
+
+def get_account_service(db: Session = Depends(get_db)):
+    """Get account service instance."""
+    account_repo = AccountRepository(db)
+    account_service = AccountService(account_repo)
+    try:
+        yield account_service
+    finally:
+        pass
 
 
 def get_current_user_id(request: Request):
