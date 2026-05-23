@@ -217,6 +217,10 @@ class FileService:
             
             file_size = file.size
 
+            # Clear share link
+            if file.shared:
+                file.shared = None
+
             if permanent:
                 # Hard delete: remove from storage and database
                 file_path = os.path.join(self.storage_base_path, file.uuid)
