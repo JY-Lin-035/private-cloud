@@ -49,8 +49,6 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [showMode, setShowMode] = useState(false);
   const [className, setClassName] = useState('');
   const [response, setResponse] = useState<string | string[]>([]);
-  const [shareFileLink, setShareFileLink] = useState('');
-  const [copyShow, setCopyShow] = useState(false);
   const [folderNameInput, setFolderNameInput] = useState('');
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
@@ -170,13 +168,14 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   async function callShareFileLink(item_uuid: string, item_type: string) {
-    const [res, cn, show, link, copy] = await getShareFileLink(item_uuid, item_type);
+    const [res, cn, show, link] = await getShareFileLink(item_uuid, item_type);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
     setInputShow(false);
-    setShareFileLink(link);
-    setCopyShow(copy);
+    if (link) {
+      setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: link } : f));
+    }
   }
 
   async function callDeleteShareFileLink(item_uuid: string, item_type: string) {
@@ -185,11 +184,28 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setClassName(cn);
     setShowMode(show);
     setInputShow(false);
+    setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: null } : f));
   }
 
   const copyFunc = (m: string) => {
-    navigator.clipboard.writeText(window.location.origin + '/share/' + m);
-    setCopyShow(false);
+    const text = window.location.origin + '/share/' + m;
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      setResponse(['連結已複製!']);
+      setClassName('text-green-500');
+      setShowMode(true);
+    } catch {
+      setResponse(['複製失敗，請手動複製']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+    document.body.removeChild(textarea);
   };
 
   async function emitFolderName() {
@@ -227,7 +243,6 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
   return (
     <div
-      onClick={() => setCopyShow(false)}
       className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
     >
       <Notices
@@ -498,43 +513,37 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                         />
                       )}
 
-                      {item.type === 'file' && (
-                        <div className="relative group">
-                          <Share2
-                            className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                      {item.type === 'file' && !item.shared && (
+                        <Share2
+                          className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            callShareFileLink(item.uuid, item.type);
+                          }}
+                        />
+                      )}
+
+                      {item.type === 'file' && item.shared && (
+                        <span className="flex gap-1">
+                          <button
+                            className="px-1 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm bg-blue-400 text-white cursor-pointer"
                             onClick={(e) => {
                               e.stopPropagation();
-                              callShareFileLink(item.uuid, item.type);
+                              copyFunc(item.shared);
                             }}
-                          />
-
-                          {response === item.name && copyShow && (
-                            <div
-                              className="absolute bottom-full left-1/2 transform -translate-x-1/2 mt-2 w-max px-2 py-1 text-sm text-white rounded opacity-100 transition-opacity duration-300"
-                            >
-                              <span>
-                                <button
-                                  className="mr-2 p-2 rounded-[0.5rem] bg-blue-400"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    copyFunc(shareFileLink);
-                                  }}
-                                >
-                                  複製
-                                </button>
-                                <button
-                                  className="p-2 rounded-[0.5rem] bg-red-400"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    callDeleteShareFileLink(item.uuid, item.type);
-                                  }}
-                                >
-                                  移除
-                                </button>
-                              </span>
-                            </div>
-                          )}
-                        </div>
+                          >
+                            複製連結
+                          </button>
+                          <button
+                            className="px-1 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm bg-red-400 text-white cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              callDeleteShareFileLink(item.uuid, item.type);
+                            }}
+                          >
+                            移除
+                          </button>
+                        </span>
                       )}
 
                       <Trash2
