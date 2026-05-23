@@ -51,6 +51,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [response, setResponse] = useState<string | string[]>([]);
   const [shareFileLink, setShareFileLink] = useState('');
   const [copyShow, setCopyShow] = useState(false);
+  const [popupItemUuid, setPopupItemUuid] = useState<string | null>(null);
   const [folderNameInput, setFolderNameInput] = useState('');
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
@@ -177,6 +178,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setInputShow(false);
     setShareFileLink(link);
     setCopyShow(copy);
+    setPopupItemUuid(item_uuid);
     if (link) {
       setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: link } : f));
     }
@@ -189,6 +191,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setShowMode(show);
     setInputShow(false);
     setCopyShow(false);
+    setPopupItemUuid(null);
     setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: null } : f));
   }
 
@@ -248,7 +251,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
   return (
     <div
-      onClick={() => setCopyShow(false)}
+      onClick={() => { setCopyShow(false); setPopupItemUuid(null); }}
       className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
     >
       <Notices
@@ -529,7 +532,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                             }}
                           />
 
-                          {response === item.name && copyShow && (
+                          {popupItemUuid === item.uuid && copyShow && (
                             <div
                               className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 w-max px-2 py-1 text-xs sm:text-sm text-white rounded"
                             >
