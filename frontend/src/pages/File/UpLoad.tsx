@@ -105,7 +105,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
         onClick={onHidden}
       ></div>
 
-      <div className="relative z-10">
+      <div className="relative z-10 max-w-[95vw] sm:max-w-[750px]">
         <div ref={uppyContainer}></div>
       </div>
     </div>

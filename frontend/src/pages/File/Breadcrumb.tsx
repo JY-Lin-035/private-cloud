@@ -80,7 +80,7 @@ function Breadcrumb({ currentFolderUuid }: BreadcrumbProps) {
   }
 
   return (
-    <nav className="flex w-[95%] mt-[2%] text-[2rem]" aria-label="Breadcrumb">
+    <nav className="flex w-[95%] mt-[2%] text-lg sm:text-xl md:text-2xl lg:text-[2rem]" aria-label="Breadcrumb">
       <ol className="inline-flex items-center space-x-1 md:space-x-2 rtl:space-x-reverse">
         <li className="inline-flex items-center">
           <a

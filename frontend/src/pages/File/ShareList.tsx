@@ -106,7 +106,24 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   const copyFunc = (m: string) => {
-    navigator.clipboard.writeText(window.location.origin + '/share/' + m);
+    const text = window.location.origin + '/share/' + m;
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      setResponse(['連結已複製!']);
+      setClassName('text-green-500');
+      setShowMode(true);
+    } catch {
+      setResponse(['複製失敗，請手動複製']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+    document.body.removeChild(textarea);
     setCopyShow(false);
   };
 
@@ -124,7 +141,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
       />
 
       <div
-        className={`w-[80vw] mx-auto mt-[5%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
+        className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[5%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
         <div className="mb-4 flex justify-between items-center">
           <span>
@@ -133,7 +150,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
               onChange={(e) => setSearch(e.target.value)}
               type="text"
               placeholder="搜尋"
-              className="border border-white rounded px-3 py-1 w-64"
+              className="border border-white rounded px-3 py-1 w-full sm:w-64"
             />
           </span>
 
@@ -159,15 +176,15 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
         >
           <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>
-              <tr className="bg-blue-200 text-[1.5rem] text-center">
+              <tr className="bg-blue-200 text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl text-center">
                 <th
                   onClick={() => changeSortType('date')}
-                  className="cursor-pointer p-2 w-[10%] border border-white"
+                  className="cursor-pointer p-2 w-[10%] border border-white hidden sm:table-cell"
                 >
                   <span className="inline-flex items-center gap-1">
                     時間
                     <svg
-                      className="w-6 h-6 text-gray-800"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800"
                       aria-hidden="true"
                       xmlns="http://www.w3.org/2000/svg"
                       width="24"
@@ -187,12 +204,12 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                 </th>
                 <th
                   onClick={() => changeSortType('name')}
-                  className="cursor-pointer p-2 w-[35%] border border-white"
+                  className="cursor-pointer p-2 w-[45%] sm:w-[35%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     名稱
                     <svg
-                      className="w-6 h-6 text-gray-800 inline-block"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
                       aria-hidden="true"
                       xmlns="http://www.w3.org/2000/svg"
                       width="24"
@@ -212,12 +229,12 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                 </th>
                 <th
                   onClick={() => changeSortType('path')}
-                  className="cursor-pointer p-2 w-[35%] border border-white"
+                  className="cursor-pointer p-2 w-[35%] border border-white hidden md:table-cell"
                 >
                   <span className="inline-flex items-center gap-1">
                     路徑
                     <svg
-                      className="w-6 h-6 text-gray-800 inline-block"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
                       aria-hidden="true"
                       xmlns="http://www.w3.org/2000/svg"
                       width="24"
@@ -235,7 +252,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
-                <th className="p-2 w-[20%] border border-white">操作</th>
+                <th className="p-2 w-[55%] sm:w-[35%] md:w-[20%] border border-white text-xs sm:text-sm md:text-base lg:text-lg">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -244,32 +261,32 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                   key={item.link}
                   className="bg-gray-300 hover:bg-blue-200"
                 >
-                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden sm:table-cell">
                     {item.date}
                   </td>
-                  <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base border border-white break-words whitespace-normal">
                     {item.type === 'folder' ? (
-                      <FolderOpen className="inline w-6 h-6 ml-5 text-yellow-200" />
+                      <FolderOpen className="inline w-5 h-5 sm:w-6 sm:h-6 ml-2 sm:ml-5 text-yellow-200" />
                     ) : (
-                      <FileText className="inline w-6 h-6 ml-5 text-white" />
+                      <FileText className="inline w-5 h-5 sm:w-6 sm:h-6 ml-2 sm:ml-5 text-white" />
                     )}
                     {item.name}
                   </td>
-                  <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base border border-white break-words whitespace-normal hidden md:table-cell">
                     {item.path}
                   </td>
-                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
-                    <span className="flex justify-center sm:gap-2 md:gap-6 lg:gap-10">
-                      <div className="relate w-max text-sm text-white rounded">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal">
+                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-4">
+                      <div className="relate w-max text-xs sm:text-sm text-white rounded">
                         <span>
                           <button
-                            className="mr-8 p-2 rounded-[0.5rem] bg-blue-400 cursor-pointer"
+                            className="mr-2 sm:mr-4 p-1 sm:p-2 rounded-[0.5rem] bg-blue-400 cursor-pointer"
                             onClick={() => copyFunc(item.link)}
                           >
                             複製連結
                           </button>
                           <button
-                            className="p-2 rounded-[0.5rem] bg-red-400 cursor-pointer"
+                            className="p-1 sm:p-2 rounded-[0.5rem] bg-red-400 cursor-pointer"
                             onClick={() => deleteLink(item)}
                           >
                             移除
