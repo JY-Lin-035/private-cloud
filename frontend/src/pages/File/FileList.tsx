@@ -49,6 +49,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [showMode, setShowMode] = useState(false);
   const [className, setClassName] = useState('');
   const [response, setResponse] = useState<string | string[]>([]);
+  const [shareFileLink, setShareFileLink] = useState('');
+  const [copyShow, setCopyShow] = useState(false);
   const [folderNameInput, setFolderNameInput] = useState('');
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
@@ -168,11 +170,13 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   async function callShareFileLink(item_uuid: string, item_type: string) {
-    const [res, cn, show, link] = await getShareFileLink(item_uuid, item_type);
+    const [res, cn, show, link, copy] = await getShareFileLink(item_uuid, item_type);
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
     setInputShow(false);
+    setShareFileLink(link);
+    setCopyShow(copy);
     if (link) {
       setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: link } : f));
     }
@@ -184,6 +188,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setClassName(cn);
     setShowMode(show);
     setInputShow(false);
+    setCopyShow(false);
     setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: null } : f));
   }
 
@@ -243,6 +248,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
   return (
     <div
+      onClick={() => setCopyShow(false)}
       className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
     >
       <Notices
@@ -513,37 +519,43 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                         />
                       )}
 
-                      {item.type === 'file' && !item.shared && (
-                        <Share2
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            callShareFileLink(item.uuid, item.type);
-                          }}
-                        />
-                      )}
+                      {item.type === 'file' && (
+                        <div className="relative">
+                          <Share2
+                            className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              callShareFileLink(item.uuid, item.type);
+                            }}
+                          />
 
-                      {item.type === 'file' && item.shared && (
-                        <span className="flex gap-1">
-                          <button
-                            className="px-1 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm bg-blue-400 text-white cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              copyFunc(item.shared);
-                            }}
-                          >
-                            複製連結
-                          </button>
-                          <button
-                            className="px-1 sm:px-2 py-0.5 sm:py-1 rounded text-xs sm:text-sm bg-red-400 text-white cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              callDeleteShareFileLink(item.uuid, item.type);
-                            }}
-                          >
-                            移除
-                          </button>
-                        </span>
+                          {response === item.name && copyShow && (
+                            <div
+                              className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 w-max px-2 py-1 text-xs sm:text-sm text-white rounded"
+                            >
+                              <span className="flex gap-1">
+                                <button
+                                  className="px-2 py-1 rounded bg-blue-400 cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    copyFunc(shareFileLink);
+                                  }}
+                                >
+                                  複製連結
+                                </button>
+                                <button
+                                  className="px-2 py-1 rounded bg-red-400 cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    callDeleteShareFileLink(item.uuid, item.type);
+                                  }}
+                                >
+                                  移除
+                                </button>
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       <Trash2
