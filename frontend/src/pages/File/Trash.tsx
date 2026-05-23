@@ -60,11 +60,10 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
       })) || [];
 
       // Filter out files whose parent folder is also deleted
-      const deletedFolderUuids = new Set(folders.map((f) => f.uuid));
-      const filteredFiles = files.filter((f) => !f.parent_folder_id || !deletedFolderUuids.has(f.parent_folder_id));
+      const deletedFolderUuids = new Set(folders.map((f: { uuid: string }) => f.uuid));
+      const filteredFiles = files.filter((f: { parent_folder_id?: string | null }) => !f.parent_folder_id || !deletedFolderUuids.has(f.parent_folder_id));
 
-      // Filter out folders whose parent folder is also deleted
-      const filteredFolders = folders.filter((f) => !f.parent_id || !deletedFolderUuids.has(f.parent_id));
+      const filteredFolders = folders.filter((f: { parent_id?: string | null }) => !f.parent_id || !deletedFolderUuids.has(f.parent_id));
 
       setTrashList([...filteredFolders, ...filteredFiles]);
       localStorage.setItem('previousFolderUuid', '');
@@ -91,9 +90,11 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
     );
 
     fList.sort((a, b) => {
+      const aVal = (a[sortType as keyof TrashItem] ?? '').toString();
+      const bVal = (b[sortType as keyof TrashItem] ?? '').toString();
       return sortUpDown
-        ? a[sortType as keyof TrashItem].toString().localeCompare(b[sortType as keyof TrashItem].toString())
-        : b[sortType as keyof TrashItem].toString().localeCompare(a[sortType as keyof TrashItem].toString());
+        ? aVal.localeCompare(bVal)
+        : bVal.localeCompare(aVal);
     });
 
     return fList;
