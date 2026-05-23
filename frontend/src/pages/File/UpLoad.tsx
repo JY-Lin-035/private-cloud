@@ -71,11 +71,11 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
         }
       }
 
-      alert(`檔案 ${file.name} 上傳失敗：${e}`);
+      alert(`檔案 ${file?.name ?? 'unknown'} 上傳失敗：${e}`);
     });
 
     uppy.on('complete', (result) => {
-      if (result.failed.length === 0) {
+      if (!result.failed || result.failed.length === 0) {
         onRefresh();
         onComplete(['上傳完成!'], 'text-green-500');
         storage.getFromAPI();
