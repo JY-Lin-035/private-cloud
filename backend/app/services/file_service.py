@@ -75,7 +75,8 @@ class FileService:
                     'uuid': file.uuid,
                     'name': file.name,
                     'size': file.size,
-                    'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    # 'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'date': file.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
                     'mime_type': file.mime_type,
                     'shared': file.shared
                 })
