@@ -65,7 +65,8 @@ class FileService:
                     'uuid': folder.uuid,
                     'name': folder.name,
                     'size': folder.size,
-                    'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    # 'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'date': folder.updated_at.strftime('%Y-%m-%d %H:%M:%S'),
                     'shared': folder.shared
                 })
             
