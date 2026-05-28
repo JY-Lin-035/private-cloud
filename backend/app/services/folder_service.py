@@ -1,7 +1,14 @@
 import uuid
 import re
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_tz_utc8 = timezone(timedelta(hours=8))
+
+def _fmt_utc8(dt: datetime) -> str:
+    if dt is None:
+        return ''
+    return dt.replace(tzinfo=timezone.utc).astimezone(_tz_utc8).strftime('%Y-%m-%d %H:%M:%S')
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -142,7 +149,7 @@ class FolderService:
             return {
                 'uuid': created_folder.uuid,
                 'name': created_folder.name,
-                'created_at': created_folder.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                'created_at': _fmt_utc8(created_folder.created_at)
             }
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
@@ -166,7 +173,7 @@ class FolderService:
             return {
                 'uuid': folder.uuid,
                 'name': folder.name,
-                'updated_at': folder.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+                'updated_at': _fmt_utc8(folder.updated_at)
             }
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
@@ -447,8 +454,8 @@ class FolderService:
                         'size': f.size,
                         'parent_id': f.parent_id,
                         'shared': f.shared,
-                        'created_at': f.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                        'updated_at': f.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+                        'created_at': _fmt_utc8(f.created_at),
+                        'updated_at': _fmt_utc8(f.updated_at)
                     }
                     for f in folders
                 ]
@@ -472,7 +479,7 @@ class FolderService:
                     'name': f.name,
                     'size': f.size,
                     'parent_id': f.parent_id,
-                    'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None,
+                    'deleted_at': _fmt_utc8(f.deleted_at) if f.deleted_at else None,
                     'path': path
                 })
             
