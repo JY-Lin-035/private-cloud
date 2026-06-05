@@ -4,10 +4,12 @@ import { folderApi } from "../api/folderApi";
 
 export async function createFolder(parent_folder_uuid: string | null, folderName: string, fileList: any[]): Promise<[string | string[], string, any[]]> {
   try {
-    const data = {
-      parent_folder_uuid: parent_folder_uuid,
+    const data: { parent_folder_uuid?: string; name: string } = {
       name: folderName,
     };
+    if (parent_folder_uuid) {
+      data.parent_folder_uuid = parent_folder_uuid;
+    }
     const r = await folderApi.create(data);
 
     const newFolder = {

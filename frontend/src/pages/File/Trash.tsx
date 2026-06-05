@@ -60,11 +60,10 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
       })) || [];
 
       // Filter out files whose parent folder is also deleted
-      const deletedFolderUuids = new Set(folders.map((f) => f.uuid));
-      const filteredFiles = files.filter((f) => !f.parent_folder_id || !deletedFolderUuids.has(f.parent_folder_id));
+      const deletedFolderUuids = new Set(folders.map((f: { uuid: string }) => f.uuid));
+      const filteredFiles = files.filter((f: { parent_folder_id?: string | null }) => !f.parent_folder_id || !deletedFolderUuids.has(f.parent_folder_id));
 
-      // Filter out folders whose parent folder is also deleted
-      const filteredFolders = folders.filter((f) => !f.parent_id || !deletedFolderUuids.has(f.parent_id));
+      const filteredFolders = folders.filter((f: { parent_id?: string | null }) => !f.parent_id || !deletedFolderUuids.has(f.parent_id));
 
       setTrashList([...filteredFolders, ...filteredFiles]);
       localStorage.setItem('previousFolderUuid', '');
@@ -91,9 +90,11 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
     );
 
     fList.sort((a, b) => {
+      const aVal = (a[sortType as keyof TrashItem] ?? '').toString();
+      const bVal = (b[sortType as keyof TrashItem] ?? '').toString();
       return sortUpDown
-        ? a[sortType as keyof TrashItem].toString().localeCompare(b[sortType as keyof TrashItem].toString())
-        : b[sortType as keyof TrashItem].toString().localeCompare(a[sortType as keyof TrashItem].toString());
+        ? aVal.localeCompare(bVal)
+        : bVal.localeCompare(aVal);
     });
 
     return fList;
@@ -215,7 +216,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
       />
 
       <div
-        className={`w-[80vw] mx-auto mt-[5%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
+        className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[5%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
         <div className="mb-4 flex justify-between items-center">
           <span>
@@ -224,7 +225,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
               onChange={(e) => setSearch(e.target.value)}
               type="text"
               placeholder="搜尋"
-              className="border border-white rounded px-3 py-1 w-64"
+              className="border border-white rounded px-3 py-1 w-full sm:w-64"
             />
           </span>
 
@@ -250,15 +251,15 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         >
           <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>
-              <tr className="bg-blue-200 text-[1.5rem] text-center">
+              <tr className="bg-blue-200 text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl text-center">
                 <th
                   onClick={() => changeSortType('deleted_at')}
-                  className="cursor-pointer p-2 w-[12%] border border-white"
+                  className="cursor-pointer p-2 w-[12%] border border-white hidden sm:table-cell"
                 >
                   <span className="inline-flex items-center gap-1">
                     刪除時間
                     <svg
-                      className="w-6 h-6 text-gray-800"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800"
                       aria-hidden="true"
                       xmlns="http://www.w3.org/2000/svg"
                       width="24"
@@ -278,12 +279,12 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                 </th>
                 <th
                   onClick={() => changeSortType('name')}
-                  className="cursor-pointer p-2 w-[25%] border border-white"
+                  className="cursor-pointer p-2 w-[35%] sm:w-[25%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     名稱
                     <svg
-                      className="w-6 h-6 text-gray-800 inline-block"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
                       aria-hidden="true"
                       xmlns="http://www.w3.org/2000/svg"
                       width="24"
@@ -301,15 +302,15 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
-                <th className="p-2 w-[25%] border border-white">原始位置</th>
+                <th className="p-2 w-[30%] sm:w-[25%] border border-white hidden sm:table-cell">原始位置</th>
                 <th
                   onClick={() => changeSortType('size')}
-                  className="cursor-pointer p-2 w-[15%] border border-white"
+                  className="cursor-pointer p-2 w-[15%] border border-white hidden md:table-cell"
                 >
                   <span className="inline-flex items-center gap-1">
                     大小
                     <svg
-                      className="w-6 h-6 text-gray-800 inline-block"
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
                       aria-hidden="true"
                       xmlns="http://www.w3.org/2000/svg"
                       width="24"
@@ -327,7 +328,7 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
-                <th className="p-2 w-[23%] border border-white">操作</th>
+                <th className="p-2 w-[65%] sm:w-[40%] md:w-[23%] border border-white text-xs sm:text-sm md:text-base lg:text-lg">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -336,31 +337,31 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                   key={item.uuid}
                   className="bg-gray-300 hover:bg-blue-200"
                 >
-                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden sm:table-cell">
                     {formatDate(item.deleted_at)}
                   </td>
-                  <td className="p-2 text-[1.2rem] border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base border border-white break-words whitespace-normal">
                     {item.type === 'folder' ? (
-                      <FolderOpen className="inline w-6 h-6 ml-5 mr-2 text-yellow-200" />
+                      <FolderOpen className="inline w-5 h-5 sm:w-6 sm:h-6 ml-2 sm:ml-5 mr-1 sm:mr-2 text-yellow-200" />
                     ) : (
-                      <FileText className="inline w-6 h-6 ml-5 mr-2 text-white" />
+                      <FileText className="inline w-5 h-5 sm:w-6 sm:h-6 ml-2 sm:ml-5 mr-1 sm:mr-2 text-white" />
                     )}
                     {item.name}
                   </td>
-                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden sm:table-cell">
                     {item.path || '-'}
                   </td>
-                  <td className="p-2 text-[1.2rem] text-right border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-right border border-white break-words whitespace-normal hidden md:table-cell">
                     {formatSize(item.size)}
                   </td>
-                  <td className="p-2 text-[1.2rem] text-center border border-white break-words whitespace-normal">
-                    <span className="flex justify-center sm:gap-2 md:gap-6 lg:gap-10">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal">
+                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-4 lg:gap-6">
                       <RotateCcw
-                        className="w-6 h-6 text-green-600 cursor-pointer"
+                        className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
                         onClick={() => restoreItem(item)}
                       />
                       <Trash2
-                        className="w-6 h-6 text-red-500 cursor-pointer"
+                        className="w-5 h-5 sm:w-6 sm:h-6 text-red-500 cursor-pointer"
                         onClick={() => hardDeleteItem(item)}
                       />
                     </span>

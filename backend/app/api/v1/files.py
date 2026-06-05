@@ -1,3 +1,4 @@
+from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -122,11 +123,12 @@ async def download_file(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         logger.info("File downloaded successfully")
+        encoded_filename = quote(result['filename'], safe='')
         return FileResponse(
             path=result['real_path'],
-            filename=result['filename'],
+            filename=encoded_filename,
             media_type=result['mime_type'],
-            headers={'Content-Disposition': f'attachment; filename="{result["filename"]}"'}
+            headers={'Content-Disposition': f"attachment; filename*=UTF-8''{encoded_filename}"}
         )
     except Exception as e:
         logger.error(f"Download file endpoint error: {e}")

@@ -57,7 +57,7 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
       />
 
       <div
-        className={`w-[20vw] max-w-[370px] min-w-[250px] transition-all duration-[800ms] ease-in-out [perspective:10000px] ${flipped ? 'h-[570px]' : 'h-[420px]'
+        className={`w-[90vw] sm:w-[70vw] md:w-[40vw] lg:w-[25vw] xl:w-[20vw] max-w-[370px] min-w-[280px] transition-all duration-[800ms] ease-in-out [perspective:10000px] ${flipped ? 'h-[570px]' : 'h-[420px]'
           } ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
         <div

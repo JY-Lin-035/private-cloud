@@ -1,7 +1,14 @@
 import uuid
 import os
 import mimetypes
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+_tz_utc8 = timezone(timedelta(hours=8))
+
+def _fmt_utc8(dt: datetime) -> str:
+    if dt is None:
+        return ''
+    return dt.replace(tzinfo=timezone.utc).astimezone(_tz_utc8).strftime('%Y-%m-%d %H:%M:%S')
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -65,7 +72,8 @@ class FileService:
                     'uuid': folder.uuid,
                     'name': folder.name,
                     'size': folder.size,
-                    'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    # 'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'date': _fmt_utc8(folder.updated_at),
                     'shared': folder.shared
                 })
             
@@ -75,7 +83,8 @@ class FileService:
                     'uuid': file.uuid,
                     'name': file.name,
                     'size': file.size,
-                    'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    # 'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                    'date': _fmt_utc8(file.updated_at),
                     'mime_type': file.mime_type,
                     'shared': file.shared
                 })
@@ -176,7 +185,7 @@ class FileService:
                 'name': created_file.name,
                 'size': created_file.size,
                 'mime_type': created_file.mime_type,
-                'created_at': created_file.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                'created_at': _fmt_utc8(created_file.created_at)
             }
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
@@ -216,6 +225,10 @@ class FileService:
                 return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
             
             file_size = file.size
+
+            # Clear share link
+            if file.shared:
+                file.shared = None
 
             if permanent:
                 # Hard delete: remove from storage and database
@@ -303,8 +316,8 @@ class FileService:
                         'mime_type': f.mime_type,
                         'parent_folder_id': f.parent_folder_id,
                         'shared': f.shared,
-                        'created_at': f.created_at.strftime('%Y-%m-%d %H:%M:%S'),
-                        'updated_at': f.updated_at.strftime('%Y-%m-%d %H:%M:%S')
+                        'created_at': _fmt_utc8(f.created_at),
+                        'updated_at': _fmt_utc8(f.updated_at)
                     }
                     for f in files
                 ]
@@ -329,7 +342,7 @@ class FileService:
                     'size': f.size,
                     'mime_type': f.mime_type,
                     'parent_folder_id': f.parent_folder_id,
-                    'deleted_at': f.deleted_at.strftime('%Y-%m-%d %H:%M:%S') if f.deleted_at else None,
+                    'deleted_at': _fmt_utc8(f.deleted_at) if f.deleted_at else None,
                     'path': path
                 })
             

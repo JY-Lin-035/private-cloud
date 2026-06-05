@@ -1,6 +1,6 @@
 import os
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 from pathlib import Path
 from secrets import token_hex
@@ -48,7 +48,7 @@ class ShareService:
             share_list = []
             
             for folder in folders:
-                date_str = datetime.fromtimestamp(folder.updated_at.timestamp()).strftime('%Y-%m-%d %H:%M:%S')
+                date_str = datetime.fromtimestamp(folder.updated_at.timestamp(), tz=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
                 # Get folder path
                 path = self.folder_repo.get_folder_path(folder.uuid)
                 path_str = ' / '.join([p['name'] for p in path])
@@ -62,7 +62,7 @@ class ShareService:
                 })
             
             for file in files:
-                date_str = datetime.fromtimestamp(file.updated_at.timestamp()).strftime('%Y-%m-%d %H:%M:%S')
+                date_str = datetime.fromtimestamp(file.updated_at.timestamp(), tz=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
                 # Get file parent folder path
                 if file.parent_folder_id:
                     path = self.folder_repo.get_folder_path(file.parent_folder_id)

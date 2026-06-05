@@ -9,8 +9,8 @@ function Account({ layoutClass = "" }: { layoutClass?: string }) {
 
   return (
     <div className={`h-screen w-screen flex justify-center items-center ${layoutClass}`}>
-      <div className="min-h-[70vh] w-[70vw] flex justify-center items-center">
-        <div className="flex flex-col mr-6">
+      <div className="min-h-[70vh] w-[90vw] sm:w-[80vw] md:w-[70vw] lg:w-[60vw] flex flex-col md:flex-row justify-center items-center">
+        <div className="flex flex-row md:flex-col mb-4 md:mb-0 md:mr-6 gap-2">
           <button
             type="button"
             onClick={() => setMode(true)}
@@ -27,7 +27,7 @@ function Account({ layoutClass = "" }: { layoutClass?: string }) {
           </button>
         </div>
 
-        <div className="w-[50%]">
+        <div className="w-full md:w-[50%]">
           <ol className="relative border-s border-gray-700">
             {mode ? <Mail /> : <Password />}
           </ol>
