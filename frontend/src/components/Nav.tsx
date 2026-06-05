@@ -26,8 +26,8 @@ function Nav({ layoutClass = "" }: { layoutClass?: string }) {
     <nav className={`border-gray-200 bg-gray-800 ${layoutClass}`}>
       <div className="flex flex-wrap items-center justify-between w-full mx-auto py-[1rem] px-[2rem]">
         <a href="#" onClick={handleLogoClick} className="flex items-center space-x-3 rtl:space-x-reverse">
-          <img src={logoImage} className="w-auto h-16" alt="Logo" />
-          <span className="self-center text-[2rem] font-semibold whitespace-nowrap text-white">
+          <img src={logoImage} className="w-auto h-10 sm:h-14 md:h-16" alt="Logo" />
+          <span className="self-center text-xl sm:text-2xl md:text-[2rem] font-semibold whitespace-nowrap text-white">
             Meow
           </span>
         </a>

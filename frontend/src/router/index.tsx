@@ -17,7 +17,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <LoginRegisterPage layoutClass="flex-1 min-h-[700px]" />
+          <LoginRegisterPage layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -30,7 +30,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <ResetPW layoutClass="flex-1 min-h-[700px]" />
+          <ResetPW layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -43,7 +43,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <FileList layoutClass="flex-1 min-h-[700px]" />
+          <FileList layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -56,7 +56,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <ShareList layoutClass="flex-1 min-h-[700px]" />
+          <ShareList layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -69,7 +69,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <DownloadShareFile layoutClass="flex-1 min-h-[700px]" />
+          <DownloadShareFile layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -82,7 +82,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <ShareList layoutClass="flex-1 min-h-[700px]" />
+          <ShareList layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -95,7 +95,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <Trash layoutClass="flex-1 min-h-[700px]" />
+          <Trash layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -108,7 +108,7 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
-          <Account layoutClass="flex-1 min-h-[700px]" />
+          <Account layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
           <Footer layoutClass="flex-0" />
         </div>
       </>
