@@ -8,7 +8,7 @@ from app.constants import FolderValidation
 class Folder(BaseModel):
     __tablename__ = "folders"
 
-    uuid = Column(String(36), primary_key=True, unique=True, index=True, nullable=False)
+    uuid = Column(String(36), unique=True, index=True,  nullable=False)
     owner_id = Column(
         Integer,
         ForeignKey('accounts.id', ondelete='CASCADE'),
