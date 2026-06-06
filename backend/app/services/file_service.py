@@ -117,7 +117,6 @@ class FileService:
                 return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
 
             # Check if file with same name exists in same location
-            from sqlalchemy import select
             existing_file = self.db.execute(
                 select(File).where(
                     File.owner_id == user_id,
@@ -355,7 +354,6 @@ class FileService:
     def _get_file_path(self, folder_uuid: str, user_id: int) -> str:
         """Get the full path of a folder as a string."""
         try:
-            from app.models.folder import Folder
             path_parts = []
             current_folder = self.db.execute(
                 select(Folder).where(Folder.uuid == folder_uuid)
@@ -385,7 +383,6 @@ class FileService:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
             # Get all non-deleted files for the user
-            from sqlalchemy import select
             files = self.db.execute(
                 select(File).where(
                     File.owner_id == user_id,
