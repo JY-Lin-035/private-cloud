@@ -61,6 +61,21 @@ class TestVerificationCode:
         assert len(generate_verification_code(6)) == 6
 
 
+class TestHashToken:
+
+    def test_hash_consistency(self):
+        t = "42|abc123"
+        h1 = hash_token(t)
+        h2 = hash_token(t)
+        assert h1 == h2
+        assert len(h1) > 0
+
+    def test_hash_different(self):
+        h1 = hash_token("token1")
+        h2 = hash_token("token2")
+        assert h1 != h2
+
+
 class TestEmailUtils:
     def test_format(self,):
         assert format_email("Test@Example.com") == "test@example.com"
@@ -79,3 +94,11 @@ class TestFileSize:
         v, u = format_file_size(2048)
         assert abs(v - 2.0) < 0.01
         assert u == "KB"
+
+    def test_target_unit(self):
+        v, _ = format_file_size(1048576, "MB")
+        assert abs(v - 1.0) < 0.01
+
+    def test_invalid_unit(self):
+        v, _ = format_file_size(1024, "XX")
+        assert abs(v - 1024.0) < 0.01
