@@ -51,8 +51,6 @@ class FolderService:
     
     def _soft_delete_children(self, folder_uuid: str):
         """Recursively soft delete all children (folders and files)."""
-        from app.repositories.file_repository import FileRepository
-        from app.models.file import File
         
         file_repo = FileRepository(self.db)
         
@@ -70,10 +68,6 @@ class FolderService:
     def _hard_delete_children(self, folder_uuid: str) -> None:
         """Recursively hard delete all children (folders and files) and their storage files.
         Only responsible for deletion, not size calculation."""
-        from app.repositories.file_repository import FileRepository
-        from app.models.file import File
-        import os
-
         file_repo = FileRepository(self.db)
 
         # Get all child folders
@@ -238,8 +232,6 @@ class FolderService:
             # Recursive function to restore all children under folder_uuid
             def restore_all_children_recursive(parent_uuid: str):
                 """Recursively restore all children (folders and files) under parent_uuid."""
-                from app.models.file import File
-                
                 # Get all child folders
                 child_folders = self.db.execute(
                     select(Folder).where(Folder.parent_id == parent_uuid)
@@ -284,7 +276,6 @@ class FolderService:
             if conflict_folder:
                 # Merge soft-deleted folder into active folder
                 try:
-                    from app.repositories.file_repository import FileRepository
                     file_repo = FileRepository(self.db)
                     
                     total_moved_size = 0
@@ -378,7 +369,6 @@ class FolderService:
             folder.deleted_at = None
             
             # Restore all children
-            from app.repositories.file_repository import FileRepository
             file_repo = FileRepository(self.db)
             
             # Get existing file names in this folder to check for conflicts
