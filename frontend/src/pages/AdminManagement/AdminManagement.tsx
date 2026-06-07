@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { adminApi, type UserInfo } from "../../api/adminApi";
 import { authApi } from "../../api/authApi";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 interface Props {
   layoutClass?: string;
@@ -62,26 +63,33 @@ function AdminPage({ layoutClass = "" }: Props) {
     if (!adminUser) return null;
 
   return (
-    <div className={`min-h-screen bg-gray-900 text-white p-6 ${layoutClass}`}>
-      <h1>User Management</h1>
-      <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search" />
-      <button onClick={() => { setSearch(searchInput); setPage(1); loadUsers(); }}>Search</button>
-      <span>Total: {total}</span>
-      <select value={perPage} onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }}>
-        <option value={5}>5</option>
-        <option value={10}>10</option>
-        <option value={20}>20</option>
-        <option value={50}>50</option>
-      </select>
-      <div className="flex justify-center w-full"><div className="cursor-pointer w-[70vw] overflow-x-auto rounded-lg border border-gray-700 bg-gray-800/50"><table className="w-full table-fixed text-center">
+    <div className={`flex flex-col h-full text-white p-6 ${layoutClass}`}>
+              <div className="w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[1%] flex-1">
+                <div className="mb-4 flex justify-between items-center">
+                  <span>
+                    <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="搜尋" className="border border-white rounded px-3 py-1 w-full sm:w-64" />
+                    <button onClick={() => { setSearch(searchInput); setPage(1); }} className="cursor-pointer border border-white rounded px-3 py-1 text-white hover:bg-white hover:text-gray-800 transition-colors">Search</button>
+                  </span>
+                  <span className="text-sm">
+                    共 {total} 筆, 每頁 &nbsp;&nbsp;
+                    <select value={perPage} onChange={(e) => { setPerPage(Number(e.target.value)); setPage(1); }} className="border border-white rounded px-1 py-1 bg-white text-black">
+                                          <option value={5}>5</option>
+                                          <option value={10}>10</option>
+                                          <option value={20}>20</option>
+                                          <option value={50}>50</option>
+                    </select>
+                    &nbsp; 筆
+                  </span>
+                </div>
+                <div className="flex justify-center w-full"><div className="cursor-pointer w-[70vw] overflow-x-auto rounded-lg border border-gray-700 bg-gray-800/50"><table className="w-full table-fixed text-center">
         <thead>
           <tr>
-            <th className="text-center px-6 py-3 text-sm font-semibold uppercase tracking-wider text-gray-400 w-[18%]">Username</th>
-            <th className="text-center px-6 py-3 text-sm font-semibold uppercase tracking-wider text-gray-400 w-[24%]">Email</th>
-            <th className="text-center px-6 py-3 text-sm font-semibold uppercase tracking-wider text-gray-400 w-[12%]">Used</th>
-            <th className="text-center px-6 py-3 text-sm font-semibold uppercase tracking-wider text-gray-400 w-[250px]">Quota</th>
-            <th className="text-center px-6 py-3 text-sm font-semibold uppercase tracking-wider text-gray-400 w-[12%]">Status</th>
-            <th className="text-center px-6 py-3 text-sm font-semibold uppercase tracking-wider text-gray-400 w-[18%]">Actions</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[18%]">Username</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[24%]">Email</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[12%]">Used</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[250px]">Quota</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[12%]">Status</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[18%]">Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -131,13 +139,16 @@ function AdminPage({ layoutClass = "" }: Props) {
           ))}
         </tbody>
       </table></div></div>
-      {totalPages > 1 && (
-        <div>
-          <button disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button>
-          <span>Page {page} of {totalPages}</span>
-          <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
+    </div>
+      <div className="mt-auto mb-4 flex justify-center items-center gap-2 text-black">
+          <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="cursor-pointer px-3 py-1 border border-white rounded disabled:opacity-50">
+            <ChevronLeft className="w-5 h-5 rtl:rotate-180" />
+          </button>
+          <span>第 {page} / {totalPages} 頁</span>
+          <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="cursor-pointer px-3 py-1 border border-white rounded disabled:opacity-50">
+            <ChevronRight className="w-5 h-5 rtl:rotate-180" />
+          </button>
         </div>
-      )}
     </div>
   );
 }
