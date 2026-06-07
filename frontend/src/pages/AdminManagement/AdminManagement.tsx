@@ -18,6 +18,8 @@ function AdminPage({ layoutClass = "" }: Props) {
   const [perPage, setPerPage] = useState(10);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [editingQuota, setEditingQuota] = useState<number | null>(null);
+  const [quotaEdits, setQuotaEdits] = useState<Record<number, string>>({});
 
   useEffect(() => {
     authApi.checkSession().then((s: any) => {
@@ -46,7 +48,18 @@ function AdminPage({ layoutClass = "" }: Props) {
   }, [loadUsers, adminUser]);
 
   if (loading) return <div>Loading...</div>;
-  if (!adminUser) return null;
+
+    function formatBytes(b: number): string {
+      if (!b || b === 0) return "0 B";
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let i = 0;
+      let v = b;
+      while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+      const n = v < 10 ? v.toFixed(1) : v.toFixed(0);
+      return n + " " + units[i];
+    }
+
+    if (!adminUser) return null;
 
   return (
     <div className={`bg-gray-900 text-white p-6 ${layoutClass}`}>
@@ -76,8 +89,30 @@ function AdminPage({ layoutClass = "" }: Props) {
             <tr key={u.id}>
               <td>{u.username}</td>
               <td>{u.email}</td>
-              <td>{u.used_storage}</td>
-              <td>{u.total_storage}</td>
+              <td>{formatBytes(u.used_storage)}</td>
+              <td>
+                {editingQuota === u.id ? (
+                  <span>
+                    <input
+                      value={quotaEdits[u.id] ?? formatBytes(u.total_storage)}
+                      onChange={(e) => setQuotaEdits(p => ({ ...p, [u.id]: e.target.value }))}
+                      className="w-20 bg-gray-700 text-white px-1 rounded"
+                    />
+                    <button onClick={async () => {
+                      const v = quotaEdits[u.id];
+                      if (v) {
+                        const n = Number(v);
+                        if (!isNaN(n) && n >= 0) { await adminApi.updateQuota(u.id, n); }
+                      }
+                      setEditingQuota(null);
+                      loadUsers();
+                    }}>Save</button>
+                    <button onClick={() => setEditingQuota(null)}>X</button>
+                  </span>
+                ) : (
+                  <span>{formatBytes(u.total_storage)} <button onClick={() => setEditingQuota(u.id)}>Edit</button></span>
+                )}
+              </td>
               <td>{u.online ? "On" : "Off"}{u.enabled ? " En" : " Dis"}</td>
               <td>
                 <button onClick={() => { adminApi.forceLogout(u.id); }}>Logout</button>
