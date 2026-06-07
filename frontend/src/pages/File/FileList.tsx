@@ -63,15 +63,21 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
       setFileList(r.files || []);
       setCurrentFolderUuid(parent_folder_uuid);
     } catch (e) {
-      localStorage.clear();
-      navigate('/');
+      try {
+        const homeFolder = await folderApi.getHome();
+        setCurrentFolderUuid(homeFolder.uuid);
+        navigate(`/file-list/${homeFolder.uuid}`, { replace: true });
+      } catch {
+        localStorage.clear();
+        navigate('/');
+      }
     }
   }
 
   useEffect(() => {
     async function loadInitialFolder() {
       if (folderUuid !== undefined) {
-        getFileList(folderUuid || null);
+        await getFileList(folderUuid || null);
       } else {
         // Load Home folder when no UUID provided
         try {
