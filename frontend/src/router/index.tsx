@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import Nav from '../components/Nav';
 import Footer from '../components/Footer';
+import Home from '../pages/Home/Home';
 import LoginRegisterPage from '../pages/LoginRegister/LoginRegisterPage';
 import ResetPW from '../pages/ResetPW/ResetPW';
 import FileList from '../pages/File/FileList';
@@ -12,6 +13,19 @@ import Trash from '../pages/File/Trash';
 const router = createBrowserRouter([
   {
     path: '/',
+    element: (
+      <>
+        <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
+        <div className="flex flex-col h-screen">
+          <Nav layoutClass="flex-0" />
+          <Home layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+          <Footer layoutClass="flex-0" />
+        </div>
+      </>
+    ),
+  },
+  {
+    path: '/login',
     element: (
       <>
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>

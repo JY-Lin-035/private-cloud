@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 from redis import Redis
+import json
 from app.schemas.account import (
     RegisterRequest, LoginRequest, ModifyEmailRequest, 
     ModifyPasswordRequest, ResetPasswordRequest, GetCodeRequest,
@@ -9,8 +10,9 @@ from app.schemas.account import (
 from app.services.account_service import AccountService
 from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
-from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service, get_account_service
+from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user, get_email_service, get_account_service
 from app.api.rate_limit import rate_limit
+from app.config import settings
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -245,15 +247,58 @@ async def reset_password(
 
 
 @router.get("/checkSession")
-async def check_session(user_id: int = Depends(get_current_user_id)):
-    """Check if user session is valid."""
+async def check_session(request: Request):
+    """Check if user session is valid and return user data. Returns anonymous if not logged in."""
     try:
-        logger.info(f"Check session request received, user_id: {user_id}")
-        logger.info("Session valid")
-        return Response(status_code=200)
+        session_token = request.cookies.get('session')
+        if not session_token:
+            return {"authenticated": False}
+        
+        # Validate session format
+        if '|' not in session_token:
+            return {"authenticated": False}
+        
+        user_id_str, tok_value = session_token.split('|', 1)
+        try:
+            user_id = int(user_id_str)
+        except ValueError:
+            return {"authenticated": False}
+        
+        # Check Redis
+        redis_client = Redis.from_url(settings.REDIS_URL)
+        try:
+            stored_token = redis_client.get(f"session:{user_id}")
+            if not stored_token:
+                return {"authenticated": False}
+            if isinstance(stored_token, bytes):
+                stored_token = stored_token.decode()
+            if stored_token != session_token:
+                return {"authenticated": False}
+                
+            user_data = redis_client.get(f"session_data:{user_id}")
+            if not user_data:
+                return {"authenticated": False}
+            if isinstance(user_data, bytes):
+                user_data = user_data.decode()
+            user_dict = json.loads(user_data)
+            
+            # Extend session
+            redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            
+            logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
+            return {
+                "authenticated": True,
+                "id": user_dict.get("user_id"),
+                "username": user_dict.get("username"),
+                "email": user_dict.get("email"),
+                "identity": user_dict.get("identity")
+            }
+        finally:
+            redis_client.close()
     except Exception as e:
         logger.error(f"Check session endpoint error: {e}")
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return {"authenticated": False}
 
 
 @router.post("/admin/recalculate-user-storage")
