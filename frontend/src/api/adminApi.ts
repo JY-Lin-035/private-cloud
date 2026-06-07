@@ -25,7 +25,7 @@ export interface UserListResponse {
 
 export const adminApi = {
   getUsers(page: number = 1, perPage: number = 10, search: string = ''): Promise<UserListResponse> {
-      return api.get('/admin/users', { params: { page, perPage, search } }).then(r => r.data);
+      return api.get('/admin/users', { params: { page, per_page: perPage, search } }).then(r => r.data);
     },
 
     updateQuota(userId: number, totalStorage: number) {
