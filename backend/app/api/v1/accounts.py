@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query
 from sqlalchemy.orm import Session
 from redis import Redis
+import json
 from app.schemas.account import (
     RegisterRequest, LoginRequest, ModifyEmailRequest, 
     ModifyPasswordRequest, ResetPasswordRequest, GetCodeRequest,
@@ -9,9 +10,13 @@ from app.schemas.account import (
 from app.services.account_service import AccountService
 from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
-from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service, get_account_service
+from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user, get_email_service, get_account_service
 from app.api.rate_limit import rate_limit
+from app.config import settings
 from app.utils import logger as log
+from app.models.account import Account
+from app.constants import Identity
+from sqlalchemy import select, func
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 logger = log.get_logger("accounts_api.log")
@@ -245,15 +250,58 @@ async def reset_password(
 
 
 @router.get("/checkSession")
-async def check_session(user_id: int = Depends(get_current_user_id)):
-    """Check if user session is valid."""
+async def check_session(request: Request):
+    """Check if user session is valid and return user data. Returns anonymous if not logged in."""
     try:
-        logger.info(f"Check session request received, user_id: {user_id}")
-        logger.info("Session valid")
-        return Response(status_code=200)
+        session_token = request.cookies.get('session')
+        if not session_token:
+            return {"authenticated": False}
+        
+        # Validate session format
+        if '|' not in session_token:
+            return {"authenticated": False}
+        
+        user_id_str, tok_value = session_token.split('|', 1)
+        try:
+            user_id = int(user_id_str)
+        except ValueError:
+            return {"authenticated": False}
+        
+        # Check Redis
+        redis_client = Redis.from_url(settings.REDIS_URL)
+        try:
+            stored_token = redis_client.get(f"session:{user_id}")
+            if not stored_token:
+                return {"authenticated": False}
+            if isinstance(stored_token, bytes):
+                stored_token = stored_token.decode()
+            if stored_token != session_token:
+                return {"authenticated": False}
+                
+            user_data = redis_client.get(f"session_data:{user_id}")
+            if not user_data:
+                return {"authenticated": False}
+            if isinstance(user_data, bytes):
+                user_data = user_data.decode()
+            user_dict = json.loads(user_data)
+            
+            # Extend session
+            redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            
+            logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
+            return {
+                "authenticated": True,
+                "id": user_dict.get("user_id"),
+                "username": user_dict.get("username"),
+                "email": user_dict.get("email"),
+                "identity": user_dict.get("identity")
+            }
+        finally:
+            redis_client.close()
     except Exception as e:
         logger.error(f"Check session endpoint error: {e}")
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return {"authenticated": False}
 
 
 @router.post("/admin/recalculate-user-storage")
@@ -336,3 +384,105 @@ async def recalculate_user_storage(
     except Exception as e:
         logger.error(f"Storage recalculation error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+def _admin_required(request) -> dict:
+    if not hasattr(request.state, 'user'):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if request.state.user.get("identity") != Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return request.state.user
+
+
+@router.get("/admin/users")
+async def admin_list_users(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=1, le=100),
+    search: str = Query("", max_length=100),
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    logger.info(f"[Admin] list users page={page} per_page={per_page} search={search}")
+    query = db.query(Account).filter(Account.identity != Identity.ADMIN)
+    if search:
+        pat = f"%{search}%"
+        query = query.filter(Account.name.ilike(pat) | Account.email.ilike(pat))
+    total = query.count()
+    users = query.offset((page - 1) * per_page).limit(per_page).all()
+    result = []
+    for u in users:
+        online = bool(redis_client.exists(f"session:{u.id}"))
+        us = u.used_size or 0
+        ts = u.total_file_size or 0
+        result.append({
+            "id": u.id,
+            "username": u.name,
+            "email": u.email,
+            "used_storage": us,
+            "total_storage": ts,
+            "enabled": bool(u.enable),
+            "online": online
+        })
+    return {
+        "users": result,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, (total - 1) // per_page + 1)
+    }
+
+
+@router.put("/admin/users/{user_id}/quota")
+async def admin_update_quota(
+    request: Request,
+    user_id: int,
+    total_storage: int = Query(..., ge=0),
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.identity == Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot modify admin account")
+    account.total_file_size = total_storage
+    db.commit()
+    return {"message": "success", "total_storage": total_storage}
+
+
+@router.post("/admin/users/{user_id}/force-logout")
+async def admin_force_logout(
+    request: Request,
+    user_id: int,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.identity == Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot force logout admin")
+    redis_client.delete(f"session:{user_id}")
+    redis_client.delete(f"session_data:{user_id}")
+    return {"message": "User logged out successfully"}
+
+
+@router.put("/admin/users/{user_id}/toggle-enable")
+async def admin_toggle_enable(
+    request: Request,
+    user_id: int,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.identity == Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot disable admin user")
+    account.enable = not account.enable
+    db.commit()
+    return {"enabled": account.enable}

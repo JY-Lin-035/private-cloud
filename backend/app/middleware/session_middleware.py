@@ -17,7 +17,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         # Skip session validation for public endpoints
-        public_paths = ['/api/accounts/login', '/api/accounts/register', '/api/accounts/getCode', '/api/accounts/verifyEmail']
+        public_paths = ['/api/accounts/login', '/api/accounts/register', '/api/accounts/getCode', '/api/accounts/verifyEmail', '/api/accounts/resetPW', '/api/accounts/checkSession', '/api/email/verify/', '/api/share/downloadFile']
         if any(request.url.path.startswith(path) for path in public_paths):
             return await call_next(request)
 

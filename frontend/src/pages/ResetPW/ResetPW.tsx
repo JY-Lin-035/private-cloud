@@ -25,12 +25,6 @@ function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
   async function checkSession() {
     try {
       await authApi.checkSession();
-      const previousFolderUuid = localStorage.getItem('previousFolderUuid');
-      if (!previousFolderUuid) {
-        navigate('/file-list');
-      } else {
-        navigate(`/file-list/${previousFolderUuid}`);
-      }
     } catch (e) {
       localStorage.clear();
       localStorage.setItem('previousFolderUuid', '');
@@ -159,7 +153,7 @@ function ResetPW({ layoutClass = "" }: { layoutClass?: string }) {
   }
 
   return (
-    <div className={`flex items-center justify-center bg-gray-500 ${layoutClass}`}>
+    <div className={`flex items-center justify-center bg-gray-800 ${layoutClass}`}>
       <Notices
         inputShow={inputShow}
         notices={response}

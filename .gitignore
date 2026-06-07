@@ -3,6 +3,7 @@
 
 backend/.env
 backend/backend.md
+backend/scripts/
 backend/plan.md
 backend/README-Backend.md
 backend/README.md
