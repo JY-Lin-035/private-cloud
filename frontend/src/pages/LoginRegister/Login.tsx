@@ -35,7 +35,7 @@ function Login({ onFlip, onNotice }: LoginProps) {
       localStorage.setItem("email", r.email);
       setUserName('');
       setPW('');
-      navigate('/file-list');
+      navigate('/');
     } catch (e: any) {
       onNotice([e.message], 'text-red-500');
     }

@@ -25,16 +25,13 @@ function Nav({ layoutClass = '' }: { layoutClass?: string }) {
 
   const isPublic =
     location.pathname === '/' ||
-    location.pathname === '/login' ||
     location.pathname === '/forget-password' ||
     location.pathname.startsWith('/share/');
 
+  const isLoginPage = location.pathname === '/login';
+
   function handleLogoClick() {
-    if (isPublic) {
-      navigate('/');
-    } else {
-      navigate('/file-list');
-    }
+    navigate('/');
   }
 
   return (
@@ -44,13 +41,18 @@ function Nav({ layoutClass = '' }: { layoutClass?: string }) {
                   <img src={logoImage} className='w-auto h-10 sm:h-14 md:h-16' alt='Logo' />
                   <h2 className='self-center text-xl sm:text-2xl md:text-[2rem] font-semibold whitespace-nowrap text-white'>Meow</h2>
                 </a>
-        {!isPublic && <Drawer />}
-        {isPublic && !loggedIn && !loading && (
-          <button onClick={() => navigate('/login')} className='px-3 py-2 bg-blue-600 text-white rounded-md'>
-            Login
-          </button>
-        )}
-        {isPublic && loggedIn && !loading && <Drawer />}
+        {!isPublic && !isLoginPage && <Drawer />}
+                {isLoginPage && !loading && (
+                  <button onClick={() => navigate('/')} className='px-3 py-2 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-md cursor-pointer'>
+                    Home
+                  </button>
+                )}
+                {isPublic && !loggedIn && !loading && (
+                  <button onClick={() => navigate('/login')} className='px-3 py-2 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-md cursor-pointer'>
+                    Login
+                  </button>
+                )}
+                {(isPublic && loggedIn && !loading) && <Drawer />}
       </div>
     </nav>
   );
