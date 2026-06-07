@@ -36,7 +36,7 @@ function Drawer() {
     <>
       <div className="text-center">
         <button
-          className="px-3 py-2 mb-2 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600"
+          className="px-3 py-2 mb-2 text-sm font-medium text-white bg-gradient-to-r from-blue-400 to-cyan-400 rounded-lg hover:shadow-xl transition-all cursor-pointer"
           type="button"
           onClick={() => setIsOpen(true)}
         >
