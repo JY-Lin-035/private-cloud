@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree } from 'lucide-react';
+import { Menu, Cloud, Settings, LogOut,  Share2, User, Trash2, FolderInput, FolderTree } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import { authApi } from '../api/authApi';
 
@@ -9,7 +9,16 @@ function Drawer() {
   const [isOpen, setIsOpen] = useState(false);
   const [cloudOpen, setCloudOpen] = useState(false);
   const [settingOpen, setSettingOpen] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    authApi.checkSession().then(s => {
+      if (s.authenticated && s.identity === 1) {
+        setIsAdmin(true);
+      }
+    });
+  }, []);
 
   async function signOut() {
     try {
@@ -27,7 +36,7 @@ function Drawer() {
     <>
       <div className="text-center">
         <button
-          className="px-3 py-2 mb-2 text-sm font-medium text-white bg-blue-500 rounded-lg hover:bg-blue-600"
+          className="px-3 py-2 mb-2 text-sm font-medium text-white bg-gradient-to-r from-blue-400 to-cyan-400 rounded-lg hover:shadow-xl transition-all cursor-pointer"
           type="button"
           onClick={() => setIsOpen(true)}
         >
@@ -148,6 +157,17 @@ function Drawer() {
                           <span>Account</span>
                         </button>
                       </li>
+                      {isAdmin && (
+                      <li>
+                        <button
+                          onClick={() => { navigate('/setting/user-management'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 margin:bg-gray-700 cursor-pointer"
+                        >
+                          <User className="w-6 h-6 mr-2 text-white" />
+                          <span>User Management</span>
+                        </button>
+                      </li>
+                    )}
                     </ul>
                   )}
                 </li>

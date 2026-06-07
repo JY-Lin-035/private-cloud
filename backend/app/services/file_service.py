@@ -57,6 +57,13 @@ class FileService:
     def get_file_list(self, user_id: int, parent_folder_uuid: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get list of files in a folder."""
         try:
+            # Verify folder belongs to user (if parent_folder_uuid given)
+            if parent_folder_uuid:
+                folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
+                if not folder:
+                    return {"error": "Folder not found", "stateCode": HTTPStatus.NOT_FOUND}
+                if folder.owner_id != user_id:
+                    return {"error": "Forbidden", "stateCode": HTTPStatus.FORBIDDEN}
             files = self.file_repo.get_by_folder(parent_folder_uuid) if parent_folder_uuid else []
             folders = self.folder_repo.get_by_parent(parent_folder_uuid) if parent_folder_uuid else self.folder_repo.get_by_owner(user_id)
             
@@ -117,7 +124,6 @@ class FileService:
                 return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
 
             # Check if file with same name exists in same location
-            from sqlalchemy import select
             existing_file = self.db.execute(
                 select(File).where(
                     File.owner_id == user_id,
@@ -355,7 +361,6 @@ class FileService:
     def _get_file_path(self, folder_uuid: str, user_id: int) -> str:
         """Get the full path of a folder as a string."""
         try:
-            from app.models.folder import Folder
             path_parts = []
             current_folder = self.db.execute(
                 select(Folder).where(Folder.uuid == folder_uuid)
@@ -385,7 +390,6 @@ class FileService:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
             # Get all non-deleted files for the user
-            from sqlalchemy import select
             files = self.db.execute(
                 select(File).where(
                     File.owner_id == user_id,

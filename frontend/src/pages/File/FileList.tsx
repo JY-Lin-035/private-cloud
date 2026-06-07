@@ -63,15 +63,21 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
       setFileList(r.files || []);
       setCurrentFolderUuid(parent_folder_uuid);
     } catch (e) {
-      localStorage.clear();
-      navigate('/');
+      try {
+        const homeFolder = await folderApi.getHome();
+        setCurrentFolderUuid(homeFolder.uuid);
+        navigate(`/file-list/${homeFolder.uuid}`, { replace: true });
+      } catch {
+        localStorage.clear();
+        navigate('/');
+      }
     }
   }
 
   useEffect(() => {
     async function loadInitialFolder() {
       if (folderUuid !== undefined) {
-        getFileList(folderUuid || null);
+        await getFileList(folderUuid || null);
       } else {
         // Load Home folder when no UUID provided
         try {
@@ -378,7 +384,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         </div>
 
         <div
-          className="max-h-[60vh] hide-scrollbar overflow-x-auto overflow-y-auto shadow-[0.8rem_0.8rem_2.5rem_white] rounded-[2rem] border-2 border-white"
+          className="max-h-[60vh] scrollbar-hide overflow-x-auto overflow-y-auto shadow-[0.8rem_0.8rem_2.5rem_white] rounded-[2rem] border-2 border-white"
         >
           <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>

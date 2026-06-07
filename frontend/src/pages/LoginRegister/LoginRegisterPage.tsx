@@ -14,19 +14,21 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
   const [IN, setIN] = useState(false);
 
   const checkSession = async () => {
-    try {
-      await authApi.checkSession();
-      const previousFolderUuid = localStorage.getItem('previousFolderUuid');
-      if (!previousFolderUuid) {
-        navigate('/file-list');
-      } else {
-        navigate(`/file-list/${previousFolderUuid}`);
+      try {
+        const data = await authApi.checkSession();
+        if (data.authenticated) {
+          const previousFolderUuid = localStorage.getItem('previousFolderUuid');
+          if (!previousFolderUuid) {
+            navigate('/');
+          } else {
+            navigate('/');
+          }
+        }
+      } catch (e) {
+        localStorage.clear();
+        localStorage.setItem('previousFolderUuid', '');
       }
-    } catch (e) {
-      localStorage.clear();
-      localStorage.setItem('previousFolderUuid', '');
-    }
-  };
+    };
 
   useEffect(() => {
     checkSession();
