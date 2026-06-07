@@ -19,9 +19,9 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
         if (data.authenticated) {
           const previousFolderUuid = localStorage.getItem('previousFolderUuid');
           if (!previousFolderUuid) {
-            navigate('/file-list');
+            navigate('/');
           } else {
-            navigate(`/file-list/${previousFolderUuid}`);
+            navigate('/');
           }
         }
       } catch (e) {
