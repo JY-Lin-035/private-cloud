@@ -8,6 +8,7 @@ import FileList from '../pages/File/FileList';
 import ShareList from '../pages/File/ShareList';
 import DownloadShareFile from '../pages/File/DownloadShareFile';
 import Account from '../pages/Setting/Account';
+import AdminPage from '../pages/AdminManagement/AdminManagement';
 import Trash from '../pages/File/Trash';
 
 const router = createBrowserRouter([
@@ -123,15 +124,28 @@ const router = createBrowserRouter([
         <div className="flex flex-col h-screen">
           <Nav layoutClass="flex-0" />
           <Account layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
-          <Footer layoutClass="flex-0" />
-        </div>
-      </>
-    ),
-  },
-  {
-    path: '*',
-    element: <Navigate to="/" replace />,
-  },
-]);
+                    <Footer layoutClass="flex-0" />
+                  </div>
+                </>
+              ),
+            },
+            {
+              path: '/setting/user-management',
+              element: (
+                <>
+                  <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
+                  <div className="flex flex-col h-screen">
+                    <Nav layoutClass="flex-0" />
+                    <AdminPage layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+                    <Footer layoutClass="flex-0" />
+                  </div>
+                </>
+              ),
+            },
+            {
+              path: '*',
+              element: <Navigate to="/" replace />,
+            },
+          ]);
 
-export default router;
+          export default router;
