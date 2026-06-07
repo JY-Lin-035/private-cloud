@@ -21,6 +21,7 @@ function AdminPage({ layoutClass = "" }: Props) {
   const [search, setSearch] = useState("");
   const [editingQuota, setEditingQuota] = useState<number | null>(null);
   const [quotaEdits, setQuotaEdits] = useState<Record<number, string>>({});
+  const [togglingId, setTogglingId] = useState<number | null>(null);
 
   useEffect(() => {
     authApi.checkSession().then((s: any) => {
@@ -132,7 +133,16 @@ function AdminPage({ layoutClass = "" }: Props) {
                                 {u.online && (
                                   <button onClick={() => { adminApi.forceLogout(u.id); loadUsers(); }} className="cursor-pointer px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-colors">Logout</button>
                                 )}
-                                <button onClick={() => { adminApi.toggleEnabled(u.id); loadUsers(); }} className={`cursor-pointer px-3 py-1 text-sm font-medium rounded transition-colors ${u.enabled ? "bg-red-600 hover:bg-red-700 text-white" : "bg-green-600 hover:bg-green-700 text-white"}`}>{u.enabled ? "Disable" : "Enable"}</button>
+                                <button
+                                  onClick={async () => {
+                                    if (togglingId === u.id) return;
+                                    setTogglingId(u.id);
+                                    await adminApi.toggleEnabled(u.id);
+                                    await loadUsers();
+                                    setTogglingId(null);
+                                  }}
+                                  className={`cursor-pointer px-3 py-1 text-sm font-medium rounded transition-colors ${u.enabled ? "bg-red-600 hover:bg-red-700 text-white" : "bg-green-600 hover:bg-green-700 text-white"} ${togglingId === u.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                                >{u.enabled ? "Disable" : "Enable"}</button>
                               </div>
                             </td>
             </tr>
