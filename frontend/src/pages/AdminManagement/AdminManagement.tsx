@@ -82,7 +82,7 @@ function AdminPage({ layoutClass = "" }: Props) {
                     &nbsp; 筆
                   </span>
                 </div>
-                <div className="flex justify-center w-full"><div className="cursor-pointer w-[70vw] overflow-x-auto rounded-lg border border-gray-700 bg-gray-800/50"><table className="w-full table-fixed text-center">
+                <div className="flex justify-center w-full"><div className="cursor-pointer w-[70vw] overflow-x-auto scrollbar-hide rounded-lg border border-gray-700 bg-gray-800/50"><table className="w-full table-fixed text-center">
         <thead>
           <tr>
             <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[18%]">Username</th>

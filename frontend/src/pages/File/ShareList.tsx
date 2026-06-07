@@ -172,7 +172,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
         </div>
 
         <div
-          className="max-h-[60vh] hide-scrollbar overflow-x-auto overflow-y-auto shadow-[0.8rem_0.8rem_2.5rem_white] rounded-[2rem] border-2 border-white"
+          className="max-h-[60vh] scrollbar-hide overflow-x-auto overflow-y-auto shadow-[0.8rem_0.8rem_2.5rem_white] rounded-[2rem] border-2 border-white"
         >
           <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>
