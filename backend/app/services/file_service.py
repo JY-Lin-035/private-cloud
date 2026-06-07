@@ -57,6 +57,13 @@ class FileService:
     def get_file_list(self, user_id: int, parent_folder_uuid: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get list of files in a folder."""
         try:
+            # Verify folder belongs to user (if parent_folder_uuid given)
+            if parent_folder_uuid:
+                folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
+                if not folder:
+                    return {"error": "Folder not found", "stateCode": HTTPStatus.NOT_FOUND}
+                if folder.owner_id != user_id:
+                    return {"error": "Forbidden", "stateCode": HTTPStatus.FORBIDDEN}
             files = self.file_repo.get_by_folder(parent_folder_uuid) if parent_folder_uuid else []
             folders = self.folder_repo.get_by_parent(parent_folder_uuid) if parent_folder_uuid else self.folder_repo.get_by_owner(user_id)
             
