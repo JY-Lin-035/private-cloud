@@ -61,46 +61,50 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
           </span>
         </h1>
         <div className='mt-6 h-8 md:h-10'>
-          <span className='text-lg text-cyan-300 font-mono tracking-wide'>
+          <span className='text-lg text-cyan-300 tracking-wide'>
             {currentText.slice(0, charPos)}
             <span className='animate-pulse inline-block w-[2px] h-5 bg-cyan-300 ml-0.5 align-middle'>&nbsp;</span>
           </span>
         </div>
-        <div className='mt-8 flex flex-col sm:flex-row gap-4'>
-          {session.authenticated ? (
-            <button
-              onClick={() => navigate('/')}
-              className='px-8 py-3 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all cursor-pointer'
-            >
-              Enter Dashboard <ArrowRight className='inline ml-2 w-4 h-4' />
-            </button>
-          ) : (
-            <button
-              onClick={() => navigate('/login')}
-              className='px-8 py-3 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all cursor-pointer'
-            >
-              Login Now <ArrowRight className='inline ml-2 w-4 h-4' />
-            </button>
-          )}
-          <a
-            href='https://github.com/JY-Lin-035'
-            target='_blank'
-            rel='noopener noreferrer'
-            className='px-8 py-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-xl font-semibold
-            hover:bg-gray-700 transition-all inline-flex items-center gap-2 cursor-pointer'
-          >
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
-            GitHub
-          </a>
-          <a
-            href='mailto:JY@junmail.abrdns.com'
-            className='px-8 py-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-xl font-semibold
-            hover:bg-gray-700 transition-all inline-flex items-center gap-2 cursor-pointer'
-          >
-            <Mail className='w-5 h-5' />
-            Contact
-          </a>
-        </div>
+        <div className='mt-8 flex flex-col items-center gap-6'>
+                  <div className='flex flex-col sm:flex-row gap-4'>
+                    {session.authenticated ? (
+                      <button
+                        onClick={() => navigate('/file-list')}
+                        className='px-8 py-3 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all cursor-pointer'
+                      >
+                        Enter Cloud <ArrowRight className='inline ml-2 w-4 h-4' />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => navigate('/login')}
+                        className='px-8 py-3 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all cursor-pointer'
+                      >
+                        Login Now <ArrowRight className='inline ml-2 w-4 h-4' />
+                      </button>
+                    )}
+                  </div>
+                  <div className='flex flex-row gap-4'>
+                    <a
+                      href='https://github.com/JY-Lin-035'
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      className='px-8 py-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-xl font-semibold
+                      hover:bg-gray-700 transition-all inline-flex items-center gap-2 cursor-pointer'
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+                      GitHub
+                    </a>
+                    <a
+                      href='mailto:JY@junmail.abrdns.com'
+                      className='px-8 py-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-xl font-semibold
+                      hover:bg-gray-700 transition-all inline-flex items-center gap-2 cursor-pointer'
+                    >
+                      <Mail className='w-5 h-5' />
+                      Contact
+                    </a>
+                  </div>
+                </div>
       </div>
     </div>
   );
