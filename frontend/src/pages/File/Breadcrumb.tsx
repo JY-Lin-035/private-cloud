@@ -120,7 +120,7 @@ function Breadcrumb({ currentFolderUuid }: BreadcrumbProps) {
 
               {dropdownOpen && (
                 <ul
-                  className="absolute max-h-[50vh] hide-scrollbar overflow-x-auto overflow-y-auto w-fit top-full left-0 mt-2 bg-gray-300 border border-blue-300 rounded-[1rem] shadow-md z-10"
+                  className="absolute max-h-[50vh] scrollbar-hide overflow-x-auto overflow-y-auto w-fit top-full left-0 mt-2 bg-gray-300 border border-blue-300 rounded-[1rem] shadow-md z-10"
                   onMouseLeave={() => setDropdownOpen(false)}
                 >
                   {hiddenBreadcrumbs.map((item, index) => (
