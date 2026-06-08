@@ -93,8 +93,8 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 max_age=settings.TOKEN_EXPIRE_TIME * 60,
                 path='/',
                 httponly=True,
-                samesite='lax',
-                secure=False
+                samesite='none',
+                secure=True
             )
         
         return response
