@@ -27,7 +27,10 @@ logger = log.get_logger("main.log")
 # Add CORS middleware - must use explicit origins when credentials=True
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://extraction-runner-same-you.trycloudflare.com",
+        "https://meowcloud.gleeze.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

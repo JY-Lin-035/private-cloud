@@ -10,7 +10,7 @@ export const api = axios.create({
 });
 
 // Response interceptor for error handling
-const publicPaths = ['/', '/forget-password', '/register'];
+const publicPaths = ['/', '/login', '/forget-password', '/register'];
 api.interceptors.response.use(
   (response) => response,
   (error) => {
