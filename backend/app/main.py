@@ -3,8 +3,6 @@ from redis import Redis
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 
 from app.config import settings
@@ -36,8 +34,7 @@ app.add_middleware(
 )
 
 # Database setup
-engine = create_engine(settings.DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from app.database import engine, SessionLocal
 
 # Redis client
 redis_client = Redis.from_url(
