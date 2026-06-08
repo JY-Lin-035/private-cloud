@@ -1,9 +1,4 @@
-import axios from 'axios';
-
-const api = axios.create({
-  baseURL: '/api/accounts',
-  withCredentials: true,
-});
+import { api } from './api';
 
 export interface UserInfo {
   id: number;
@@ -24,19 +19,19 @@ export interface UserListResponse {
 }
 
 export const adminApi = {
-  getUsers(page: number = 1, perPage: number = 10, search: string = ''): Promise<UserListResponse> {
-      return api.get('/admin/users', { params: { page, per_page: perPage, search } }).then(r => r.data);
-    },
+  getUsers(page: number = 1, perPage: number = 10, search: string = '') {
+    return api.get('/api/accounts/admin/users', { params: { page, per_page: perPage, search } }).then(r => r.data);
+  },
 
-    updateQuota(userId: number, totalStorage: number) {
-      return api.put('/admin/users/' + userId + '/quota', null, { params: { total_storage: totalStorage } }).then(r => r.data);
-    },
+  updateQuota(userId: number, totalStorage: number) {
+    return api.put('/api/accounts/admin/users/' + userId + '/quota', null, { params: { total_storage: totalStorage } }).then(r => r.data);
+  },
 
-    forceLogout(userId: number) {
-      return api.post('/admin/users/' + userId + '/force-logout').then(r => r.data);
-    },
+  forceLogout(userId: number) {
+    return api.post('/api/accounts/admin/users/' + userId + '/force-logout').then(r => r.data);
+  },
 
-    toggleEnabled(userId: number) {
-      return api.put('/admin/users/' + userId + '/toggle-enable').then(r => r.data);
-    }
-  };
+  toggleEnabled(userId: number) {
+    return api.put('/api/accounts/admin/users/' + userId + '/toggle-enable').then(r => r.data);
+  },
+};
