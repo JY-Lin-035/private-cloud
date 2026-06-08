@@ -83,7 +83,7 @@ function AdminPage({ layoutClass = "" }: Props) {
                   </span>
                 </div>
                 {/* Mobile cards — visible on < sm */}
-                <div className="block sm:hidden space-y-4">
+                <div className="block sm:hidden max-h-[60vh] overflow-y-auto space-y-4">
                   {users.map((u: UserInfo) => (
                     <div key={u.id} className="bg-gray-800/50 rounded-lg border border-gray-700 p-4 space-y-3">
                       <div className="flex justify-between items-start gap-2">
