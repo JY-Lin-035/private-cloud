@@ -64,9 +64,9 @@ function AdminPage({ layoutClass = "" }: Props) {
     if (!adminUser) return null;
 
   return (
-    <div className={`flex flex-col h-full text-white p-6 ${layoutClass}`}>
-              <div className="w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[1%] flex-1">
-                <div className="mb-4 flex justify-between items-center">
+    <div className={`flex flex-col h-full text-white p-4 sm:p-6 ${layoutClass}`}>
+              <div className="w-full max-w-7xl mx-auto mt-[1%] flex-1">
+                <div className="mb-4 flex flex-col sm:flex-row justify-between items-center gap-2">
                   <span>
                     <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="搜尋" className="border border-white rounded px-3 py-1 w-full sm:w-64" />
                     <button onClick={() => { setSearch(searchInput); setPage(1); }} className="cursor-pointer border border-white rounded px-3 py-1 text-white hover:bg-white hover:text-gray-800 transition-colors">Search</button>
@@ -86,7 +86,7 @@ function AdminPage({ layoutClass = "" }: Props) {
         <thead>
           <tr>
             <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[18%]">Username</th>
-            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[24%]">Email</th>
+            <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[24%] hidden md:table-cell">Email</th>
             <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[12%]">Used</th>
             <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[250px]">Quota</th>
             <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[12%]">Status</th>
@@ -97,7 +97,7 @@ function AdminPage({ layoutClass = "" }: Props) {
           {users.map((u: UserInfo) => (
             <tr className="hover:bg-gray-800/50 transition-colors border-b border-gray-700/50" key={u.id}>
               <td>{u.username}</td>
-              <td>{u.email}</td>
+              <td className="hidden md:table-cell">{u.email}</td>
               <td>{formatBytes(u.used_storage)}</td>
               <td>
                 {editingQuota === u.id ? (
@@ -150,7 +150,7 @@ function AdminPage({ layoutClass = "" }: Props) {
         </tbody>
       </table></div></div>
     </div>
-      <div className="mt-auto mb-4 flex justify-center items-center gap-2 text-black">
+      <div className="mt-auto mb-4 flex justify-center items-center gap-2 text-white">
           <button disabled={page <= 1} onClick={() => setPage(page - 1)} className="cursor-pointer px-3 py-1 border border-white rounded disabled:opacity-50">
             <ChevronLeft className="w-5 h-5 rtl:rotate-180" />
           </button>
