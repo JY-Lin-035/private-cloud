@@ -64,7 +64,7 @@ function AdminPage({ layoutClass = "" }: Props) {
     if (!adminUser) return null;
 
   return (
-    <div className={`flex flex-col h-full text-white p-4 sm:p-6 ${layoutClass}`}>
+    <div className={`flex flex-col min-h-screen text-white p-4 sm:p-6 ${layoutClass}`}>
               <div className="w-full max-w-7xl mx-auto mt-[1%] flex-1">
                 <div className="mb-4 flex flex-col sm:flex-row justify-between items-center gap-2">
                   <span>
@@ -82,7 +82,75 @@ function AdminPage({ layoutClass = "" }: Props) {
                     &nbsp; 筆
                   </span>
                 </div>
-                <div className="flex justify-center w-full"><div className="max-h-[60vh] overflow-y-auto scrollbar-hide w-[70vw] overflow-x-auto scrollbar-hide rounded-lg border border-gray-700 bg-gray-800/50"><table className="w-full table-fixed text-center">
+                {/* Mobile cards — visible on < sm */}
+                <div className="block sm:hidden max-h-[60vh] overflow-y-auto space-y-4">
+                  {users.map((u: UserInfo) => (
+                    <div key={u.id} className="bg-gray-800/50 rounded-lg border border-gray-700 p-4 space-y-3">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-cyan-400 truncate">{u.username}</div>
+                          <div className="text-xs text-gray-400 truncate">{u.email}</div>
+                        </div>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${u.online ? "bg-green-900/30 text-green-400 ring-green-500/30" : u.enabled ? "bg-red-900/30 text-red-400 ring-red-500/30" : "bg-red-900/30 text-red-400 ring-red-500/30"}`}>
+                          {u.online ? "Online" : u.enabled ? "Offline" : "Disabled"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-400">Used: <span className="text-white">{formatBytes(u.used_storage)}</span></span>
+                        <span className="text-gray-400">Quota: <span className="text-white">{formatBytes(u.total_storage)}</span></span>
+                      </div>
+                      {/* Quota edit */}
+                      {editingQuota === u.id ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <input
+                            value={quotaEdits[u.id] ?? u.total_storage}
+                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                              setQuotaEdits(p => ({ ...p, [u.id]: e.target.value }));
+                            }}
+                            type="number" min="0"
+                            className="w-32 bg-gray-700 text-white px-2 py-1 rounded text-sm border border-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500"
+                          />
+                          <button onClick={async () => {
+                            const n = Number(quotaEds[u.id]);
+                            if (!isNaN(n) && n >= 0) {
+                              await adminApi.updateQuota(u.id, n);
+                            }
+                            setEditingQuota(null);
+                            loadUsers();
+                            }} className="cursor-pointer px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded transition-colors">Save</button>
+                          <button onClick={() => setEditingQuota(null)}
+                            className="cursor-pointer px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-colors">X</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setEditingQuota(u.id)}
+                          className="cursor-pointer w-full px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded transition-colors"
+                        >Edit Quota</button>
+                      )}
+                      <div className="flex gap-2 justify-stretch">
+                        {u.online && (
+                          <button onClick={() => { adminApi.forceLogout(u.id); loadUsers(); }}
+                            className="cursor-pointer flex-1 px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded transition-colors"
+                          >Logout</button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            if (togglingId === u.id) return;
+                            setTogglingId(u.id);
+                            await adminApi.toggleEnabled(u.id);
+                            await loadUsers();
+                            setTogglingId(null);
+                          }}
+                          className={`cursor-pointer flex-1 px-2.5 py-1 text-xs font-medium rounded transition-colors
+                            ${u.enabled ? "bg-red-600" : "bg-green-600"}
+                            hover:${u.enabled ? "bg-red-700" : "bg-green-700"}
+                            text-white
+                          `}
+                        >{u.enabled ? "Disable" : "Enable"}</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="hidden sm:flex sm:justify-center w-full"><div className="max-h-[60vh] overflow-y-auto scrollbar-hide w-full max-w-[90vw] overflow-x-auto scrollbar-hide rounded-lg border border-gray-700 bg-gray-800/50"><table className="w-full table-fixed text-center">
         <thead>
           <tr>
             <th className="text-center px-6 py-3 text-base font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[18%]">Username</th>
