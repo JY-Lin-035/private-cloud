@@ -3,16 +3,11 @@ from sqlalchemy.orm import Session
 from redis import Redis
 from typing import Optional
 from app.config import settings
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from app.database import SessionLocal
 from app.services.email_service import EmailService
 from app.services.account_service import AccountService
 from app.repositories.account_repository import AccountRepository
 from app.tasks.email_tasks import celery_app
-
-# Database engine
-engine = create_engine(settings.DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_db():
