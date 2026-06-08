@@ -88,13 +88,13 @@ class SessionMiddleware(BaseHTTPMiddleware):
         # Set session cookie if user is authenticated
         if session_token and hasattr(request.state, 'user'):
             response.set_cookie(
-                key='session',
-                value=session_token,
-                max_age=settings.TOKEN_EXPIRE_TIME * 60,
-                path='/',
-                httponly=True,
-                samesite='lax',
-                secure=False
-            )
+                    key='session',
+                    value=session_token,
+                    max_age=settings.TOKEN_EXPIRE_TIME * 60,
+                    path='/',
+                    httponly=True,
+                    samesite='none',
+                    secure=True
+                )
         
         return response

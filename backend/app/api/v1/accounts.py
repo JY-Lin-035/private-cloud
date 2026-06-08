@@ -88,8 +88,8 @@ async def login(
             max_age=30 * 60,  # 30 minutes
             path="/",  # Important: cookie available site-wide
             httponly=True,
-            samesite="lax",
-            secure=False
+            samesite="none",
+            secure=True
         )
         
         logger.info("Login successful")
