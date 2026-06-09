@@ -28,7 +28,7 @@ logger = log.get_logger("main.log")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://extraction-runner-same-you.trycloudflare.com",
+        "https://technological-jets-combination-nail.trycloudflare.com",
         "https://meowcloud.gleeze.com",
     ],
     allow_credentials=True,
