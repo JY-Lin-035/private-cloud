@@ -18,11 +18,10 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
   const [charPos, setCharPos] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const currentText = TYPING_TEXTS[textIndex];
-
   const tick = useCallback(() => {
+    const text = TYPING_TEXTS[textIndex];
     if (!isDeleting) {
-      if (charPos < currentText.length) {
+      if (charPos < text.length) {
         setCharPos((p) => p + 1);
       } else {
         setTimeout(() => setIsDeleting(true), 1500);
@@ -35,7 +34,7 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
         setTextIndex((prev) => (prev + 1) % TYPING_TEXTS.length);
       }
     }
-  }, [charPos, isDeleting, currentText.length]);
+  }, [charPos, isDeleting, textIndex]);
 
   useEffect(() => {
     const timer = setInterval(tick, 100);
@@ -63,7 +62,7 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
         </h1>
         <div className='mt-8 h-10 md:h-12'>
           <span className='text-xl md:text-2xl text-cyan-300 tracking-wide'>
-            {currentText.slice(0, charPos)}
+            {TYPING_TEXTS[textIndex].slice(0, charPos)}
             <span className='ml-1 align-middle inline-block w-[3px] h-6 bg-cyan-300 animate-pulse'>&nbsp;</span>
           </span>
         </div>
