@@ -18,11 +18,10 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
   const [charPos, setCharPos] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const currentText = TYPING_TEXTS[textIndex];
-
   const tick = useCallback(() => {
+    const text = TYPING_TEXTS[textIndex];
     if (!isDeleting) {
-      if (charPos < currentText.length) {
+      if (charPos < text.length) {
         setCharPos((p) => p + 1);
       } else {
         setTimeout(() => setIsDeleting(true), 1500);
@@ -35,7 +34,7 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
         setTextIndex((prev) => (prev + 1) % TYPING_TEXTS.length);
       }
     }
-  }, [charPos, isDeleting, currentText.length]);
+  }, [charPos, isDeleting, textIndex]);
 
   useEffect(() => {
     const timer = setInterval(tick, 100);
@@ -63,45 +62,45 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
         </h1>
         <div className='mt-8 h-10 md:h-12'>
           <span className='text-xl md:text-2xl text-cyan-300 tracking-wide'>
-            {currentText.slice(0, charPos)}
+            {TYPING_TEXTS[textIndex].slice(0, charPos)}
             <span className='ml-1 align-middle inline-block w-[3px] h-6 bg-cyan-300 animate-pulse'>&nbsp;</span>
           </span>
         </div>
         <div className='mt-8 flex flex-col items-center gap-6'>
-                  <div className='flex flex-col sm:flex-row gap-4'>
-                    {session.authenticated ? (
-                      <button
-                        onClick={() => navigate('/file-list')}
-                        className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
-                      >
-                        Enter Cloud <ArrowRight className='inline ml-2 w-5 h-5' />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => navigate('/login')}
-                        className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
-                      >
-                        Login Now <ArrowRight className='inline ml-2 w-5 h-5' />
-                      </button>
-                    )}
-                  </div>
-                  <div className='flex flex-row gap-4'>
-                                      <a
-                                        href='https://github.com/JY-Lin-035/private-cloud'
-                                        target='_blank'
-                                        rel='noopener noreferrer'
-                                        className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
-                                      >
-                                                                              <img src={githubIcon} alt='GitHub' className='w-6 h-6 brightness-0 invert' />
-                                      </a>
-                                      <a
-                                        href='mailto:JY@junmail.abrdns.com'
-                                        className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
-                                      >
-                                        <Mail className='w-6 h-6' />
-                                      </a>
-                                    </div>
-                </div>
+          <div className='flex flex-col sm:flex-row gap-4'>
+            {session.authenticated ? (
+              <button
+                onClick={() => navigate('/file-list')}
+                className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
+              >
+                Enter Cloud <ArrowRight className='inline ml-2 w-5 h-5' />
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate('/login')}
+                className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
+              >
+                Login Now <ArrowRight className='inline ml-2 w-5 h-5' />
+              </button>
+            )}
+          </div>
+          <div className='flex flex-row gap-4'>
+            <a
+              href='https://github.com/JY-Lin-035/private-cloud'
+              target='_blank'
+              rel='noopener noreferrer'
+              className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
+            >
+              <img src={githubIcon} alt='GitHub' className='w-6 h-6 brightness-0 invert' />
+            </a>
+            <a
+              href='mailto:JY@junmail.abrdns.com'
+              className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
+            >
+              <Mail className='w-6 h-6' />
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );
