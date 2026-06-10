@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Brand font — English: POINTFREE, Chinese: 851手書き雑字 */
+@font-face {
+  font-family: "Brand";
+  src: url("/assets/fonts/POINTFREE-1.TTF");
+  font-display: swap;
+  unicode-range: U+00-024F, U+1E00-1EFF, U+2000-2BFF, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Brand";
+  src: url("/assets/fonts/851TEGAKI_ZATSU_NORMAL.TTF");
+  font-display: swap;
+  unicode-range: U+2E80-2EFF, U+3000-38FF, U+3400-4DBF, U+4E00-9FFF, U+20000-2FFFF;
+}
+
+@theme {
+  --font-sans: "Brand", sans-serif;
+  --animate-scaleIn: scaleIn 0.3s ease-out both;
+  --animate-fadeIn: fadeIn 1s ease-out both;
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Hide scrollbar but keep scrollable */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

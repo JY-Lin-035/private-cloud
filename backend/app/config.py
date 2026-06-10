@@ -1,5 +1,5 @@
-from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -46,7 +46,11 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = ""
-    
+
+    # Storage
+    STORAGE_BASE_PATH: str = "storage/app/private/files"
+    STORAGE_RECALCULATION_PERIOD: int = 604800  # 7 days in seconds
+
     class Config:
         env_file = ".env"
         case_sensitive = True

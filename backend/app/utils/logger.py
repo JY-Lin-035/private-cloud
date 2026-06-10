@@ -1,70 +1,57 @@
-import logging
-import traceback as tb
-from typing import Optional
-from logging.handlers import RotatingFileHandler
+# log.py
 import os
+import inspect
+import logging
+from datetime import datetime
+from logging.handlers import RotatingFileHandler
 
-# Create logs directory if it doesn't exist
-logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "logs")
-os.makedirs(logs_dir, exist_ok=True)
-
-# Configure logging with file handler
-log_file = os.path.join(logs_dir, "app.log")
-
-# Create file handler with rotation (10MB max, keep 5 backups)
-file_handler = RotatingFileHandler(
-    log_file,
-    maxBytes=10*1024*1024,  # 10MB
-    backupCount=5,
-    encoding='utf-8'
-)
-file_handler.setLevel(logging.INFO)
-
-# Create console handler
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-
-# Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(formatter)
-console_handler.setFormatter(formatter)
-
-# Configure root logger
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.addHandler(file_handler)
-root_logger.addHandler(console_handler)
-
-logger = logging.getLogger(__name__)
-
-# Configure Redis logger
-redis_logger = logging.getLogger('redis')
-redis_logger.setLevel(logging.INFO)
-redis_logger.addHandler(file_handler)
-redis_logger.addHandler(console_handler)
-
-
-def log_error(title: str, error: Exception, level: str = "error"):
-    """Log error with details similar to Laravel's LogHelper."""
-    log_func = getattr(logger, level, logger.error)
-    error_msg = f"{title} - Error: {str(error)}"
-    if error.__traceback__:
-        error_msg += f" - File: {error.__traceback__.tb_frame.f_code.co_filename}:{error.__traceback__.tb_lineno}"
-    error_msg += f"\nTraceback:\n{tb.format_exc()}"
-    log_func(error_msg)
-
-
-def log_info(title: str, data: dict = None):
-    """Log info message."""
-    if data:
-        logger.info(f"{title} - Data: {data}")
+def setup_logger(name="app", log_filename=None, log_level=logging.INFO, console_output=True):    
+    log_dir = 'logs'
+    os.makedirs(log_dir, exist_ok=True)
+    
+    if log_filename is None:
+        if name == '__main__':
+            actual_filename = 'main.log'
+        else:
+            actual_filename = f"{name.replace('.', '_')}.log"
     else:
-        logger.info(title)
+        actual_filename = log_filename
+    
+    log_path = os.path.join(log_dir, actual_filename)
+    
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s'
+    )
+    
+    logger = logging.getLogger(name)
+    logger.setLevel(log_level)
+    
+    if logger.handlers:
+        logger.handlers.clear()
+    
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5,
+        encoding='utf-8'
+    )
+    file_handler.setLevel(log_level)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    if console_output:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    
+    return logger
 
-
-def log_debug(title: str, data: dict = None):
-    """Log debug message."""
-    if data:
-        logger.debug(f"{title} - Data: {data}")
+def get_logger(log_filename=None):    
+    caller_frame = inspect.currentframe().f_back
+    if caller_frame:
+        module_name = caller_frame.f_globals.get('__name__', 'app')
     else:
-        logger.debug(title)
+        module_name = 'app'
+    
+    return setup_logger(module_name, log_filename)
