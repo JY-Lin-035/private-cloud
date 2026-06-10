@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query
 from sqlalchemy.orm import Session
 from redis import Redis
+import json
 from app.schemas.account import (
     RegisterRequest, LoginRequest, ModifyEmailRequest, 
     ModifyPasswordRequest, ResetPasswordRequest, GetCodeRequest,
@@ -9,11 +10,16 @@ from app.schemas.account import (
 from app.services.account_service import AccountService
 from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
-from app.api.dependencies import get_db, get_redis, get_current_user_id, get_email_service
+from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user, get_email_service, get_account_service
 from app.api.rate_limit import rate_limit
-from app.utils.logger import log_info, log_error
+from app.config import settings
+from app.utils import logger as log
+from app.models.account import Account
+from app.constants import Identity
+from sqlalchemy import select, func
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+logger = log.get_logger("accounts_api.log")
 
 
 @router.post("/register", dependencies=[Depends(rate_limit(5, 300))])
@@ -25,29 +31,29 @@ async def register(
 ):
     """Register a new account."""
     try:
-        log_info("Register request received", {"username": request.username, "email": request.email})
+        logger.info(f"Register request received, username: {request.username}, email: {request.email}")
         
         account_service = AccountService(db, redis_client)
         
-        log_info("Calling account service register")
+        logger.info("Calling account service register")
         result = account_service.register(request.username, request.email, request.password)
-        log_info("Account service result", {"result": result})
+        logger.info(f"Account service result: {result}")
         
         if result and 'error' in result:
-            log_info("Registration error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Registration error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         # Queue verification email
-        log_info("Getting account by name")
+        logger.info("Getting account by name")
         account = account_service.account_repo.get_by_name(request.username)
         if account:
-            log_info("Sending verification email", {"account_id": account.id, "email": account.email})
+            logger.info(f"Sending verification email, account_id: {account.id}, email: {account.email}")
             email_service.send_verification_email(account.id, account.email)
         
-        log_info("Registration successful")
+        logger.info("Registration successful")
         return {"message": "success"}
     except Exception as e:
-        log_error("Register endpoint error", e)
+        logger.error(f"Register endpoint error: {e}")
         raise
 
 
@@ -60,32 +66,36 @@ async def login(
 ):
     """Login user."""
     try:
-        log_info("Login request received", {"username": request.username})
+        logger.info(f"Login request received, username: {request.username}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.login(request.username, request.password, email_service)
-        log_info("Login result", {"result": result})
+        logger.info(f"Login result: {result}")
         
         if result and 'error' in result:
-            log_info("Login error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Login error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        response = Response(content='{"message": "登入成功", "email": "' + result['email'] + '"}', media_type="application/json")
+        response = Response(
+            content='{"message": "登入成功", "email": "' + result['email'] + '"}', 
+            media_type="application/json", 
+        )
+
         response.set_cookie(
             key="session",
             value=result['token'],
             max_age=30 * 60,  # 30 minutes
             path="/",  # Important: cookie available site-wide
             httponly=True,
-            samesite="lax",
-            secure=False
+            samesite="none",
+            secure=True
         )
         
-        log_info("Login successful")
+        logger.info("Login successful")
         return response
     except Exception as e:
-        log_error("Login endpoint error", e)
+        logger.error(f"Login endpoint error: {e}")
         raise
 
 
@@ -98,24 +108,24 @@ async def sign_out(
 ):
     """Sign out user."""
     try:
-        log_info("Sign out request received", {"user_id": user_id})
+        logger.info(f"Sign out request received, user_id: {user_id}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.sign_out(user_id)
-        log_info("Sign out result", {"result": result})
+        logger.info(f"Sign out result: {result}")
         
         if result and 'error' in result:
-            log_info("Sign out error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Sign out error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         response = Response(status_code=200)
         response.delete_cookie(key="session", path="/")
         
-        log_info("Sign out successful")
+        logger.info("Sign out successful")
         return response
     except Exception as e:
-        log_error("Sign out endpoint error", e)
+        logger.error(f"Sign out endpoint error: {e}")
         raise
 
 
@@ -127,16 +137,16 @@ async def get_code(
 ):
     """Get verification code."""
     try:
-        log_info("Get code request received", {"email": request.email, "mode": request.mode})
+        logger.info(f"Get code request received, email: {request.email}, mode: {request.mode}")
         
         account_service = AccountService(db, redis_client)
         email_service = EmailService(celery_app)
         
         result = account_service.get_code(request.email, request.mode)
-        log_info("Get code result", {"result": result})
+        logger.info(f"Get code result: {result}")
         
         if result and 'error' in result:
-            log_info("Get code error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Get code error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         # Queue code email
@@ -151,10 +161,10 @@ async def get_code(
         mode_titles = {'pw': '密碼重置通知', 'mail': '信箱變更驗證通知'}
         email_service.send_code_email(request.email, code, mode_titles.get(request.mode, '驗證碼通知'))
         
-        log_info("Verification code sent")
+        logger.info("Verification code sent")
         return {"message": "請至信箱查看通知"}
     except Exception as e:
-        log_error("Get code endpoint error", e)
+        logger.error(f"Get code endpoint error: {e}")
         raise
 
 
@@ -167,21 +177,21 @@ async def modify_mail(
 ):
     """Modify user email."""
     try:
-        log_info("Modify mail request received", {"user_id": user_id, "email": request.email})
+        logger.info(f"Modify mail request received, user_id: {user_id}, email: {request.email}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.modify_email(user_id, request.email, request.check_email, request.code)
-        log_info("Modify mail result", {"result": result})
+        logger.info(f"Modify mail result: {result}")
         
         if result and 'error' in result:
-            log_info("Modify mail error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Modify mail error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Email modified successfully")
+        logger.info("Email modified successfully")
         return {"email": result['email']}
     except Exception as e:
-        log_error("Modify mail endpoint error", e)
+        logger.error(f"Modify mail endpoint error: {e}")
         raise
 
 
@@ -195,21 +205,21 @@ async def modify_password(
 ):
     """Modify user password."""
     try:
-        log_info("Modify password request received", {"user_id": user_id})
+        logger.info(f"Modify password request received, user_id: {user_id}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.modify_password(user_id, request.now_pw, request.new_pw)
-        log_info("Modify password result", {"result": result})
+        logger.info(f"Modify password result: {result}")
         
         if result and 'error' in result:
-            log_info("Modify password error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Modify password error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Password modified successfully")
+        logger.info("Password modified successfully")
         return {"message": "success"}
     except Exception as e:
-        log_error("Modify password endpoint error", e)
+        logger.error(f"Modify password endpoint error: {e}")
         raise
 
 
@@ -221,31 +231,258 @@ async def reset_password(
 ):
     """Reset password with verification code."""
     try:
-        log_info("Reset password request received", {"email": request.email})
+        logger.info(f"Reset password request received, email: {request.email}")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.reset_password(request.email, request.code, request.password)
-        log_info("Reset password result", {"result": result})
+        logger.info(f"Reset password result: {result}")
         
         if result and 'error' in result:
-            log_info("Reset password error", {"error": result['error'], "stateCode": result['stateCode']})
+            logger.error(f"Reset password error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        log_info("Password reset successfully")
+        logger.info("Password reset successfully")
         return {"message": "success"}
     except Exception as e:
-        log_error("Reset password endpoint error", e)
+        logger.error(f"Reset password endpoint error: {e}")
         raise
 
 
 @router.get("/checkSession")
-async def check_session(user_id: int = Depends(get_current_user_id)):
-    """Check if user session is valid."""
+async def check_session(request: Request):
+    """Check if user session is valid and return user data. Returns anonymous if not logged in."""
     try:
-        log_info("Check session request received", {"user_id": user_id})
-        log_info("Session valid")
-        return Response(status_code=200)
+        session_token = request.cookies.get('session')
+        if not session_token:
+            return {"authenticated": False}
+        
+        # Validate session format
+        if '|' not in session_token:
+            return {"authenticated": False}
+        
+        user_id_str, tok_value = session_token.split('|', 1)
+        try:
+            user_id = int(user_id_str)
+        except ValueError:
+            return {"authenticated": False}
+        
+        # Check Redis
+        redis_client = Redis.from_url(settings.REDIS_URL)
+        try:
+            stored_token = redis_client.get(f"session:{user_id}")
+            if not stored_token:
+                return {"authenticated": False}
+            if isinstance(stored_token, bytes):
+                stored_token = stored_token.decode()
+            if stored_token != session_token:
+                return {"authenticated": False}
+                
+            user_data = redis_client.get(f"session_data:{user_id}")
+            if not user_data:
+                return {"authenticated": False}
+            if isinstance(user_data, bytes):
+                user_data = user_data.decode()
+            user_dict = json.loads(user_data)
+            
+            # Extend session
+            redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            
+            logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
+            return {
+                "authenticated": True,
+                "id": user_dict.get("user_id"),
+                "username": user_dict.get("username"),
+                "email": user_dict.get("email"),
+                "identity": user_dict.get("identity")
+            }
+        finally:
+            redis_client.close()
     except Exception as e:
-        log_error("Check session endpoint error", e)
+        logger.error(f"Check session endpoint error: {e}")
+        return {"authenticated": False}
+
+
+@router.post("/admin/recalculate-user-storage")
+async def recalculate_user_storage(
+    username: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+    account_service: AccountService = Depends(get_account_service)
+):
+    """Recalculate storage usage for a specific user (admin only)."""
+    try:
+        # Check if user is admin (identity == 1)
+        account = account_service.get_by_id(user_id)
+        if not account or account.identity != 1:
+            raise HTTPException(status_code=403, detail="Admin access required")
+        
+        # Get target user by username
+        target_user = account_service.get_by_username(username)
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Recalculate storage for the target user
+        from app.services.file_service import FileService
+        from app.services.folder_service import FolderService
+        from app.repositories.file_repository import FileRepository
+        from app.repositories.folder_repository import FolderRepository
+        from app.models.file import File
+        from app.models.folder import Folder
+        from sqlalchemy import select
+        import os
+        
+        file_repo = FileRepository(db)
+        folder_repo = FolderRepository(db)
+        file_service = FileService(db, file_repo, folder_repo)
+        folder_service = FolderService(db, folder_repo, account_repo)
+        
+        logger.info(f"Starting storage recalculation for user: {username}")
+        
+        # Get all folders for the user
+        folders = db.execute(
+            select(Folder).where(Folder.owner_id == target_user.id)
+        ).scalars().all()
+        
+        total_size = 0
+        
+        # Recalculate each folder size
+        for folder in folders:
+            # Calculate actual size from files in this folder
+            files = db.execute(
+                select(File).where(
+                    File.parent_folder_id == folder.uuid,
+                    File.deleted_at.is_(None)
+                )
+            ).scalars().all()
+            
+            actual_size = sum(file.size for file in files)
+            
+            # Update folder size
+            folder.size = actual_size
+            total_size += actual_size
+        
+            logger.info(f"Updated folder {folder.name}: {actual_size} bytes")
+        
+        # Update account used size
+        target_user.used_size = total_size
+        
+        db.commit()
+        
+        logger.info(f"Storage recalculation completed for user {username}: {total_size} bytes")
+        
+        return {
+            "message": "Storage recalculation completed",
+            "username": username,
+            "total_size": total_size,
+            "folders_updated": len(folders)
+        }
+        
+    except HTTPException:
         raise
+    except Exception as e:
+        logger.error(f"Storage recalculation error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+def _admin_required(request) -> dict:
+    if not hasattr(request.state, 'user'):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if request.state.user.get("identity") != Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return request.state.user
+
+
+@router.get("/admin/users")
+async def admin_list_users(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=1, le=100),
+    search: str = Query("", max_length=100),
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    logger.info(f"[Admin] list users page={page} per_page={per_page} search={search}")
+    query = db.query(Account).filter(Account.identity != Identity.ADMIN)
+    if search:
+        pat = f"%{search}%"
+        query = query.filter(Account.name.ilike(pat) | Account.email.ilike(pat))
+    total = query.count()
+    users = query.offset((page - 1) * per_page).limit(per_page).all()
+    result = []
+    for u in users:
+        online = bool(redis_client.exists(f"session:{u.id}"))
+        us = u.used_size or 0
+        ts = u.total_file_size or 0
+        result.append({
+            "id": u.id,
+            "username": u.name,
+            "email": u.email,
+            "used_storage": us,
+            "total_storage": ts,
+            "enabled": bool(u.enable),
+            "online": online
+        })
+    return {
+        "users": result,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, (total - 1) // per_page + 1)
+    }
+
+
+@router.put("/admin/users/{user_id}/quota")
+async def admin_update_quota(
+    request: Request,
+    user_id: int,
+    total_storage: int = Query(..., ge=0),
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.identity == Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot modify admin account")
+    account.total_file_size = total_storage
+    db.commit()
+    return {"message": "success", "total_storage": total_storage}
+
+
+@router.post("/admin/users/{user_id}/force-logout")
+async def admin_force_logout(
+    request: Request,
+    user_id: int,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.identity == Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot force logout admin")
+    redis_client.delete(f"session:{user_id}")
+    redis_client.delete(f"session_data:{user_id}")
+    return {"message": "User logged out successfully"}
+
+
+@router.put("/admin/users/{user_id}/toggle-enable")
+async def admin_toggle_enable(
+    request: Request,
+    user_id: int,
+    db: Session = Depends(get_db),
+    redis_client: Redis = Depends(get_redis)
+):
+    _admin_required(request)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    if account.identity == Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot disable admin user")
+    account.enable = not account.enable
+    db.commit()
+    return {"enabled": account.enable}

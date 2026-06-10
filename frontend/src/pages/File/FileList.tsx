@@ -1,0 +1,611 @@
+import { useState, useEffect, useMemo } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import Breadcrumb from './Breadcrumb';
+import {
+  downloadFile,
+  deleteFile,
+  getShareFileLink,
+  deleteShareFileLink,
+} from '../../utils/fileOperations';
+import {
+  createFolder,
+  renameFolder,
+  deleteFolder,
+} from '../../utils/folderOperations';
+import Notices from '../../components/Notices';
+import { useStorage } from '../../store/storage';
+import { fileApi } from '../../api/fileApi';
+import { folderApi } from '../../api/folderApi';
+import UpLoad from './UpLoad';
+
+import {
+  FolderOpen,
+  FileText,
+  Download,
+  Share2,
+  Trash2,
+  Edit3,
+  Plus,
+  Upload,
+  ChevronLeft,
+  ChevronRight
+} from 'lucide-react';
+
+
+
+function FileList({ layoutClass = "" }: { layoutClass?: string }) {
+  const navigate = useNavigate();
+  const { folderUuid } = useParams();
+  const storage = useStorage();
+  const [showUpLoad, setShowUpLoad] = useState(false);
+  const [fileList, setFileList] = useState<any[]>([]);
+  const [IN, setIN] = useState(false);
+  const [search, setSearch] = useState('');
+  const [sortType, setSortType] = useState('name');
+  const [sortUpDown, setSortUpDown] = useState(true);
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(10);
+  const [previousPerPage, setPreviousPerPage] = useState(10);
+  const [showMode, setShowMode] = useState(false);
+  const [className, setClassName] = useState('');
+  const [response, setResponse] = useState<string | string[]>([]);
+  const [shareFileLink, setShareFileLink] = useState('');
+  const [copyShow, setCopyShow] = useState(false);
+  const [popupItemUuid, setPopupItemUuid] = useState<string | null>(null);
+  const [folderNameInput, setFolderNameInput] = useState('');
+  const [inputShow, setInputShow] = useState(false);
+  const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
+  const [currentFolderUuid, setCurrentFolderUuid] = useState<string | null>(null);
+
+  async function getFileList(parent_folder_uuid: string | null) {
+    try {
+      const r = await fileApi.list(parent_folder_uuid || undefined);
+      setFileList(r.files || []);
+      setCurrentFolderUuid(parent_folder_uuid);
+    } catch (e) {
+      try {
+        const homeFolder = await folderApi.getHome();
+        setCurrentFolderUuid(homeFolder.uuid);
+        navigate(`/file-list/${homeFolder.uuid}`, { replace: true });
+      } catch {
+        localStorage.clear();
+        navigate('/');
+      }
+    }
+  }
+
+  useEffect(() => {
+    async function loadInitialFolder() {
+      if (folderUuid !== undefined) {
+        await getFileList(folderUuid || null);
+      } else {
+        // Load Home folder when no UUID provided
+        try {
+          const homeFolder = await folderApi.getHome();
+          getFileList(homeFolder.uuid);
+          navigate(`/file-list/${homeFolder.uuid}`, { replace: true });
+        } catch (e) {
+          localStorage.clear();
+          navigate('/');
+        }
+      }
+    }
+    loadInitialFolder();
+  }, [folderUuid]);
+
+  useEffect(() => {
+    setTimeout(() => {
+      setIN(true);
+    }, 200);
+  }, []);
+
+  const filterList = useMemo(() => {
+    setPage(1);
+    let fList = fileList.filter((f) =>
+      f.name.toLowerCase().includes(search.toLowerCase())
+    );
+
+    fList.sort((a, b) => {
+      if (a.type === 'folder' && b.type !== 'folder') return -1;
+      if (a.type !== 'folder' && b.type === 'folder') return 1;
+
+      if (sortType === 'size' && a.type === 'file' && b.type === 'file') {
+        const aSplit = a['size'].split(' ');
+        const bSplit = b['size'].split(' ');
+
+        if (aSplit[1].localeCompare(bSplit[1]) === 0) {
+          return sortUpDown
+            ? Number(aSplit[0]) - Number(bSplit[0])
+            : Number(bSplit[0]) - Number(aSplit[0]);
+        } else {
+          const units: { [key: string]: number } = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 };
+          const A = units[aSplit[1]];
+          const B = units[bSplit[1]];
+
+          return sortUpDown ? A - B : B - A;
+        }
+      }
+
+      return sortUpDown
+        ? a[sortType].localeCompare(b[sortType])
+        : b[sortType].localeCompare(a[sortType]);
+    });
+
+    return fList;
+  }, [fileList, search, sortType, sortUpDown]);
+
+  function changeSortType(type: string) {
+    if (sortType === type) {
+      setSortUpDown(!sortUpDown);
+    } else {
+      setSortType(type);
+      setSortUpDown(true);
+    }
+  }
+
+  const totalPages = useMemo(() =>
+    Math.ceil(filterList.length / perPage),
+    [filterList.length, perPage]
+  );
+
+  const pageList = useMemo(() => {
+    if (perPage > previousPerPage) {
+      setPage(1);
+      setPreviousPerPage(perPage);
+    } else {
+      setPreviousPerPage(perPage);
+    }
+    const start = (page - 1) * perPage;
+    return filterList.slice(start, start + perPage);
+  }, [perPage, previousPerPage, page, filterList]);
+
+  async function callDownloadFile(file_uuid: string) {
+    const [res, cn, show] = await downloadFile(file_uuid);
+    setResponse(res);
+    setClassName(cn);
+    setShowMode(show);
+    setInputShow(false);
+  }
+
+  async function callDeleteFile(item_uuid: string, _item_type: string, item: any) {
+    const [res, cn, show, fl] = await deleteFile(item_uuid, item, fileList);
+    setResponse(res);
+    setClassName(cn);
+    setShowMode(show);
+    setInputShow(false);
+    setFileList([...fl]);
+  }
+
+  async function callShareFileLink(item_uuid: string, item_type: string) {
+    const [res, cn, show, link, copy] = await getShareFileLink(item_uuid, item_type);
+    setResponse(res);
+    setClassName(cn);
+    setShowMode(show);
+    setInputShow(false);
+    setShareFileLink(link);
+    setCopyShow(copy);
+    setPopupItemUuid(item_uuid);
+    if (link) {
+      setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: link } : f));
+    }
+  }
+
+  async function callDeleteShareFileLink(item_uuid: string, item_type: string) {
+    const [res, cn, show] = await deleteShareFileLink(item_uuid, item_type);
+    setResponse(res);
+    setClassName(cn);
+    setShowMode(show);
+    setInputShow(false);
+    setCopyShow(false);
+    setPopupItemUuid(null);
+    setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: null } : f));
+  }
+
+  const copyFunc = (m: string) => {
+    const text = window.location.origin + '/share/' + m;
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      setResponse(['連結已複製!']);
+      setClassName('text-green-500');
+      setShowMode(true);
+    } catch {
+      setResponse(['複製失敗，請手動複製']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+    document.body.removeChild(textarea);
+  };
+
+  async function emitFolderName() {
+    if (waitFolderName[2] === 'rename') {
+      const [res, cn, fl] = await renameFolder(
+        waitFolderName[1], // folder_uuid
+        folderNameInput,
+        fileList
+      );
+      setResponse(res);
+      setClassName(cn);
+      setFileList([...fl]);
+    } else if (waitFolderName[2] === 'create') {
+      const [res, cn, fl] = await createFolder(
+        waitFolderName[0] || null, // parent_folder_uuid
+        folderNameInput,
+        fileList
+      );
+      setResponse(res);
+      setClassName(cn);
+      setFileList([...fl]);
+    }
+
+    setShowMode(true);
+  }
+
+  async function callDeleteFolder(folder_uuid: string) {
+    const [res, cn, show, fl] = await deleteFolder(folder_uuid, fileList);
+    setResponse(res);
+    setClassName(cn);
+    setShowMode(show);
+    setInputShow(false);
+    setFileList([...fl]);
+  }
+
+  return (
+    <div
+      onClick={() => { setCopyShow(false); setPopupItemUuid(null); }}
+      className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}
+    >
+      <Notices
+        inputShow={inputShow}
+        folderName={folderNameInput}
+        notices={response}
+        showMode={showMode}
+        className={className}
+        onUpdateFolderName={setFolderNameInput}
+        onClose={() => { setShowMode(false); setFolderNameInput(''); setWaitFolderName([]); }}
+        onEmitFolderName={() => { setShowMode(false); setInputShow(false); emitFolderName(); }}
+      />
+
+      {showUpLoad && (
+        <>
+          {/* 原生上傳 UI (已註解) */}
+          {/* <div className="fixed inset-0 z-20 flex items-center justify-center">
+            <div
+              className="absolute inset-0 bg-black bg-opacity-50"
+              onClick={() => setShowUpLoad(false)}
+            ></div>
+            <div className="relative z-10 bg-white p-6 rounded-lg">
+              <h3 className="text-lg font-bold mb-4">上傳檔案</h3>
+              <input
+                type="file"
+                multiple
+                onChange={async (e) => {
+                  const files = e.target.files;
+                  if (!files || files.length === 0) return;
+
+                  const formData = new FormData();
+                  for (let i = 0; i < files.length; i++) {
+                    formData.append('file', files[i]);
+                  }
+                  formData.append('parent_folder_uuid', currentFolderUuid || '');
+
+                  try {
+                    const r = await fileApi.uploadFile(formData);
+                    setResponse([r.message]);
+                    setClassName('text-green-500');
+                    setShowMode(true);
+                    getFileList(currentFolderUuid);
+                  } catch (e) {
+                    setResponse([e.message]);
+                    setClassName('text-red-500');
+                    setShowMode(true);
+                  }
+                  setShowUpLoad(false);
+                }}
+                className="mb-4"
+              />
+              <button
+                onClick={() => setShowUpLoad(false)}
+                className="px-4 py-2 bg-gray-500 text-white rounded"
+              >
+                取消
+              </button>
+            </div>
+          </div> */}
+
+          {/* 使用 Uppy 上傳組件 */}
+          <UpLoad
+            parentFolderUuid={currentFolderUuid}
+            onHidden={() => setShowUpLoad(false)}
+            onRefresh={() => getFileList(currentFolderUuid)}
+            onComplete={(res, cn) => {
+              setResponse(res);
+              setClassName(cn);
+              setShowMode(true);
+              setInputShow(false);
+            }}
+          />
+        </>
+      )}
+
+      <Breadcrumb currentFolderUuid={currentFolderUuid} />
+
+      <div
+        className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[1%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
+      >
+        <div className="mb-4 flex justify-between items-center">
+          <span>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              type="text"
+              placeholder="搜尋"
+              className="border border-white rounded px-3 py-1 w-full sm:w-64"
+            />
+
+            <Plus
+              className="w-9 h-9 ml-6 mr-4 text-yellow-300 inline cursor-pointer"
+              onClick={() => {
+                setResponse('');
+                setClassName('text-white');
+                setInputShow(true);
+                setShowMode(true);
+                setFolderNameInput('');
+                setWaitFolderName([currentFolderUuid, null, 'create']);
+              }}
+            />
+
+            <Upload
+              className="w-9 h-9 text-green-600 inline cursor-pointer"
+              onClick={() => setShowUpLoad(true)}
+            />
+          </span>
+
+          <span className="text-sm text-gray-500">
+            共 {filterList.length} 筆, 每頁 &nbsp;
+            <select
+              value={perPage}
+              onChange={(e) => setPerPage(Number(e.target.value))}
+              className="border border-white rounded px-1 py-1"
+            >
+              {[5, 10, 15, 20, 50].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            &nbsp; 筆
+          </span>
+        </div>
+
+        <div
+          className="max-h-[60vh] scrollbar-hide overflow-x-auto overflow-y-auto shadow-[0.8rem_0.8rem_2.5rem_white] rounded-[2rem] border-2 border-white"
+        >
+          <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
+            <thead>
+              <tr className="bg-blue-200 text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl text-center">
+                <th
+                  onClick={() => changeSortType('date')}
+                  className="cursor-pointer p-2 w-[10%] border border-white hidden sm:table-cell"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    時間
+                    <svg
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800"
+                      aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="m8 10 4-6 4 6H8Zm8 4-4 6-4-6h8Z"
+                      />
+                    </svg>
+                  </span>
+                </th>
+                <th
+                  onClick={() => changeSortType('name')}
+                  className="cursor-pointer p-2 w-[55%] sm:w-[45%] border border-white"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    名稱
+                    <svg
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
+                      aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="m8 10 4-6 4 6H8Zm8 4-4 6-4-6h8Z"
+                      />
+                    </svg>
+                  </span>
+                </th>
+                <th
+                  onClick={() => changeSortType('size')}
+                  className="cursor-pointer p-2 w-[25%] border border-white hidden md:table-cell"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    大小
+                    <svg
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
+                      aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="m8 10 4-6 4 6H8Zm8 4-4 6-4-6h8Z"
+                      />
+                    </svg>
+                  </span>
+                </th>
+                <th className="p-2 w-[45%] sm:w-[35%] md:w-[20%] border border-white text-xs sm:text-sm md:text-base lg:text-lg">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageList.map((item) => (
+                <tr
+                  key={item.uuid + item.name + item.date}
+                  className={`bg-gray-300 hover:bg-blue-200 ${item.type === 'folder' ? 'cursor-pointer' : ''}`}
+                  onClick={() => {
+                    if (item.type === 'folder') {
+                      navigate(`/file-list/${item.uuid}`);
+                    }
+                  }}
+                >
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden sm:table-cell">
+                    {item.date}
+                  </td>
+                  <td className="p-2 text-xs sm:text-sm md:text-base border border-white break-words whitespace-normal">
+                    {item.type === 'folder' ? (
+                      <FolderOpen className="inline w-6 h-6 ml-5 mr-2 text-yellow-200" />
+                    ) : (
+                      <FileText className="inline w-6 h-6 ml-5 mr-2 text-white" />
+                    )}
+                    {item.name}
+                  </td>
+                  <td
+                    className={`p-2 text-xs sm:text-sm md:text-base border border-white break-words whitespace-normal hidden md:table-cell ${item.type === 'folder' ? 'text-center' : 'text-right'}`}
+                  >
+                    {(() => {
+                      const [value, unit] = storage.format(item.size);
+                      return `${value} ${unit}`;
+                    })()}
+                  </td>
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal">
+                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-4 lg:gap-6 xl:gap-10">
+                      {item.type === 'file' && (
+                        <Download
+                          className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            callDownloadFile(item.uuid);
+                          }}
+                        />
+                      )}
+
+                      {item.type === 'folder' && (
+                        <Edit3
+                          className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setResponse('');
+                            setClassName('text-white');
+                            setInputShow(true);
+                            setShowMode(true);
+                            setFolderNameInput(item.name);
+                            setWaitFolderName([
+                              null, // parent_folder_uuid (not used for rename)
+                              item.uuid, // folder_uuid
+                              'rename',
+                            ]);
+                          }}
+                        />
+                      )}
+
+                      {item.type === 'file' && (
+                        <div className="relative">
+                          <Share2
+                            className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              callShareFileLink(item.uuid, item.type);
+                            }}
+                          />
+
+                          {popupItemUuid === item.uuid && copyShow && (
+                            <div
+                              className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1 w-max px-2 py-1 text-xs sm:text-sm text-white rounded"
+                            >
+                              <span className="flex gap-1">
+                                <button
+                                  className="px-2 py-1 rounded bg-blue-400 cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    copyFunc(shareFileLink);
+                                  }}
+                                >
+                                  複製連結
+                                </button>
+                                <button
+                                  className="px-2 py-1 rounded bg-red-400 cursor-pointer"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    callDeleteShareFileLink(item.uuid, item.type);
+                                  }}
+                                >
+                                  移除
+                                </button>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <Trash2
+                        className="w-5 h-5 sm:w-6 sm:h-6 text-red-500 cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (item.type === 'file') {
+                            callDeleteFile(item.uuid, 'file', item);
+                          } else {
+                            callDeleteFolder(item.uuid);
+                          }
+                        }}
+                      />
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-auto mb-4 flex justify-center items-center gap-2">
+        <button
+          disabled={page === 1}
+          onClick={() => setPage(page - 1)}
+          className="px-3 py-1 border border-white rounded disabled:opacity-50"
+        >
+          <ChevronLeft className="w-5 h-5 rtl:rotate-180" />
+        </button>
+        <span>第 {page} / {totalPages} 頁</span>
+        <button
+          disabled={page === totalPages || totalPages === 0}
+          onClick={() => setPage(page + 1)}
+          className="px-3 py-1 border border-white rounded disabled:opacity-50"
+        >
+          <ChevronRight className="w-5 h-5 rtl:rotate-180" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default FileList;
