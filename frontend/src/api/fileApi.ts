@@ -17,15 +17,19 @@ export const fileApi = {
   },
 
   // Download file
-  download: async (file_uuid: string) => {
-    const url = `${API_BASE_URL}/api/files/download?file_uuid=${file_uuid}&t=${Date.now()}`;
-    const tempLink = document.createElement('a');
-    tempLink.href = url;
-    tempLink.download = 'download';
-    document.body.appendChild(tempLink);
-    tempLink.click();
-    document.body.removeChild(tempLink);
-  },
+    download: async (file_uuid: string) => {
+      const response = await api.get('/api/files/downloadToken', {
+        params: { file_uuid },
+      });
+      const data = response.data;
+      const url = `${API_BASE_URL}/api/files/download?file_uuid=${file_uuid}&token=${data.token}`;
+      const tempLink = document.createElement('a');
+      tempLink.href = url;
+      tempLink.download = 'download';
+      document.body.appendChild(tempLink);
+      tempLink.click();
+      document.body.removeChild(tempLink);
+    },
 
   // Delete file (soft or hard)
   delete: async (data: { file_uuid: string; permanent: boolean }) => {
