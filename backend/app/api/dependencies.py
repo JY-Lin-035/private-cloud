@@ -54,6 +54,13 @@ def get_account_service(db: Session = Depends(get_db)):
         pass
 
 
+def get_current_user_id_optional(request: Request) -> Optional[int]:
+    """Get current authenticated user ID or None if not authenticated."""
+    if hasattr(request.state, 'user_id'):
+        return request.state.user_id
+    return None
+
+
 def get_current_user_id(request: Request):
     """Get current authenticated user ID from request state."""
     if not hasattr(request.state, 'user_id'):

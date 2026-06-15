@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     # Storage
     STORAGE_BASE_PATH: str = "storage/app/private/files"
     STORAGE_RECALCULATION_PERIOD: int = 604800  # 7 days in seconds
+    DOWNLOAD_TOKEN_EXPIRE_SECONDS: int = 30  # seconds
 
     class Config:
         env_file = ".env"
