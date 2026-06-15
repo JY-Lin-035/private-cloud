@@ -149,6 +149,8 @@ async def download_file(
         file_service = FileService(db)
         actual_user_id = user_id
 
+        logger.info(f"Download file request received, user_id: {actual_user_id}, file_uuid: {file_uuid}")
+
         if token:
             redis_key = f"download_file_token:{token}"
             tdata = redis.get(redis_key)
@@ -162,6 +164,7 @@ async def download_file(
             actual_user_id = int(parts[0])
 
         if actual_user_id is None:
+            logger.info(f"actual_user_id is None")
             raise HTTPException(status_code=401, detail="Authentication required")
 
         logger.info(f"Download file request received, user_id: {actual_user_id}, file_uuid: {file_uuid}")
