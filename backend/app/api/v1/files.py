@@ -1,6 +1,8 @@
 from urllib.parse import quote
+import secrets
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from redis import Redis
 from app.schemas.file import (
@@ -8,7 +10,8 @@ from app.schemas.file import (
     FileListResponse, StorageInfoResponse, FileUploadResponse, FileDeleteResponse, FileRestoreResponse
 )
 from app.services.file_service import FileService
-from app.api.dependencies import get_db, get_redis, get_current_user_id
+from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
+from app.config import settings
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -103,23 +106,71 @@ async def upload_file(
         raise
 
 
+@router.get("/downloadToken")
+async def get_download_token(
+    file_uuid: str,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Generate a short-lived token for cross-origin file download."""
+    try:
+        logger.info("Token req: {}/{}".format(user_id, file_uuid))
+        file_service = FileService(db)
+        result = file_service.download(user_id, file_uuid)
+        if result and "error" in result:
+            raise HTTPException(result["stateCode"], result["error"])
+        token = secrets.token_hex(32)
+        key = "download_file_token:{}".format(token)
+        expire = settings.DOWNLOAD_TOKEN_EXPIRE_SECONDS
+        redis.setex(key, expire, "{}:{}".format(user_id, file_uuid))
+        return JSONResponse({
+            "token": token,
+            "file_uuid": file_uuid,
+            "expires_in": expire,
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Token gen err: %s" % e)
+        raise
+
+
 @router.get("/download")
 async def download_file(
     file_uuid: str,
+    token: str = Query(None),
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id)
+    redis: Redis = Depends(get_redis),
+    user_id: Optional[int] = Depends(get_current_user_id_optional)
 ):
     """Download a file."""
     try:
-        logger.info(f"Download file request received, user_id: {user_id}, file_uuid: {file_uuid}")
-
         file_service = FileService(db)
+        actual_user_id = user_id
 
-        result = file_service.download(user_id, file_uuid)
+        if token:
+            redis_key = f"download_file_token:{token}"
+            tdata = redis.get(redis_key)
+            if not tdata:
+                raise HTTPException(status_code=401, detail="Invalid or expired download token")
+            redis.delete(redis_key)
+            tdata_str = tdata.decode() if isinstance(tdata, bytes) else tdata
+            parts = tdata_str.split(":")
+            if len(parts) != 2:
+                raise HTTPException(status_code=400, detail="Invalid token data")
+            actual_user_id = int(parts[0])
+
+        if actual_user_id is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
+        logger.info(f"Download file request received, user_id: {actual_user_id}, file_uuid: {file_uuid}")
+
+        result = file_service.download(actual_user_id, file_uuid)
         logger.info(f"Download file result: {result}")
 
         if result and 'error' in result:
-            logger.error(f"Download file error: {result['error']}, stateCode: {result['stateCode']}")
+            logger.error(f"Download error: {result['error']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         logger.info("File downloaded successfully")
