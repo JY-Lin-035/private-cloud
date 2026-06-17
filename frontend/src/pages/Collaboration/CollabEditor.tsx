@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import { useCollab } from '../../hooks/useCollab';
 import { authApi } from '../../api/authApi';
-import { Users, Wifi, WifiOff, Save } from 'lucide-react';
+import { Users, Wifi, WifiOff, Save, Clock } from 'lucide-react';
 
 function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   const { fileUuid } = useParams<{ fileUuid: string }>();
@@ -13,7 +13,7 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   const [isEditorReady, setIsEditorReady] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const { content, users, isConnected, sendUpdate, sendCursor, sendSave } = useCollab(
+  const { content, users, snapshots, isConnected, sendUpdate, sendCursor, sendSave, switchVersion } = useCollab(
     fileUuid || '',
     user
   );
@@ -102,6 +102,26 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
           <div className="flex items-center gap-1 text-sm text-gray-300">
             <Users className="w-4 h-4" />
             <span>{users.length} 人在線</span>
+          </div>
+
+          {/* Version switcher */}
+          <div className="flex items-center gap-1 text-sm">
+            <Clock className="w-4 h-4 text-gray-400" />
+            {snapshots.length > 0 ? (
+              <select
+                onChange={(e) => switchVersion(Number(e.target.value))}
+                className="bg-gray-700 text-white text-sm rounded px-2 py-1 border border-gray-600 cursor-pointer"
+              >
+                <option value="">版本切換</option>
+                {snapshots.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    版本 {s.timestamp}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-gray-500 text-xs">尚無快照</span>
+            )}
           </div>
 
           {/* Save button */}
