@@ -4,7 +4,7 @@ import type { CollaborationItem, MyCollaborationItem } from '../../types';
 import { collaborationApi } from '../../api/collaborationApi';
 import { fileApi } from '../../api/fileApi';
 import { folderApi } from '../../api/folderApi';
-import { Users, UserPlus, FileText, Trash2, Download, Edit3 } from 'lucide-react';
+import { Users, UserPlus, FileText, Trash2, Download, Edit3, ExternalLink } from 'lucide-react';
 
 function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
   const navigate = useNavigate();
@@ -230,22 +230,22 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-gray-400 mb-1">使用者名稱</label>
+                  <label className="block text-gray-400 mb-1">使用者名稱 / Email</label>
                   <input
                     type="text"
                     value={inviteName}
-                    onChange={(e) => setInviteName(e.target.value)}
-                    placeholder="輸入使用者名稱"
-                    className="w-full p-2 bg-gray-700 text-white rounded border border-gray-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-gray-400 mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="輸入 Email"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setInviteName(val);
+                      // Auto-detect email if input contains @
+                      if (val.includes('@')) {
+                        setInviteEmail(val);
+                      } else {
+                        // Keep existing email or clear if name field is empty
+                        if (!val) setInviteEmail('');
+                      }
+                    }}
+                    placeholder="輸入使用者名稱 或 Email"
                     className="w-full p-2 bg-gray-700 text-white rounded border border-gray-600"
                   />
                 </div>
@@ -288,12 +288,19 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
                             </span>
                           </td>
                           <td className="p-2 text-gray-400">{item.created_at}</td>
-                          <td className="p-2">
+                          <td className="p-2 flex gap-1">
+                            <button
+                              onClick={() => navigate(`/collab/edit/${item.file_uuid}`)}
+                              className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors cursor-pointer text-xs"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              編輯
+                            </button>
                             <button
                               onClick={() => handleRemoveCollaborator(item.file_uuid, item.collaborator_id)}
-                              className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors cursor-pointer"
+                              className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors cursor-pointer text-xs"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-3 h-3" />
                               踢除
                             </button>
                           </td>
