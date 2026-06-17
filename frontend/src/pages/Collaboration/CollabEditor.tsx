@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import { useCollab } from '../../hooks/useCollab';
 import { authApi } from '../../api/authApi';
-import { Users, Wifi, WifiOff, Save, Clock } from 'lucide-react';
+import { Users, Wifi, WifiOff, Save, Clock, LogOut } from 'lucide-react';
 
 function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   const { fileUuid } = useParams<{ fileUuid: string }>();
@@ -57,15 +57,6 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
     }
   }, [sendUpdate]);
 
-  const handleCursorChange = useCallback((e: any) => {
-    if (e?.position) {
-      sendCursor({
-        lineNumber: e.position.lineNumber,
-        column: e.position.column
-      });
-    }
-  }, [sendCursor]);
-
   const handleSave = useCallback(() => {
     if (editorContent !== undefined) {
       sendSave(editorContent);
@@ -79,58 +70,63 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   return (
     <div className={`flex flex-col h-full ${layoutClass}`}>
       {/* Toolbar */}
-      <div className="flex items-center justify-between bg-gray-800 px-4 py-2 border-b border-gray-700">
-        <div className="flex items-center gap-4">
-          <h1 className="text-white text-lg font-semibold">即時共編</h1>
-          <div className="flex items-center gap-1 text-sm">
+      <div className="flex flex-wrap items-center justify-between bg-gray-800 px-2 sm:px-4 py-2 border-b border-gray-700 gap-2">
+        <div className="flex items-center gap-2 sm:gap-4">
+          <button
+            onClick={() => navigate('/collaboration')}
+            className="flex items-center gap-1 px-2 py-1 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors cursor-pointer text-xs sm:text-sm"
+            title="退出共編"
+          >
+            <LogOut className="w-3 h-3 sm:w-4 sm:h-4" />
+            <span className="hidden sm:inline">退出</span>
+          </button>
+          <h1 className="text-white text-sm sm:text-lg font-semibold">即時共編</h1>
+          <div className="flex items-center gap-1 text-xs sm:text-sm">
             {isConnected ? (
               <>
-                <Wifi className="w-4 h-4 text-green-400" />
+                <Wifi className="w-3 h-3 text-green-400" />
                 <span className="text-green-400">已連線</span>
               </>
             ) : (
               <>
-                <WifiOff className="w-4 h-4 text-red-400" />
+                <WifiOff className="w-3 h-3 text-red-400" />
                 <span className="text-red-400">未連線</span>
               </>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          {/* Online users */}
-          <div className="flex items-center gap-1 text-sm text-gray-300">
-            <Users className="w-4 h-4" />
-            <span>{users.length} 人在線</span>
+        <div className="flex items-center gap-1 sm:gap-4 flex-wrap justify-center">
+          <div className="flex items-center gap-1 text-xs sm:text-sm text-gray-300">
+            <Users className="w-3 h-3 sm:w-4 sm:h-4" />
+            <span>{users.length}</span>
           </div>
 
-          {/* Version switcher */}
-          <div className="flex items-center gap-1 text-sm">
-            <Clock className="w-4 h-4 text-gray-400" />
+          <div className="flex items-center gap-1 text-xs sm:text-sm">
+            <Clock className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" />
             {snapshots.length > 0 ? (
               <select
                 onChange={(e) => switchVersion(Number(e.target.value))}
-                className="bg-gray-700 text-white text-sm rounded px-2 py-1 border border-gray-600 cursor-pointer"
+                className="bg-gray-700 text-white text-xs sm:text-sm rounded px-1 py-0.5 sm:px-2 sm:py-1 border border-gray-600 cursor-pointer max-w-[80px] sm:max-w-none"
               >
-                <option value="">版本切換</option>
+                <option value="">版本</option>
                 {snapshots.map((s) => (
                   <option key={s.id} value={s.id}>
-                    版本 {s.timestamp}
+                    {s.timestamp}
                   </option>
                 ))}
               </select>
             ) : (
-              <span className="text-gray-500 text-xs">尚無快照</span>
+              <span className="text-gray-500 text-xs">無</span>
             )}
           </div>
 
-          {/* Save button */}
           <button
             onClick={handleSave}
-            className="flex items-center gap-1 px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors cursor-pointer text-sm"
+            className="flex items-center gap-1 px-2 py-0.5 sm:px-3 sm:py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors cursor-pointer text-xs text-sm"
           >
-            <Save className="w-4 h-4" />
-            儲存
+            <Save className="w-3 h-3 sm:w-4 sm:h-4" />
+            <span className="hidden sm:inline">儲存</span>
           </button>
         </div>
       </div>
