@@ -5,18 +5,26 @@ interface CursorPosition {
   column: number;
 }
 
+interface Snapshot {
+  id: number;
+  timestamp: string;
+}
+
 interface UseCollabReturn {
   content: string;
   users: number[];
+  snapshots: Snapshot[];
   isConnected: boolean;
   sendUpdate: (content: string) => void;
   sendCursor: (cursor: CursorPosition) => void;
   sendSave: (content: string) => void;
+  switchVersion: (versionId: number) => void;
 }
 
 export function useCollab(fileUuid: string, user: { id: number; name: string }): UseCollabReturn {
   const [content, setContent] = useState<string>('');
   const [users, setUsers] = useState<number[]>([]);
+  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
