@@ -14,7 +14,7 @@ from app.models.account import Account
 from app.utils import logger as log
 
 from app.api.dependencies import get_redis
-from app.api.v1 import accounts, files, folders, share
+from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws
 
 from app.middleware.session_middleware import SessionMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
@@ -64,6 +64,8 @@ app.include_router(accounts.router)
 app.include_router(files.router)
 app.include_router(folders.router)
 app.include_router(share.router)
+app.include_router(collaboration.router)
+app.include_router(collab_ws.router)
 
 
 @app.get("/api/email/verify/{user_id}/{hash}")

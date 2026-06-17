@@ -111,7 +111,7 @@ function AdminPage({ layoutClass = "" }: Props) {
                             className="w-32 bg-gray-700 text-white px-2 py-1 rounded text-sm border border-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500"
                           />
                           <button onClick={async () => {
-                            const n = Number(quotaEds[u.id]);
+                            const n = Number(quotaEdits[u.id]);
                             if (!isNaN(n) && n >= 0) {
                               await adminApi.updateQuota(u.id, n);
                             }

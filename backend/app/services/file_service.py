@@ -15,9 +15,11 @@ from sqlalchemy import select
 from app.models.account import Account
 from app.models.file import File
 from app.models.folder import Folder
+from app.models.collaboration import Collaboration
 from app.repositories.account_repository import AccountRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.folder_repository import FolderRepository
+from app.repositories.collaboration_repository import CollaborationRepository
 from app.services.folder_service import FolderService
 from app.constants import StorageLimits, HTTPStatus
 from app.config import settings
@@ -29,6 +31,7 @@ class FileService:
         self.account_repo = AccountRepository(db)
         self.file_repo = FileRepository(db)
         self.folder_repo = FolderRepository(db)
+        self.collab_repo = CollaborationRepository(db)
         self.folder_service = FolderService(db)
         self.storage_base_path = settings.STORAGE_BASE_PATH
     
@@ -201,7 +204,14 @@ class FileService:
         try:
             file = self.file_repo.get_by_uuid(file_uuid)
 
-            if not file or file.owner_id != user_id or file.deleted_at:
+            if not file or file.deleted_at:
+                return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            # Check if user is the owner or a collaborator
+            is_owner = file.owner_id == user_id
+            is_collaborator = self.collab_repo.get_by_file_and_collaborator(file_uuid, user_id) is not None
+
+            if not is_owner and not is_collaborator:
                 return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
 
             file_path = os.path.join(self.storage_base_path, file.uuid)
