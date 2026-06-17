@@ -1,4 +1,6 @@
 import traceback as tb
+import threading
+import time
 from redis import Redis
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -18,6 +20,7 @@ from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws
 
 from app.middleware.session_middleware import SessionMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
+from app.services.snapshot_service import auto_save_to_disk, save_snapshot
 
 # Create FastAPI app
 app = FastAPI(title="File Management Backend", version="1.0.0")
@@ -47,6 +50,27 @@ redis_client = Redis.from_url(
 # Add middleware
 app.add_middleware(SessionMiddleware, redis_client=redis_client)
 rate_limit_middleware = RateLimitMiddleware(redis_client)
+
+
+# Background scheduler for auto-save and snapshots
+def _scheduler():
+    counter = 0
+    while True:
+        time.sleep(30)
+        counter += 1
+        try:
+            for key in redis_client.scan_iter("collab_content:*"):
+                file_uuid = key.replace("collab_content:", "")
+                auto_save_to_disk(file_uuid, redis_client)
+            if counter >= 30:
+                counter = 0
+                for key in redis_client.scan_iter("collab_content:*"):
+                    file_uuid = key.replace("collab_content:", "")
+                    save_snapshot(file_uuid, redis_client)
+        except Exception:
+            pass
+
+threading.Thread(target=_scheduler, daemon=True).start()
 
 
 # Global exception handler for debugging
