@@ -95,6 +95,15 @@ export function useCollab(fileUuid: string, user: { id: number; name: string }):
     }
   }, []);
 
+  const switchVersion = useCallback((versionId: number) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'switch_version',
+        version_id: versionId
+      }));
+    }
+  }, []);
+
   const sendSave = useCallback((content: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
@@ -104,5 +113,5 @@ export function useCollab(fileUuid: string, user: { id: number; name: string }):
     }
   }, []);
 
-  return { content, users, isConnected, sendUpdate, sendCursor, sendSave };
+  return { content, users, snapshots, isConnected, sendUpdate, sendCursor, sendSave, switchVersion };
 }
