@@ -67,6 +67,8 @@ export interface ShareItem {
   name: string;
   path: string;
   link: string;
+  limited_date?: string | null;
+  available_user?: string | null;
 }
 
 export interface ShareListResponse {
