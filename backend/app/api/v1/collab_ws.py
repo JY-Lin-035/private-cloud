@@ -9,7 +9,7 @@ from app.config import settings
 from app.repositories.file_repository import FileRepository
 from app.repositories.collaboration_repository import CollaborationRepository
 from app.services.snapshot_service import (
-    get_snapshots, switch_to_snapshot,
+    get_snapshots, switch_to_snapshot, save_snapshot,
     _get_content_key, _get_file_path
 )
 
@@ -216,6 +216,13 @@ async def websocket_collab(
                 content = data.get("content", "")
                 if _set_collab_content(redis, file_uuid, content):
                     _save_file_content(file_uuid, content)
+                    if data.get("create_snapshot"):
+                        save_snapshot(file_uuid, redis)
+                        snapshots = get_snapshots(file_uuid, redis)
+                        await websocket.send_json({
+                            "type": "snapshots",
+                            "snapshots": _snapshot_summary(snapshots)
+                        })
 
             elif msg_type == "cursor":
                 await _broadcast(file_uuid, {
@@ -238,11 +245,9 @@ async def websocket_collab(
                     if content is not None:
                         redis.set(f"collab_content:{file_uuid}", content)
                         _save_file_content(file_uuid, content)
-                        _reset_y_state(file_uuid, redis, content)
-                        # Get updated snapshots list
                         snapshots = get_snapshots(file_uuid, redis)
-                        await _broadcast(file_uuid, {
-                            "type": "y_reset",
+                        await websocket.send_json({
+                            "type": "apply_version",
                             "content": content,
                             "version_id": snapshot_id,
                             "snapshots": _snapshot_summary(snapshots)
