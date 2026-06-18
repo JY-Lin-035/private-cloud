@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     STORAGE_RECALCULATION_PERIOD: int = 604800  # 7 days in seconds
     DOWNLOAD_TOKEN_EXPIRE_SECONDS: int = 30  # seconds
 
+    # Collaboration snapshots
+    SNAPSHOT_INTERVAL: int = 900  # 15 minutes in seconds
+
     class Config:
         env_file = ".env"
         case_sensitive = True
