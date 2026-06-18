@@ -17,7 +17,7 @@ router = APIRouter()
 
 rooms: Dict[str, Dict[str, Dict[str, Any]]] = {}
 MAX_Y_UPDATES = 1000
-Y_STATE_VERSION = "4"
+Y_STATE_VERSION = "5"
 
 
 def _room_users(file_uuid: str) -> list[int]:
@@ -94,6 +94,10 @@ def _get_y_version_key(file_uuid: str) -> str:
     return f"collab_yversion:{file_uuid}"
 
 
+def _get_y_state_key(file_uuid: str) -> str:
+    return f"collab_ystate:{file_uuid}"
+
+
 def _ensure_y_state_version(file_uuid: str, redis: Redis) -> None:
     if redis.get(_get_y_version_key(file_uuid)) == Y_STATE_VERSION:
         return
@@ -129,6 +133,7 @@ def _reset_y_state(file_uuid: str, redis: Redis, content: str) -> None:
     redis.set(_get_y_base_key(file_uuid), content)
     redis.set(_get_y_version_key(file_uuid), Y_STATE_VERSION)
     redis.delete(_get_y_updates_key(file_uuid))
+    redis.delete(_get_y_state_key(file_uuid))
 
 
 def _check_permission(file_uuid: str, user_id: int) -> bool:
@@ -175,6 +180,7 @@ async def websocket_collab(
 
     _ensure_y_state_version(file_uuid, redis)
     content = _load_y_base_content(file_uuid, redis)
+    y_state = redis.get(_get_y_state_key(file_uuid))
     y_updates = _get_y_updates(file_uuid, redis)
     # Get snapshots list
     snapshots = get_snapshots(file_uuid, redis)
@@ -182,6 +188,7 @@ async def websocket_collab(
     await websocket.send_json({
         "type": "load_file",
         "content": content,
+        "y_state": y_state,
         "y_updates": y_updates,
         "needs_y_init": len(y_updates) == 0 and len(rooms[file_uuid]) == 1,
         "users": _room_users(file_uuid),
@@ -203,6 +210,7 @@ async def websocket_collab(
                 content = data.get("content")
                 if update and not _has_y_updates(file_uuid, redis):
                     _append_y_update(file_uuid, redis, update)
+                    redis.set(_get_y_state_key(file_uuid), update)
                     _set_collab_content(redis, file_uuid, content)
                     await _broadcast(file_uuid, {
                         "type": "y_init_state",
@@ -222,6 +230,10 @@ async def websocket_collab(
 
             elif msg_type == "y_projection":
                 _set_collab_content(redis, file_uuid, data.get("content"))
+                state_update = data.get("state_update")
+                if state_update:
+                    base64.b64decode(state_update, validate=True)
+                    redis.set(_get_y_state_key(file_uuid), state_update)
 
             elif msg_type in ("persist_text", "save"):
                 content = data.get("content", "")
