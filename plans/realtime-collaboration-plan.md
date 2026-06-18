@@ -561,3 +561,27 @@ uv run python -c "from app.main import app; from app.config import settings; pri
 - 手動按下儲存會送 `persist_text` 並帶 `create_snapshot: true`
 - 後端收到 `create_snapshot` 後會立即呼叫 `save_snapshot`
 - 儲存按鈕不必再等 `SNAPSHOT_INTERVAL` 才刷新版本快照
+
+### 10.14 同時輸入覆蓋修正
+
+同時輸入時曾出現 A 的內容覆蓋 B 的內容。判斷原因有兩個：
+
+1. 後端房間表原本以 `user_id` 當 key，同一帳號多分頁測試時，後連線會覆蓋前連線，造成其中一個 client 收不到 Yjs update。
+2. `y_update` 原本同時帶 `content` 給後端更新 `collab_content:{file_uuid}`。這份 content 是該 client 送出 update 當下看到的全文；多人同時輸入時，可能尚未包含其他人的 update，導致 Redis 純文字投影被最後送出的半成品覆蓋。
+
+修正方式：
+
+- 後端 `rooms` 改成每條 WebSocket 連線一個 `connection_id`，同一使用者多分頁也能同時留在房間內。
+- 廣播排除對象改用 `connection_id`，不再用 `user_id`。
+- 線上使用者列表改由目前房間連線重新計算並送出 `users` 訊息。
+- `y_update` 現在只負責傳送 Yjs binary update，不再更新 Redis 純文字內容。
+- 前端新增 `y_projection`：任何本地或遠端 Yjs update 套用後，短暫 debounce，再把目前合併後的 `Y.Text.toString()` 送到後端更新 `collab_content:{file_uuid}`。
+- `persist_text` 仍保留給自動儲存與手動儲存；手動儲存帶 `create_snapshot: true` 時會立即刷新版本快照。
+
+目前同步邊界：
+
+| 訊息 | 方向 | 用途 |
+|------|------|------|
+| `y_update` | Client -> Server / Server -> Client | 只傳 Yjs delta，負責共編合併 |
+| `y_projection` | Client -> Server | 更新 Redis 純文字投影，供自動儲存與快照使用 |
+| `persist_text` | Client -> Server | 自動/手動儲存目前全文；手動儲存可立即建立快照 |

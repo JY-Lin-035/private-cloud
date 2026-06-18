@@ -1,7 +1,7 @@
 import os
-import json
 import base64
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
+from uuid import uuid4
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from redis import Redis
 from app.database import SessionLocal
@@ -15,18 +15,24 @@ from app.services.snapshot_service import (
 
 router = APIRouter()
 
-rooms: Dict[str, Dict[int, WebSocket]] = {}
+rooms: Dict[str, Dict[str, Dict[str, Any]]] = {}
 MAX_Y_UPDATES = 1000
 Y_STATE_VERSION = "4"
 
 
-async def _broadcast(file_uuid: str, message: dict, exclude: Optional[int] = None):
+def _room_users(file_uuid: str) -> list[int]:
+    if file_uuid not in rooms:
+        return []
+    return sorted({connection["user_id"] for connection in rooms[file_uuid].values()})
+
+
+async def _broadcast(file_uuid: str, message: dict, exclude: Optional[str] = None):
     if file_uuid not in rooms:
         return
-    for uid, ws in rooms[file_uuid].items():
-        if uid != exclude:
+    for connection_id, connection in list(rooms[file_uuid].items()):
+        if connection_id != exclude:
             try:
-                await ws.send_json(message)
+                await connection["websocket"].send_json(message)
             except Exception:
                 pass
 
@@ -161,7 +167,11 @@ async def websocket_collab(
 
     if file_uuid not in rooms:
         rooms[file_uuid] = {}
-    rooms[file_uuid][user_id] = websocket
+    connection_id = str(uuid4())
+    rooms[file_uuid][connection_id] = {
+        "user_id": user_id,
+        "websocket": websocket
+    }
 
     _ensure_y_state_version(file_uuid, redis)
     content = _load_y_base_content(file_uuid, redis)
@@ -174,14 +184,14 @@ async def websocket_collab(
         "content": content,
         "y_updates": y_updates,
         "needs_y_init": len(y_updates) == 0 and len(rooms[file_uuid]) == 1,
-        "users": list(rooms[file_uuid].keys()),
+        "users": _room_users(file_uuid),
         "snapshots": _snapshot_summary(snapshots)
     })
 
     await _broadcast(file_uuid, {
-        "type": "user_joined",
-        "user_id": user_id
-    }, exclude=user_id)
+        "type": "users",
+        "users": _room_users(file_uuid)
+    }, exclude=connection_id)
 
     try:
         while True:
@@ -198,19 +208,20 @@ async def websocket_collab(
                         "type": "y_init_state",
                         "user_id": user_id,
                         "update": update
-                    }, exclude=user_id)
+                    }, exclude=connection_id)
 
             elif msg_type == "y_update":
                 update = data.get("update")
-                content = data.get("content")
                 if update:
                     _append_y_update(file_uuid, redis, update)
-                    _set_collab_content(redis, file_uuid, content)
                     await _broadcast(file_uuid, {
                         "type": "y_update",
                         "user_id": user_id,
                         "update": update
-                    }, exclude=user_id)
+                    }, exclude=connection_id)
+
+            elif msg_type == "y_projection":
+                _set_collab_content(redis, file_uuid, data.get("content"))
 
             elif msg_type in ("persist_text", "save"):
                 content = data.get("content", "")
@@ -229,7 +240,7 @@ async def websocket_collab(
                     "type": "cursor",
                     "user_id": user_id,
                     "cursor": data.get("cursor")
-                }, exclude=user_id)
+                }, exclude=connection_id)
 
             elif msg_type == "get_snapshots":
                 snapshots = get_snapshots(file_uuid, redis)
@@ -264,11 +275,11 @@ async def websocket_collab(
     except Exception:
         pass
     finally:
-        if file_uuid in rooms and user_id in rooms[file_uuid]:
-            del rooms[file_uuid][user_id]
+        if file_uuid in rooms and connection_id in rooms[file_uuid]:
+            del rooms[file_uuid][connection_id]
             if not rooms[file_uuid]:
                 del rooms[file_uuid]
         await _broadcast(file_uuid, {
-            "type": "user_left",
-            "user_id": user_id
+            "type": "users",
+            "users": _room_users(file_uuid)
         })

@@ -58,6 +58,7 @@ export function useYCollab(
   const wsRef = useRef<WebSocket | null>(null);
   const initializedRef = useRef(false);
   const canSendUpdatesRef = useRef(false);
+  const projectionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!fileUuid || !user.id) return;
@@ -69,13 +70,34 @@ export function useYCollab(
     initializedRef.current = false;
     canSendUpdatesRef.current = false;
 
+    const sendProjection = () => {
+      if (ws.readyState === WebSocket.OPEN && initializedRef.current && canSendUpdatesRef.current) {
+        ws.send(JSON.stringify({
+          type: 'y_projection',
+          content: ytext.toString(),
+        }));
+      }
+    };
+
+    const scheduleProjection = () => {
+      if (projectionTimerRef.current !== null) {
+        window.clearTimeout(projectionTimerRef.current);
+      }
+      projectionTimerRef.current = window.setTimeout(() => {
+        projectionTimerRef.current = null;
+        sendProjection();
+      }, 250);
+    };
+
     const handleUpdate = (update: Uint8Array, origin: unknown) => {
+      if (origin !== initOrigin) {
+        scheduleProjection();
+      }
       if (origin === remoteOrigin || origin === initOrigin) return;
       if (ws.readyState === WebSocket.OPEN && initializedRef.current && canSendUpdatesRef.current) {
         ws.send(JSON.stringify({
           type: 'y_update',
           update: bytesToBase64(update),
-          content: ytext.toString(),
         }));
       }
     };
@@ -145,6 +167,9 @@ export function useYCollab(
           case 'snapshots':
             setSnapshots(data.snapshots || []);
             break;
+          case 'users':
+            setUsers(data.users || []);
+            break;
           case 'switch_version_failed':
             console.error('Switch version failed:', data.message, data.version_id);
             break;
@@ -171,6 +196,10 @@ export function useYCollab(
     };
 
     return () => {
+      if (projectionTimerRef.current !== null) {
+        window.clearTimeout(projectionTimerRef.current);
+        projectionTimerRef.current = null;
+      }
       ydoc.off('update', handleUpdate);
       ws.close();
     };
