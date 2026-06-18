@@ -542,3 +542,22 @@ uv run python -c "from app.main import app; from app.config import settings; pri
 ```
 
 前端 TypeScript 通過，後端語法通過，設定讀取 `SNAPSHOT_INTERVAL=30`。`app.main` 匯入會啟動背景 scheduler，因此該檢查印出成功訊息後可能等到命令逾時。
+
+### 10.13 版本切換與立即快照修正
+
+版本切換後曾出現所有人無法繼續共編，原因是後端用 `y_reset` 清掉 Redis Yjs state，並要求多個 client 重新初始化 Yjs document。不同 client 的 Y.Doc 歷史可能因此不一致。
+
+修正方式：
+
+- 後端 `switch_version` 不再廣播 `y_reset`
+- 後端找到 snapshot 後，只回覆觸發者 `apply_version`
+- 觸發者收到 `apply_version` 後，用 Yjs 對 `Y.Text` 做一次正常 replace 操作
+- 這次 replace 會產生一般 `y_update`
+- 其他在線使用者透過普通 `y_update` 套用版本內容，因此切換版本後仍維持同一條 Yjs 共編歷史
+
+儲存按鈕行為也調整：
+
+- 自動儲存仍只送 `persist_text`
+- 手動按下儲存會送 `persist_text` 並帶 `create_snapshot: true`
+- 後端收到 `create_snapshot` 後會立即呼叫 `save_snapshot`
+- 儲存按鈕不必再等 `SNAPSHOT_INTERVAL` 才刷新版本快照

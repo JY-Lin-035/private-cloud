@@ -10,7 +10,7 @@ interface UseYCollabReturn {
   users: number[];
   snapshots: Snapshot[];
   isConnected: boolean;
-  persistText: (content: string) => void;
+  persistText: (content: string, createSnapshot?: boolean) => void;
   switchVersion: (versionId: string) => void;
 }
 
@@ -138,6 +138,10 @@ export function useYCollab(
             canSendUpdatesRef.current = true;
             setSnapshots(data.snapshots || []);
             break;
+          case 'apply_version':
+            replaceText(ytext, data.content || '', Symbol('apply-version'));
+            setSnapshots(data.snapshots || []);
+            break;
           case 'snapshots':
             setSnapshots(data.snapshots || []);
             break;
@@ -184,11 +188,12 @@ export function useYCollab(
     return () => clearInterval(timer);
   }, [isConnected]);
 
-  const persistText = useCallback((content: string) => {
+  const persistText = useCallback((content: string, createSnapshot = false) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'persist_text',
         content,
+        create_snapshot: createSnapshot,
       }));
     }
   }, []);
