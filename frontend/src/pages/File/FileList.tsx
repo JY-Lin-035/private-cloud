@@ -23,6 +23,7 @@ import {
   FileText,
   Download,
   Share2,
+  Link2,
   Trash2,
   Edit3,
   Plus,
@@ -610,13 +611,19 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
                       {item.type === 'file' && (
                         <div className="relative">
-                          <Share2
-                            className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              callShareFileLink(item.uuid, item.type, item.shared, item.limited_date);
-                            }}
-                          />
+                          {(() => {
+                            const hasValidLink = item.shared && (!item.limited_date || new Date(item.limited_date) > new Date());
+                            const IconComponent = hasValidLink ? Link2 : Share2;
+                            return (
+                              <IconComponent
+                                className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  callShareFileLink(item.uuid, item.type, item.shared, item.limited_date);
+                                }}
+                              />
+                            );
+                          })()}
 
                           {popupItemUuid === item.uuid && copyShow && (
                             <div
