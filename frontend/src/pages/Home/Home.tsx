@@ -67,40 +67,40 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
           </span>
         </div>
         <div className='mt-8 flex flex-col items-center gap-6'>
-                  <div className='flex flex-col sm:flex-row gap-4'>
-                    {session.authenticated ? (
-                      <button
-                        onClick={() => navigate('/file-list')}
-                        className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
-                      >
-                        Enter Cloud <ArrowRight className='inline ml-2 w-5 h-5' />
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => navigate('/login')}
-                        className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
-                      >
-                        Login Now <ArrowRight className='inline ml-2 w-5 h-5' />
-                      </button>
-                    )}
-                  </div>
-                  <div className='flex flex-row gap-4'>
-                                      <a
-                                        href='https://github.com/JY-Lin-035/private-cloud'
-                                        target='_blank'
-                                        rel='noopener noreferrer'
-                                        className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
-                                      >
-                                                                              <img src={githubIcon} alt='GitHub' className='w-6 h-6 brightness-0 invert' />
-                                      </a>
-                                      <a
-                                        href='mailto:JY@junmail.abrdns.com'
-                                        className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
-                                      >
-                                        <Mail className='w-6 h-6' />
-                                      </a>
-                                    </div>
-                </div>
+          <div className='flex flex-col sm:flex-row gap-4'>
+            {session.authenticated ? (
+              <button
+                onClick={() => navigate('/file-list')}
+                className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
+              >
+                Enter Cloud <ArrowRight className='inline ml-2 w-5 h-5' />
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate('/login')}
+                className='px-10 py-4 text-lg font-semibold bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-xl shadow-lg hover:shadow-xl transition-all cursor-pointer'
+              >
+                Login Now <ArrowRight className='inline ml-2 w-5 h-5' />
+              </button>
+            )}
+          </div>
+          <div className='flex flex-row gap-4'>
+            <a
+              href='https://github.com/JY-Lin-035/private-cloud'
+              target='_blank'
+              rel='noopener noreferrer'
+              className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
+            >
+              <img src={githubIcon} alt='GitHub' className='w-6 h-6 brightness-0 invert' />
+            </a>
+            <a
+              href='mailto:JY@junmail.abrdns.com'
+              className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
+            >
+              <Mail className='w-6 h-6' />
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );
