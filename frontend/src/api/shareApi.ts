@@ -3,7 +3,7 @@ import type { ShareListResponse } from '../types/index';
 
 export const shareApi = {
   // Get share link
-  getLink: async (data: { item_uuid: string; item_type: string }) => {
+  getLink: async (data: { item_uuid: string; item_type: string; limited_date?: string | null }) => {
     const response = await api.post('/api/share/getLink', data);
     return response.data as string;
   },

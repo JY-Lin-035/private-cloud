@@ -1,3 +1,5 @@
+from datetime import datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -13,6 +15,7 @@ logger = log.get_logger("share_api.log")
 class ShareLinkRequest(BaseModel):
     item_uuid: str
     item_type: str  # 'folder' or 'file'
+    limited_date: Optional[str] = None  # Expiration date for the share link (ISO string)
 
 
 @router.get("/getList")
@@ -48,11 +51,23 @@ async def create_share_link(
 ):
     """Create a share link for a folder or file."""
     try:
-        logger.info(f"Create share link request received, user_id: {user_id}, item_uuid: {request.item_uuid}, item_type: {request.item_type}")
+        logger.info(f"Create share link request received, user_id: {user_id}, item_uuid: {request.item_uuid}, item_type: {request.item_type}, limited_date_raw: {request.limited_date}")
+        
+        # Parse limited_date string to datetime
+        parsed_limited_date = None
+        if request.limited_date:
+            try:
+                # Handle format: "2026-07-17T17:00:00" (local time, no timezone)
+                # Also handle ISO format: "2026-07-17T09:00:00.000Z"
+                cleaned = request.limited_date.replace('Z', '+00:00')
+                parsed_limited_date = datetime.fromisoformat(cleaned)
+                logger.info(f"Parsed limited_date: {parsed_limited_date}")
+            except Exception as e:
+                logger.error(f"Failed to parse limited_date '{request.limited_date}': {e}")
         
         share_service = ShareService(db)
         
-        result = share_service.create_link(user_id, request.item_uuid, request.item_type)
+        result = share_service.create_link(user_id, request.item_uuid, request.item_type, limited_date=parsed_limited_date)
         logger.info(f"Create share link result: {result}")
         
         if result and 'error' in result:
