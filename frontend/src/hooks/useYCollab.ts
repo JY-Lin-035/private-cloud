@@ -75,6 +75,7 @@ export function useYCollab(
         ws.send(JSON.stringify({
           type: 'y_projection',
           content: ytext.toString(),
+          state_update: bytesToBase64(Y.encodeStateAsUpdate(ydoc)),
         }));
       }
     };
@@ -113,7 +114,11 @@ export function useYCollab(
         const data = JSON.parse(event.data);
         switch (data.type) {
           case 'load_file':
-            if ((data.y_updates || []).length > 0) {
+            if (data.y_state) {
+              Y.applyUpdate(ydoc, base64ToBytes(data.y_state), remoteOrigin);
+              initializedRef.current = true;
+              canSendUpdatesRef.current = true;
+            } else if ((data.y_updates || []).length > 0) {
               (data.y_updates || []).forEach((update: string) => {
                 Y.applyUpdate(ydoc, base64ToBytes(update), remoteOrigin);
               });

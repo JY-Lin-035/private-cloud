@@ -585,3 +585,28 @@ uv run python -c "from app.main import app; from app.config import settings; pri
 | `y_update` | Client -> Server / Server -> Client | 只傳 Yjs delta，負責共編合併 |
 | `y_projection` | Client -> Server | 更新 Redis 純文字投影，供自動儲存與快照使用 |
 | `persist_text` | Client -> Server | 自動/手動儲存目前全文；手動儲存可立即建立快照 |
+
+### 10.15 第三人加入與版本疊加修正
+
+第三人進入時曾看到空白內容，且第三人切換版本後，A/B 的內容會變成「舊內容接在新內容後面」。原因是第三人的 Yjs document 沒有完整還原：
+
+- 後端只保存 `collab_yupdates:{file_uuid}` 增量列表。
+- 若初始化 update 不完整，或 update log 被裁切，第三人只套用增量時無法重建目前文件。
+- 第三人的 Yjs document 若是空的，再執行版本切換，產生的 replace delta 對 A/B 來說會像「插入舊內容」，因此出現疊加。
+
+修正方式：
+
+- 新增 Redis key：`collab_ystate:{file_uuid}`，保存完整 `Y.encodeStateAsUpdate(ydoc)`。
+- 前端 `y_projection` 除了送純文字 `content`，也送完整 `state_update`。
+- 後端 `load_file` 優先回傳 `y_state`，新加入的 client 優先套用完整 Yjs state。
+- `y_init_state` 也會寫入 `collab_ystate:{file_uuid}`，讓第一份初始化文件可被後續 client 完整還原。
+- `Y_STATE_VERSION` 升到 `5`，避免舊版不完整 update log 影響新連線。
+
+新的載入優先順序：
+
+```text
+1. 如果 Redis 有 collab_ystate:{file_uuid} -> 套完整 Yjs state
+2. 否則如果有 collab_yupdates:{file_uuid} -> 套 update log
+3. 否則第一個 client 用 content 初始化 Yjs document
+4. 其他 client 等待 y_init_state
+```
