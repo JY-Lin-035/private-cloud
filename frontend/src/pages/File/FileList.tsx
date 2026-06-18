@@ -228,14 +228,17 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     }
   }
 
-  async function callShareFileLink(item_uuid: string, item_type: string, existingLink?: string | null) {
-    if (existingLink) {
-      // Already has a share link → show copy/remove popup directly
+  async function callShareFileLink(item_uuid: string, item_type: string, existingLink?: string | null, limitedDate?: string | null) {
+    // Check if link is expired (has limited_date that has passed)
+    const isExpired = limitedDate ? new Date(limitedDate) < new Date() : false;
+    
+    if (existingLink && !isExpired) {
+      // Has a valid share link → show copy/remove popup directly
       setShareFileLink(existingLink);
       setCopyShow(true);
       setPopupItemUuid(item_uuid);
     } else {
-      // No share link yet → open modal to let user choose limited/unlimited
+      // No link or link is expired → open modal to let user choose limited/unlimited
       openShareModal(item_uuid, item_type);
     }
   }
@@ -323,63 +326,80 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
       {/* Share Modal */}
       {showShareModal && (
-        <div
-          className="fixed inset-0 z-30 flex items-center justify-center"
-          onClick={() => setShowShareModal(false)}
-        >
-          <div className="absolute inset-0 bg-black bg-opacity-50"></div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="relative z-10 bg-white p-6 rounded-lg shadow-lg w-96"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-bold mb-4">分享設定</h3>
+            className="fixed inset-0 bg-black/50"
+            onClick={() => setShowShareModal(false)}
+          ></div>
+          <div className="relative z-10 w-full max-w-[40vw] max-h-[80vh] overflow-y-auto p-6 rounded-lg shadow-xl bg-gray-800">
+            <button
+              onClick={() => setShowShareModal(false)}
+              className="absolute top-3 right-2.5 text-gray-400 bg-transparent hover:bg-gray-700 hover:text-white rounded-lg text-sm w-8 h-8 flex items-center justify-center"
+            >
+              <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6" />
+              </svg>
+            </button>
 
-            <div className="mb-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="shareType"
-                  checked={!shareIsLimited}
-                  onChange={() => setShareIsLimited(false)}
-                />
-                <span>不限時分享（永久有效）</span>
-              </label>
-            </div>
-
-            <div className="mb-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="shareType"
-                  checked={shareIsLimited}
-                  onChange={() => setShareIsLimited(true)}
-                />
-                <span>限時分享</span>
-              </label>
-              {shareIsLimited && (
-                <div className="mt-2 ml-6">
-                  <label className="block text-sm text-gray-600 mb-1">到期日期與時間</label>
-                  <input
-                    type="datetime-local"
-                    value={shareLimitedDate}
-                    onChange={(e) => setShareLimitedDate(e.target.value)}
-                    className="border border-gray-300 rounded px-3 py-2 w-full"
-                    min={new Date().toISOString().slice(0, 16)}
-                  />
-                </div>
-              )}
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <button
-                className="px-4 py-2 bg-gray-300 text-gray-700 rounded cursor-pointer"
-                onClick={() => setShowShareModal(false)}
+            <div className="p-4 text-center md:p-5 text-white">
+              <svg
+                className="w-12 h-12 mx-auto mb-6"
+                aria-hidden="true"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 20 20"
               >
-                取消
-              </button>
+                <path
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M15 8v3a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V8m4 4h2m-2 0V4m2 0v4"
+                />
+              </svg>
+
+              <h3 className="mb-5 text-xl font-normal text-white">分享設定</h3>
+
+              <div className="mb-4 text-left">
+                <label className="flex items-center gap-2 cursor-pointer text-white">
+                  <input
+                    type="radio"
+                    name="shareType"
+                    checked={!shareIsLimited}
+                    onChange={() => setShareIsLimited(false)}
+                  />
+                  <span>不限時分享（永久有效）</span>
+                </label>
+              </div>
+
+              <div className="mb-4 text-left">
+                <label className="flex items-center gap-2 cursor-pointer text-white">
+                  <input
+                    type="radio"
+                    name="shareType"
+                    checked={shareIsLimited}
+                    onChange={() => setShareIsLimited(true)}
+                  />
+                  <span>限時分享</span>
+                </label>
+                {shareIsLimited && (
+                  <div className="mt-2 ml-6 text-left">
+                    <label className="block text-sm text-gray-400 mb-1">到期日期與時間</label>
+                    <input
+                      type="datetime-local"
+                      value={shareLimitedDate}
+                      onChange={(e) => setShareLimitedDate(e.target.value)}
+                      className="w-full px-3 py-2 mt-2 mb-2 border rounded bg-white text-gray-900 border-gray-300"
+                      min={new Date().toISOString().slice(0, 16)}
+                    />
+                  </div>
+                )}
+              </div>
+
               <button
-                className="px-4 py-2 bg-blue-500 text-white rounded cursor-pointer"
                 onClick={confirmShare}
+                type="button"
+                className="text-white bg-blue-600 hover:bg-blue-500 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-lg inline-flex items-center justify-center px-5 py-2.5 mt-6 text-center"
               >
                 產生分享連結
               </button>
@@ -606,7 +626,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                             className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
                             onClick={(e) => {
                               e.stopPropagation();
-                              callShareFileLink(item.uuid, item.type, item.shared);
+                              callShareFileLink(item.uuid, item.type, item.shared, item.limited_date);
                             }}
                           />
 
