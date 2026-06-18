@@ -2,7 +2,7 @@ import { api } from './api';
 
 export const collaborationApi = {
   addCollaborator(fileUuid: string, collaboratorName: string, collaboratorEmail: string) {
-    return api.post('/collaboration/addCollaborator', {
+    return api.post('/api/collaboration/addCollaborator', {
       file_uuid: fileUuid,
       collaborator_name: collaboratorName,
       collaborator_email: collaboratorEmail,
@@ -10,16 +10,16 @@ export const collaborationApi = {
   },
 
   removeCollaborator(fileUuid: string, collaboratorId: number) {
-    return api.delete('/collaboration/removeCollaborator', {
+    return api.delete('/api/collaboration/removeCollaborator', {
       data: { file_uuid: fileUuid, collaborator_id: collaboratorId },
     });
   },
 
   getOwnedCollaborations() {
-    return api.get('/collaboration/ownedCollaborations');
+    return api.get('/api/collaboration/ownedCollaborations');
   },
 
   getMyCollaborations() {
-    return api.get('/collaboration/myCollaborations');
+    return api.get('/api/collaboration/myCollaborations');
   },
 };
