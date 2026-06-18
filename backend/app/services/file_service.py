@@ -77,26 +77,42 @@ class FileService:
             file_list = []
             
             for folder in folders:
+                # Check if share link is expired
+                if folder.shared and folder.limited_date:
+                    now_local = datetime.utcnow() + timedelta(hours=8)
+                    if now_local > folder.limited_date:
+                        folder.shared = None
+                        folder.limited_date = None
+                        self.db.commit()
+                
                 file_list.append({
                     'type': 'folder',
                     'uuid': folder.uuid,
                     'name': folder.name,
                     'size': folder.size,
-                    # 'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                     'date': _fmt_utc8(folder.updated_at),
-                    'shared': folder.shared
+                    'shared': folder.shared,
+                    'limited_date': folder.limited_date.strftime('%Y-%m-%d %H:%M:%S') if folder.limited_date else None
                 })
             
             for file in files:
+                # Check if share link is expired
+                if file.shared and file.limited_date:
+                    now_local = datetime.utcnow() + timedelta(hours=8)
+                    if now_local > file.limited_date:
+                        file.shared = None
+                        file.limited_date = None
+                        self.db.commit()
+                
                 file_list.append({
                     'type': 'file',
                     'uuid': file.uuid,
                     'name': file.name,
                     'size': file.size,
-                    # 'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                     'date': _fmt_utc8(file.updated_at),
                     'mime_type': file.mime_type,
-                    'shared': file.shared
+                    'shared': file.shared,
+                    'limited_date': file.limited_date.strftime('%Y-%m-%d %H:%M:%S') if file.limited_date else None
                 })
             
             return {'files': file_list, 'stateCode': HTTPStatus.OK}
