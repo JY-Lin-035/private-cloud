@@ -156,7 +156,7 @@ class CollaborationService:
                     'owner_name': owner.name if owner else '未知',
                     'owner_email': owner.email if owner else '未知',
                     'permission': c.permission,
-                    'created_at': c.created_at.isoformat()
+                    'created_at': (c.created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
                 })
             return {'items': items, 'total': len(items), 'stateCode': HTTPStatus.OK}
         except Exception as e:

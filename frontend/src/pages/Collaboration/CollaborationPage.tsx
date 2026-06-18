@@ -37,7 +37,9 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
   async function loadOwnedCollaborations() {
     try {
       const res = await collaborationApi.getOwnedCollaborations();
-      setOwnedCollabs(res.data.items || []);
+      const items = res.data.items || [];
+      setOwnedCollabs(items);
+      setCollapsedFiles(new Set(items.map((item: CollaborationGroup) => item.file_uuid)));
     } catch (e) {
       console.error('Failed to load owned collaborations', e);
     }
