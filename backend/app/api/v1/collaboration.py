@@ -10,7 +10,7 @@ from app.schemas.collaboration import (
 from app.services.collaboration_service import CollaborationService
 from app.constants import HTTPStatus
 
-router = APIRouter(prefix="/collaboration", tags=["collaboration"])
+router = APIRouter(prefix="/api/collaboration", tags=["collaboration"])
 
 
 @router.post("/addCollaborator")
