@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { buildWebSocketUrl } from '../config/api';
 
 interface CursorPosition {
   lineNumber: number;
@@ -31,8 +32,7 @@ export function useCollab(fileUuid: string, user: { id: number; name: string }):
   useEffect(() => {
     if (!fileUuid || !user.id) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//localhost:8000/ws/collab/${fileUuid}?user_id=${user.id}`;
+    const wsUrl = buildWebSocketUrl(`/ws/collab/${fileUuid}?user_id=${user.id}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
