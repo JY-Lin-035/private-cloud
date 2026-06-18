@@ -36,8 +36,8 @@ class CollaborationService:
 
             # 2. Find the collaborator by name and/or email
             # Support formats: "name", "email", "name/email"
-            search_name = collaborator_name
-            search_email = collaborator_email
+            search_name = collaborator_name.strip()
+            search_email = collaborator_email.strip()
 
             # If name contains /, split it
             if '/' in collaborator_name:
