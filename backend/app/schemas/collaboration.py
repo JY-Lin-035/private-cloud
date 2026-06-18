@@ -6,7 +6,7 @@ from datetime import datetime
 class CollaborationAddRequest(BaseModel):
     file_uuid: str
     collaborator_name: str
-    collaborator_email: str
+    collaborator_email: str = ""
 
 
 class CollaborationRemoveRequest(BaseModel):

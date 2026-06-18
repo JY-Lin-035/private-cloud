@@ -72,7 +72,7 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   }
 
   return (
-    <div className={`flex flex-col h-full ${layoutClass}`}>
+    <div className={`flex flex-col min-h-0 ${layoutClass}`}>
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between bg-gray-800 px-2 sm:px-4 py-2 border-b border-gray-700 gap-2">
         <div className="flex items-center gap-2 sm:gap-4">
