@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, BigInteger, ForeignKey, TIMESTAMP, Boolean
+from sqlalchemy import Column, String, Integer, BigInteger, ForeignKey, TIMESTAMP, Boolean, Text
 from sqlalchemy.orm import relationship
 from .base import Base, BaseModel
 from app.constants import FolderValidation
@@ -29,6 +29,8 @@ class Folder(BaseModel):
     shared = Column(String(100), nullable=True, unique=True, index=True)
     deleted_at = Column(TIMESTAMP, nullable=True, index=True)
     is_system = Column(Boolean, default=False, nullable=False)  # System folders cannot be deleted
+    limited_date = Column(TIMESTAMP, nullable=True)  # Expiration date for sharing
+    available_user = Column(Text, nullable=True)  # JSON array of allowed user IDs
 
     # Relationships
     owner = relationship('Account', backref='folders')
