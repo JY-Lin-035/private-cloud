@@ -17,7 +17,6 @@ export const fileApi = {
   },
 
   // Download file
-  // Download file
   download: async (file_uuid: string) => {
     const response = await api.get('/api/files/downloadToken', {
       params: { file_uuid },
