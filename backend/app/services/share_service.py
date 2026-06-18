@@ -1,7 +1,8 @@
 import os
+import json
 import hashlib
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 from secrets import token_hex
 from sqlalchemy import select
@@ -27,8 +28,11 @@ class ShareService:
         self.logger = log.get_logger("share_service.log")
     
     def get_list(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Get all shared items for a user."""
+        """Get all shared items for a user. Filters out expired links and clears them from DB."""
         try:
+            now = datetime.utcnow()
+            now_local = now + timedelta(hours=8)  # Taiwan time (UTC+8)
+            
             # Get shared folders
             folders = self.db.execute(
                 select(Folder).where(
@@ -48,20 +52,39 @@ class ShareService:
             share_list = []
             
             for folder in folders:
+                # Check if expired - if so, clear the share link from DB
+                if folder.limited_date and now_local > folder.limited_date:
+                    self.logger.info(f"Clearing expired share link for folder {folder.uuid}")
+                    folder.shared = None
+                    folder.limited_date = None
+                    self.db.commit()
+                    continue
+                
                 date_str = datetime.fromtimestamp(folder.updated_at.timestamp(), tz=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
                 # Get folder path
                 path = self.folder_repo.get_folder_path(folder.uuid)
                 path_str = ' / '.join([p['name'] for p in path])
+                limited_date_str = folder.limited_date.strftime('%Y-%m-%d %H:%M:%S') if folder.limited_date else None
                 share_list.append({
                     'name': folder.name,
                     'path': path_str,
                     'link': folder.shared,
                     'uuid': folder.uuid,
                     'date': date_str,
-                    'type': 'folder'
+                    'type': 'folder',
+                    'limited_date': limited_date_str,
+                    'available_user': folder.available_user
                 })
             
             for file in files:
+                # Check if file is expired - if so, clear the share link from DB
+                if file.limited_date and now_local > file.limited_date:
+                    self.logger.info(f"Clearing expired share link for file {file.uuid}")
+                    file.shared = None
+                    file.limited_date = None
+                    self.db.commit()
+                    continue
+                
                 date_str = datetime.fromtimestamp(file.updated_at.timestamp(), tz=timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
                 # Get file parent folder path
                 if file.parent_folder_id:
@@ -69,13 +92,16 @@ class ShareService:
                     path_str = ' / '.join([p['name'] for p in path]) + ' / ' + file.name
                 else:
                     path_str = file.name
+                limited_date_str = file.limited_date.strftime('%Y-%m-%d %H:%M:%S') if file.limited_date else None
                 share_list.append({
                     'name': file.name,
                     'path': path_str,
                     'link': file.shared,
                     'uuid': file.uuid,
                     'date': date_str,
-                    'type': 'file'
+                    'type': 'file',
+                    'limited_date': limited_date_str,
+                    'available_user': file.available_user
                 })
             
             return {'list': share_list, 'stateCode': HTTPStatus.OK}
@@ -83,43 +109,56 @@ class ShareService:
             self.logger.error(f"Error getting share list: {str(e)}")
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def create_link(self, user_id: int, item_uuid: str, item_type: str) -> Optional[Dict[str, Any]]:
-        """Create a share link for a folder or file."""
+    def create_link(self, user_id: int, item_uuid: str, item_type: str, limited_date: Optional[datetime] = None, available_user: Optional[List[int]] = None) -> Optional[Dict[str, Any]]:
+        """Create a share link for a folder or file. Always updates limited_date and available_user."""
         try:
             account = self.account_repo.get_by_id(user_id)
             
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
+            # Convert available_user list to JSON string
+            available_user_json = json.dumps(available_user) if available_user else None
+            
+            self.logger.info(f"create_link called: item_uuid={item_uuid}, item_type={item_type}, limited_date={limited_date}, available_user={available_user}")
+            
             if item_type == 'folder':
                 item = self.folder_repo.get_by_uuid(item_uuid)
                 if not item or item.owner_id != user_id:
                     return {'error': '找不到資料夾', 'stateCode': HTTPStatus.NOT_FOUND}
                 
-                if item.shared:
-                    return {'url': item.shared, 'stateCode': 200}
+                if not item.shared:
+                    # Generate share hash only if not already shared
+                    share_hash = self._generate_share_hash()
+                    item.shared = share_hash
                 
-                # Generate share hash
-                share_hash = self._generate_share_hash()
-                item.shared = share_hash
+                # Always update limited_date and available_user
+                item.limited_date = limited_date
+                item.available_user = available_user_json
                 self.folder_repo.update(item)
                 
-                return {'url': share_hash, 'stateCode': HTTPStatus.OK}
+                self.logger.info(f"Folder share updated: uuid={item.uuid}, shared={item.shared}, limited_date={item.limited_date}")
+                
+                return {'url': item.shared, 'stateCode': HTTPStatus.OK}
             
             elif item_type == 'file':
                 item = self.file_repo.get_by_uuid(item_uuid)
                 if not item or item.owner_id != user_id:
                     return {'error': '找不到檔案', 'stateCode': HTTPStatus.NOT_FOUND}
                 
-                if item.shared:
-                    return {'url': item.shared, 'stateCode': 200}
+                if not item.shared:
+                    # Generate share hash only if not already shared
+                    share_hash = self._generate_share_hash()
+                    item.shared = share_hash
                 
-                # Generate share hash
-                share_hash = self._generate_share_hash()
-                item.shared = share_hash
+                # Always update limited_date and available_user
+                item.limited_date = limited_date
+                item.available_user = available_user_json
                 self.file_repo.update(item)
                 
-                return {'url': share_hash, 'stateCode': HTTPStatus.OK}
+                self.logger.info(f"File share updated: uuid={item.uuid}, shared={item.shared}, limited_date={item.limited_date}")
+                
+                return {'url': item.shared, 'stateCode': HTTPStatus.OK}
             
             else:
                 return {'error': '無效的項目類型', 'stateCode': HTTPStatus.BAD_REQUEST}
@@ -165,7 +204,30 @@ class ShareService:
             self.logger.error(f"Error deleting share link: {str(e)}")
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
-    def download(self, share_hash: str) -> Optional[Dict[str, Any]]:
+    def _check_share_access(self, item, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Check if a shared item is accessible. Returns error dict if not, None if OK."""
+        # Check limited_date (expiration)
+        if item.limited_date:
+            now = datetime.utcnow()
+            # limited_date is stored in local time (Taipei, UTC+8), so we need to compare with local time
+            now_local = now + timedelta(hours=8)
+            if now_local > item.limited_date:
+                self.logger.warning(f"Share link expired for item {item.uuid}, limited_date: {item.limited_date}, now_local: {now_local}")
+                return {'error': '分享連結已過期', 'stateCode': HTTPStatus.FORBIDDEN}
+        
+        # Check available_user (allowed user list)
+        if item.available_user and user_id is not None:
+            try:
+                allowed_users = json.loads(item.available_user)
+                if allowed_users and user_id not in allowed_users:
+                    self.logger.warning(f"User {user_id} not in available_user list for item {item.uuid}")
+                    return {'error': '您沒有權限存取此分享連結', 'stateCode': HTTPStatus.FORBIDDEN}
+            except (json.JSONDecodeError, TypeError):
+                self.logger.error(f"Failed to parse available_user for item {item.uuid}: {item.available_user}")
+        
+        return None
+    
+    def download(self, share_hash: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Download a file via share link."""
         try:
             # Try to find file by share hash
@@ -174,6 +236,11 @@ class ShareService:
             ).scalar_one_or_none()
             
             if file:
+                # Check access permissions
+                access_error = self._check_share_access(file, user_id)
+                if access_error:
+                    return access_error
+                
                 file_path = Path(os.path.join(self.storage_base_path, file.uuid))
                 if not file_path.exists() or not file_path.is_file():
                     self.logger.warning(f"File not found: {file_path}")
@@ -193,6 +260,11 @@ class ShareService:
             ).scalar_one_or_none()
             
             if folder:
+                # Check access permissions
+                access_error = self._check_share_access(folder)
+                if access_error:
+                    return access_error
+                
                 return {'error': '資料夾分享不支援下載', 'stateCode': HTTPStatus.BAD_REQUEST}
             
             self.logger.warning(f"Share link not found: {share_hash}")

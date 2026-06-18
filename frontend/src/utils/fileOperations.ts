@@ -38,19 +38,22 @@ export async function deleteFile(item_uuid: string, deleteItem: any, fileList: a
 }
 
 // 檔案分享
-export async function getShareFileLink(item_uuid: string, item_type: string): Promise<[string | string[], string, boolean, string, boolean]> {
+export async function getShareFileLink(item_uuid: string, item_type: string, limited_date?: string | null): Promise<[string | string[], string, boolean, string, boolean, string | null]> {
   try {
-    const data = {
+    const data: { item_uuid: string; item_type: string; limited_date?: string | null } = {
       item_uuid: item_uuid,
       item_type: item_type,
     };
+    if (limited_date) {
+      data.limited_date = limited_date;
+    }
     const r = await shareApi.getLink(data);
 
-    // response className showMode shareLink copyShow
-    return ["分享連結已生成", "text-green-500", false, r, true];
+    // response className showMode shareLink copyShow limitedDate
+    return ["分享連結已生成", "text-green-500", false, r, true, limited_date || null];
   } catch (e) {
     console.error(e);
-    return [["連結生成失敗, 請稍後再試!"], "text-red-500", true, "", false];
+    return [["連結生成失敗, 請稍後再試!"], "text-red-500", true, "", false, null];
   }
 }
 

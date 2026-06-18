@@ -23,6 +23,7 @@ import {
   FileText,
   Download,
   Share2,
+  Link2,
   Trash2,
   Edit3,
   Plus,
@@ -56,6 +57,13 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
   const [currentFolderUuid, setCurrentFolderUuid] = useState<string | null>(null);
+
+  // Share modal state
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareItemUuid, setShareItemUuid] = useState<string | null>(null);
+  const [shareItemType, setShareItemType] = useState<string>('');
+  const [shareLimitedDate, setShareLimitedDate] = useState<string>('');
+  const [shareIsLimited, setShareIsLimited] = useState(false);
 
   async function getFileList(parent_folder_uuid: string | null) {
     try {
@@ -176,17 +184,63 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setFileList([...fl]);
   }
 
-  async function callShareFileLink(item_uuid: string, item_type: string) {
-    const [res, cn, show, link, copy] = await getShareFileLink(item_uuid, item_type);
+  // Open share modal
+  function openShareModal(item_uuid: string, item_type: string) {
+    setShareItemUuid(item_uuid);
+    setShareItemType(item_type);
+    setShareIsLimited(false);
+    setShareLimitedDate('');
+    setShowShareModal(true);
+  }
+
+  // Confirm share from modal
+  async function confirmShare() {
+    console.log('confirmShare called', { shareItemUuid, shareItemType, shareIsLimited, shareLimitedDate });
+    if (!shareItemUuid) {
+      console.error('shareItemUuid is null');
+      return;
+    }
+
+    let limitedDateStr: string | null = null;
+    let displayLimitedDate: string | null = null;
+    if (shareIsLimited && shareLimitedDate) {
+      // Send the raw datetime-local value (YYYY-MM-DDTHH:MM) and let backend parse it
+      limitedDateStr = shareLimitedDate + ':00';  // Add seconds: YYYY-MM-DDTHH:MM:SS
+      // Format for display: YYYY-MM-DD HH:MM:SS
+      const [datePart, timePart] = shareLimitedDate.split('T');
+      displayLimitedDate = `${datePart} ${timePart}:00`;
+    }
+    
+    console.log('Calling getShareFileLink with:', { shareItemUuid, shareItemType, limitedDateStr });
+
+    const [res, cn, show, link, copy] = await getShareFileLink(shareItemUuid, shareItemType, limitedDateStr);
+    console.log('getShareFileLink returned', { res, cn, show, link, copy });
+    
     setResponse(res);
     setClassName(cn);
     setShowMode(show);
     setInputShow(false);
     setShareFileLink(link);
     setCopyShow(copy);
-    setPopupItemUuid(item_uuid);
+    setPopupItemUuid(shareItemUuid);
+    setShowShareModal(false);
     if (link) {
-      setFileList(prev => prev.map(f => f.uuid === item_uuid ? { ...f, shared: link } : f));
+      setFileList(prev => prev.map(f => f.uuid === shareItemUuid ? { ...f, shared: link, limited_date: displayLimitedDate } : f));
+    }
+  }
+
+  async function callShareFileLink(item_uuid: string, item_type: string, existingLink?: string | null, limitedDate?: string | null) {
+    // Check if link is expired (has limited_date that has passed)
+    const isExpired = limitedDate ? new Date(limitedDate) < new Date() : false;
+    
+    if (existingLink && !isExpired) {
+      // Has a valid share link → show copy/remove popup directly
+      setShareFileLink(existingLink);
+      setCopyShow(true);
+      setPopupItemUuid(item_uuid);
+    } else {
+      // No link or link is expired → open modal to let user choose limited/unlimited
+      openShareModal(item_uuid, item_type);
     }
   }
 
@@ -271,53 +325,80 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         onEmitFolderName={() => { setShowMode(false); setInputShow(false); emitFolderName(); }}
       />
 
-      {showUpLoad && (
-        <>
-          {/* 原生上傳 UI (已註解) */}
-          {/* <div className="fixed inset-0 z-20 flex items-center justify-center">
-            <div
-              className="absolute inset-0 bg-black bg-opacity-50"
-              onClick={() => setShowUpLoad(false)}
-            ></div>
-            <div className="relative z-10 bg-white p-6 rounded-lg">
-              <h3 className="text-lg font-bold mb-4">上傳檔案</h3>
-              <input
-                type="file"
-                multiple
-                onChange={async (e) => {
-                  const files = e.target.files;
-                  if (!files || files.length === 0) return;
+      {/* Share Modal */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="fixed inset-0 bg-black/50"
+            onClick={() => setShowShareModal(false)}
+          ></div>
+          <div className="relative z-10 w-full max-w-[40vw] max-h-[80vh] overflow-y-auto p-6 rounded-lg shadow-xl bg-gray-800">
+            <button
+              onClick={() => setShowShareModal(false)}
+              className="absolute top-3 right-2.5 text-gray-400 bg-transparent hover:bg-gray-700 hover:text-white rounded-lg text-sm w-8 h-8 flex items-center justify-center"
+            >
+              <svg className="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6" />
+              </svg>
+            </button>
 
-                  const formData = new FormData();
-                  for (let i = 0; i < files.length; i++) {
-                    formData.append('file', files[i]);
-                  }
-                  formData.append('parent_folder_uuid', currentFolderUuid || '');
+            <div className="p-4 text-center md:p-5 text-white">
+              <div className="w-12 h-12 mx-auto mb-6 flex items-center justify-center">
+                <span className="text-3xl">🔗</span>
+              </div>
 
-                  try {
-                    const r = await fileApi.uploadFile(formData);
-                    setResponse([r.message]);
-                    setClassName('text-green-500');
-                    setShowMode(true);
-                    getFileList(currentFolderUuid);
-                  } catch (e) {
-                    setResponse([e.message]);
-                    setClassName('text-red-500');
-                    setShowMode(true);
-                  }
-                  setShowUpLoad(false);
-                }}
-                className="mb-4"
-              />
+              <h3 className="mb-5 text-xl font-normal text-white">分享設定</h3>
+
+              <div className="mb-4 text-left">
+                <label className="flex items-center gap-2 cursor-pointer text-white">
+                  <input
+                    type="radio"
+                    name="shareType"
+                    checked={!shareIsLimited}
+                    onChange={() => setShareIsLimited(false)}
+                  />
+                  <span>不限時分享（永久有效）</span>
+                </label>
+              </div>
+
+              <div className="mb-4 text-left">
+                <label className="flex items-center gap-2 cursor-pointer text-white">
+                  <input
+                    type="radio"
+                    name="shareType"
+                    checked={shareIsLimited}
+                    onChange={() => setShareIsLimited(true)}
+                  />
+                  <span>限時分享</span>
+                </label>
+                {shareIsLimited && (
+                  <div className="mt-2 ml-6 text-left">
+                    <label className="block text-sm text-gray-400 mb-1">到期日期與時間</label>
+                    <input
+                      type="datetime-local"
+                      value={shareLimitedDate}
+                      onChange={(e) => setShareLimitedDate(e.target.value)}
+                      className="w-full px-3 py-2 mt-2 mb-2 border rounded bg-white text-gray-900 border-gray-300"
+                      min={new Date().toISOString().slice(0, 16)}
+                    />
+                  </div>
+                )}
+              </div>
+
               <button
-                onClick={() => setShowUpLoad(false)}
-                className="px-4 py-2 bg-gray-500 text-white rounded"
+                onClick={confirmShare}
+                type="button"
+                className="text-white bg-blue-600 hover:bg-blue-500 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-lg inline-flex items-center justify-center px-5 py-2.5 mt-6 text-center"
               >
-                取消
+                產生分享連結
               </button>
             </div>
-          </div> */}
+          </div>
+        </div>
+      )}
 
+      {showUpLoad && (
+        <>
           {/* 使用 Uppy 上傳組件 */}
           <UpLoad
             parentFolderUuid={currentFolderUuid}
@@ -530,13 +611,19 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
                       {item.type === 'file' && (
                         <div className="relative">
-                          <Share2
-                            className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              callShareFileLink(item.uuid, item.type);
-                            }}
-                          />
+                          {(() => {
+                            const hasValidLink = item.shared && (!item.limited_date || new Date(item.limited_date) > new Date());
+                            const IconComponent = hasValidLink ? Link2 : Share2;
+                            return (
+                              <IconComponent
+                                className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  callShareFileLink(item.uuid, item.type, item.shared, item.limited_date);
+                                }}
+                              />
+                            );
+                          })()}
 
                           {popupItemUuid === item.uuid && copyShow && (
                             <div

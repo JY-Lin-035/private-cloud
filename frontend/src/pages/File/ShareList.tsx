@@ -204,7 +204,7 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                 </th>
                 <th
                   onClick={() => changeSortType('name')}
-                  className="cursor-pointer p-2 w-[45%] sm:w-[35%] border border-white"
+                  className="cursor-pointer p-2 w-[45%] sm:w-[30%] border border-white"
                 >
                   <span className="inline-flex items-center gap-1">
                     名稱
@@ -252,6 +252,28 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                     </svg>
                   </span>
                 </th>
+                <th className="p-2 w-[15%] border border-white hidden md:table-cell text-xs sm:text-sm md:text-base lg:text-lg">
+                  <span className="inline-flex items-center gap-1">
+                    到期日
+                    <svg
+                      className="w-4 h-4 sm:w-5 sm:h-5 text-gray-800 inline-block"
+                      aria-hidden="true"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="24"
+                      height="24"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                        d="m8 10 4-6 4 6H8Zm8 4-4 6-4-6h8Z"
+                      />
+                    </svg>
+                  </span>
+                </th>
                 <th className="p-2 w-[55%] sm:w-[35%] md:w-[20%] border border-white text-xs sm:text-sm md:text-base lg:text-lg">操作</th>
               </tr>
             </thead>
@@ -274,6 +296,13 @@ function ShareList({ layoutClass = "" }: { layoutClass?: string }) {
                   </td>
                   <td className="p-2 text-xs sm:text-sm md:text-base border border-white break-words whitespace-normal hidden md:table-cell">
                     {item.path}
+                  </td>
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden md:table-cell">
+                    {item.limited_date ? (
+                      <span className="text-orange-500">{item.limited_date}</span>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
                   </td>
                   <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal">
                     <span className="flex justify-center gap-1 sm:gap-2 md:gap-4">
