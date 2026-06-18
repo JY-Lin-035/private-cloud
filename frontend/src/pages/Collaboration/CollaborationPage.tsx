@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { CollaborationItem, MyCollaborationItem, CollaborationGroup } from '../../types';
+import type { MyCollaborationItem, CollaborationGroup } from '../../types';
 import { collaborationApi } from '../../api/collaborationApi';
 import { fileApi } from '../../api/fileApi';
 import { folderApi } from '../../api/folderApi';
-import { Users, UserPlus, FileText, Trash2, Edit3 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Users, UserPlus, FileText, Trash2, Edit3 } from 'lucide-react';
 
 function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
   const navigate = useNavigate();
@@ -17,7 +17,7 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
   const [inviteEmail, setInviteEmail] = useState('');
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState<'success' | 'error'>('success');
-  const [popupItemUuid, setPopupItemUuid] = useState<string | null>(null);
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadMyCollaborations();
@@ -63,18 +63,24 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
   }
 
   async function handleAddCollaborator() {
-    if (!selectedFile || !inviteName || !inviteEmail) {
-      showMessage('請填寫完整所有資訊', 'error');
+    const inviteQuery = inviteName.trim();
+    const inviteEmailValue = inviteEmail.trim();
+    if (!selectedFile || !inviteQuery) {
+      showMessage('請選擇檔案並輸入使用者名稱或 Email', 'error');
       return;
     }
     try {
-      const res = await collaborationApi.addCollaborator(selectedFile, inviteName, inviteEmail);
+      const res = await collaborationApi.addCollaborator(selectedFile, inviteQuery, inviteEmailValue);
       showMessage(res.data.message || '邀請成功', 'success');
       setInviteName('');
       setInviteEmail('');
       loadOwnedCollaborations();
     } catch (e: any) {
-      showMessage(e.response?.data?.detail || '邀請失敗', 'error');
+      const errorMessage = e?.message || e.response?.data?.detail || '邀請失敗';
+      showMessage(
+        errorMessage.includes('已經在共編名單') ? '已經邀請過此成員' : errorMessage,
+        'error'
+      );
     }
   }
 
@@ -84,13 +90,25 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
       showMessage('已移除共編成員', 'success');
       loadOwnedCollaborations();
     } catch (e: any) {
-      showMessage(e.response?.data?.detail || '移除失敗', 'error');
+      showMessage(e?.message || e.response?.data?.detail || '移除失敗', 'error');
     }
   }
 
+  function toggleFileMembers(fileUuid: string) {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(fileUuid)) {
+        next.delete(fileUuid);
+      } else {
+        next.add(fileUuid);
+      }
+      return next;
+    });
+  }
+
   return (
-    <div className={`flex w-full h-full flex-col justify-center items-center ${layoutClass}`}>
-      <div className="w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[2%]">
+    <div className={`flex w-full min-h-full flex-col justify-start items-center pb-10 ${layoutClass}`}>
+      <div className="w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[2%] mb-10">
         <h1 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
           <Users className="w-8 h-8" />
           Collaboration
@@ -185,62 +203,77 @@ function CollaborationPage({ layoutClass = '' }: { layoutClass?: string }) {
               {ownedCollabs.length === 0 ? (
                 <p className="text-gray-400">目前沒有發起任何共編</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="text-gray-500 border-b border-gray-700">
-                        <th className="p-2 text-center">檔案</th>
-                        <th className="p-2 text-center">成員</th>
-                        <th className="p-2 text-center">Email</th>
-                        <th className="p-2 text-center">權限</th>
-                        <th className="p-2 text-center">加入時間</th>
-                        <th className="p-2 text-center"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ownedCollabs.map((group) => (
-                        group.members.map((m, idx) => (
-                          <tr key={`${group.file_uuid}-${m.collaborator_id}`} className="text-white border-b border-gray-700">
-                            {idx === 0 && (
-                              <td className="p-2 text-center align-middle" rowSpan={group.members.length}>
-                                <div className="flex items-center justify-center gap-1">
-                                  <span>{group.file_name}</span>
+                <div className="space-y-3">
+                  {ownedCollabs.map((group) => {
+                    const isCollapsed = collapsedFiles.has(group.file_uuid);
+                    return (
+                      <div key={group.file_uuid} className="border border-gray-700 rounded-md overflow-hidden">
+                        <div className="flex flex-col gap-3 bg-gray-900/50 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <button
+                              onClick={() => toggleFileMembers(group.file_uuid)}
+                              className="shrink-0 text-gray-300 hover:text-white cursor-pointer"
+                              title={isCollapsed ? '展開成員' : '收合成員'}
+                            >
+                              {isCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                            </button>
+                            <FileText className="w-5 h-5 shrink-0 text-blue-400" />
+                            <div className="min-w-0">
+                              <p className="truncate text-white font-semibold">{group.file_name}</p>
+                              <p className="text-xs text-gray-400">{group.members.length} 位成員</p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => navigate(`/collab/edit/${group.file_uuid}`)}
+                            className="flex w-fit items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors cursor-pointer text-xs"
+                            title="線上編輯"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            線上編輯
+                          </button>
+                        </div>
+
+                        {!isCollapsed && (
+                          <div className="max-h-72 overflow-y-auto">
+                            <div className="hidden grid-cols-[minmax(140px,1.2fr)_minmax(180px,1.2fr)_80px_120px_40px] gap-3 border-b border-gray-700 px-4 py-2 text-xs text-gray-500 md:grid">
+                              <span>成員</span>
+                              <span>Email</span>
+                              <span className="text-center">權限</span>
+                              <span className="text-center">加入時間</span>
+                              <span></span>
+                            </div>
+                            {group.members.map((m) => (
+                              <div
+                                key={`${group.file_uuid}-${m.collaborator_id}`}
+                                className="grid gap-3 border-b border-gray-700 px-4 py-3 text-white last:border-b-0 md:grid-cols-[minmax(140px,1.2fr)_minmax(180px,1.2fr)_80px_120px_40px] md:items-center"
+                              >
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <div className="w-7 h-7 shrink-0 rounded-full bg-blue-500 flex items-center justify-center text-xs font-bold">
+                                    {m.collaborator_name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <span className="truncate">{m.collaborator_name}</span>
+                                </div>
+                                <div className="truncate text-sm text-gray-400">{m.collaborator_email}</div>
+                                <div className="md:text-center">
+                                  <span className="px-1.5 py-0.5 bg-blue-900 text-blue-300 rounded text-xs">{m.permission}</span>
+                                </div>
+                                <div className="text-sm text-gray-400 md:text-center">{m.created_at}</div>
+                                <div className="md:text-center">
                                   <button
-                                    onClick={() => navigate(`/collab/edit/${group.file_uuid}`)}
-                                    className="flex items-center gap-1 px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors cursor-pointer text-xs"
+                                    onClick={() => handleRemoveCollaborator(group.file_uuid, m.collaborator_id)}
+                                    className="text-red-400 hover:text-red-300 cursor-pointer"
+                                    title="踢除成員"
                                   >
-                                    <Edit3 className="w-3 h-3" />
+                                    <Trash2 className="w-4 h-4" />
                                   </button>
                                 </div>
-                              </td>
-                            )}
-                            <td className="p-2 text-left">
-                              <div className="flex items-center gap-2">
-                                <div className="w-6 h-6 rounded-full bg-blue-500 flex items-center justify-center text-xs font-bold">
-                                  {m.collaborator_name.charAt(0).toUpperCase()}
-                                </div>
-                                <span>{m.collaborator_name}</span>
                               </div>
-                            </td>
-                            <td className="p-2 text-center text-gray-400 text-xs">{m.collaborator_email}</td>
-                            <td className="p-2 text-center">
-                              <span className="px-1.5 py-0.5 bg-blue-900 text-blue-300 rounded text-xs">{m.permission}</span>
-                            </td>
-                            <td className="p-2 text-center text-gray-400 text-xs">{m.created_at}</td>
-                            <td className="p-2 text-center">
-                              <button
-                                onClick={() => handleRemoveCollaborator(group.file_uuid, m.collaborator_id)}
-                                className="text-red-400 hover:text-red-300 cursor-pointer"
-                                title="踢除成員"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      ))}
-                    </tbody>
-                  </table>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
