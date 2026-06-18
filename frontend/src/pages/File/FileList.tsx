@@ -342,21 +342,9 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
             </button>
 
             <div className="p-4 text-center md:p-5 text-white">
-              <svg
-                className="w-12 h-12 mx-auto mb-6"
-                aria-hidden="true"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M15 8v3a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V8m4 4h2m-2 0V4m2 0v4"
-                />
-              </svg>
+              <div className="w-12 h-12 mx-auto mb-6 flex items-center justify-center">
+                <span className="text-3xl">🔗</span>
+              </div>
 
               <h3 className="mb-5 text-xl font-normal text-white">分享設定</h3>
 
