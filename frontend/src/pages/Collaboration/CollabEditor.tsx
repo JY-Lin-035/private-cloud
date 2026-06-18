@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
-import { useCollab } from '../../hooks/useCollab';
+import type { OnMount } from '@monaco-editor/react';
+import * as Y from 'yjs';
+import { MonacoBinding } from 'y-monaco';
+import { useYCollab } from '../../hooks/useYCollab';
 import { authApi } from '../../api/authApi';
 import { Users, Wifi, WifiOff, Save, Clock, LogOut } from 'lucide-react';
 
@@ -9,13 +12,17 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   const { fileUuid } = useParams<{ fileUuid: string }>();
   const navigate = useNavigate();
   const [user, setUser] = useState<{ id: number; name: string }>({ id: 0, name: '' });
-  const [editorContent, setEditorContent] = useState<string>('');
-  const [isEditorReady, setIsEditorReady] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const bindingRef = useRef<MonacoBinding | null>(null);
+  const ydoc = useMemo(() => new Y.Doc(), [fileUuid]);
+  const ytext = useMemo(() => ydoc.getText('monaco'), [ydoc]);
 
-  const { content, users, snapshots, isConnected, sendUpdate, sendCursor, sendSave, switchVersion } = useCollab(
+  const { users, snapshots, isConnected, persistText, switchVersion } = useYCollab(
     fileUuid || '',
-    user
+    user,
+    ydoc,
+    ytext
   );
 
   useEffect(() => {
@@ -28,40 +35,37 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
     });
   }, [navigate]);
 
-  // Sync content from WebSocket to editor
-  useEffect(() => {
-    if (isEditorReady && content !== undefined) {
-      setEditorContent(content);
-    }
-  }, [content, isEditorReady]);
-
   // Auto-save every 30 seconds
   useEffect(() => {
     if (!isConnected) return;
     saveTimerRef.current = setInterval(() => {
-      if (editorContent !== undefined) {
-        sendSave(editorContent);
-      }
+      persistText(ytext.toString());
     }, 30000);
     return () => {
       if (saveTimerRef.current) {
         clearInterval(saveTimerRef.current);
       }
     };
-  }, [isConnected, editorContent, sendSave]);
-
-  const handleEditorChange = useCallback((value: string | undefined) => {
-    if (value !== undefined) {
-      setEditorContent(value);
-      sendUpdate(value);
-    }
-  }, [sendUpdate]);
+  }, [isConnected, persistText, ytext]);
 
   const handleSave = useCallback(() => {
-    if (editorContent !== undefined) {
-      sendSave(editorContent);
+    persistText(ytext.toString());
+  }, [persistText, ytext]);
+
+  const handleEditorMount: OnMount = useCallback((editor) => {
+    editorRef.current = editor;
+    const model = editor.getModel();
+    if (model) {
+      bindingRef.current?.destroy();
+      bindingRef.current = new MonacoBinding(ytext, model, new Set([editor]));
     }
-  }, [editorContent, sendSave]);
+  }, [ytext]);
+
+  useEffect(() => {
+    return () => {
+      bindingRef.current?.destroy();
+    };
+  }, []);
 
   if (!fileUuid) {
     return <div className="text-white p-8">無效的檔案</div>;
@@ -106,12 +110,18 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
             <Clock className="w-3 h-3 sm:w-4 sm:h-4 text-gray-400" />
             {snapshots.length > 0 ? (
               <select
-                onChange={(e) => switchVersion(Number(e.target.value))}
+                defaultValue=""
+                onChange={(e) => {
+                  if (e.target.value) {
+                    switchVersion(e.target.value);
+                    e.target.value = '';
+                  }
+                }}
                 className="bg-gray-700 text-white text-xs sm:text-sm rounded px-1 py-0.5 sm:px-2 sm:py-1 border border-gray-600 cursor-pointer max-w-[80px] sm:max-w-none"
               >
                 <option value="">版本</option>
                 {snapshots.map((s) => (
-                  <option key={s.id} value={s.id}>
+                  <option key={String(s.id)} value={String(s.id)}>
                     {s.timestamp}
                   </option>
                 ))}
@@ -137,9 +147,8 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
           height="100%"
           defaultLanguage="plaintext"
           theme="vs-dark"
-          value={editorContent}
-          onChange={handleEditorChange}
-          onMount={() => setIsEditorReady(true)}
+          defaultValue=""
+          onMount={handleEditorMount}
           options={{
             fontSize: 14,
             minimap: { enabled: false },
