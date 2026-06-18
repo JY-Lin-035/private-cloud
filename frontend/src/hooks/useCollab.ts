@@ -47,6 +47,14 @@ export function useCollab(fileUuid: string, user: { id: number; name: string }):
           case 'load_file':
             setContent(data.content || '');
             setUsers(data.users || []);
+            setSnapshots(data.snapshots || []);
+            break;
+          case 'load_version':
+            setContent(data.content || '');
+            setSnapshots(data.snapshots || []);
+            break;
+          case 'snapshots':
+            setSnapshots(data.snapshots || []);
             break;
           case 'update':
             setContent(data.content || '');
@@ -76,6 +84,18 @@ export function useCollab(fileUuid: string, user: { id: number; name: string }):
       ws.close();
     };
   }, [fileUuid, user.id]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+
+    const timer = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'get_snapshots' }));
+      }
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [isConnected]);
 
   const sendUpdate = useCallback((content: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
