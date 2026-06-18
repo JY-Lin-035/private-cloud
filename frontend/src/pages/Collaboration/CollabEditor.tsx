@@ -49,7 +49,7 @@ function CollabEditor({ layoutClass = '' }: { layoutClass?: string }) {
   }, [isConnected, persistText, ytext]);
 
   const handleSave = useCallback(() => {
-    persistText(ytext.toString());
+    persistText(ytext.toString(), true);
   }, [persistText, ytext]);
 
   const handleEditorMount: OnMount = useCallback((editor) => {
