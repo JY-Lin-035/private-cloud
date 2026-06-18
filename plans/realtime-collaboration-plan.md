@@ -610,3 +610,115 @@ uv run python -c "from app.main import app; from app.config import settings; pri
 3. 否則第一個 client 用 content 初始化 Yjs document
 4. 其他 client 等待 y_init_state
 ```
+
+### 10.16 共編成員新增流程修正
+
+新增共編成員時，前端畫面只有一個「使用者名稱 / Email」欄位，但送出前同時檢查 `inviteName` 與 `inviteEmail`，導致使用者只輸入名稱時會被前端擋下，顯示填寫不完整。
+
+修正方式：
+
+- 前端只要求「選擇檔案」與「輸入使用者名稱或 Email」。
+- 送出前會 trim 使用者輸入，避免複製貼上前後空白造成查詢失敗。
+- 後端 `CollaborationAddRequest.collaborator_email` 改成預設空字串，允許只用名稱邀請。
+- 後端查詢共編成員前會 trim `collaborator_name` 與 `collaborator_email`。
+
+影響檔案：
+
+- `frontend/src/pages/Collaboration/CollaborationPage.tsx`
+- `backend/app/schemas/collaboration.py`
+- `backend/app/services/collaboration_service.py`
+
+驗證：
+
+```text
+uv run python -m py_compile app/schemas/collaboration.py app/services/collaboration_service.py app/api/v1/collaboration.py
+pnpm exec tsc --noEmit
+```
+
+### 10.17 成員列表版面重整
+
+原本「我發起的共編」成員列表使用單一大表格，當同一檔案邀請很多成員，或多個檔案都有共編成員時，版面會變得擁擠，也容易貼近 footer。
+
+修正方式：
+
+- 成員列表改成依檔案分組。
+- 每個檔案區塊有 header，顯示檔名、成員數與「線上編輯」按鈕。
+- 每個檔案區塊可展開 / 收合。
+- 成員很多時，只在該檔案成員區塊內捲動，避免整頁被單一列表撐得難以閱讀。
+- 移除未使用的 `popupItemUuid` state。
+
+目前列表結構：
+
+```text
+成員列表
+  檔案 A header
+    成員 1
+    成員 2
+  檔案 B header
+    成員 1
+    成員 2
+```
+
+影響檔案：
+
+- `frontend/src/pages/Collaboration/CollaborationPage.tsx`
+
+驗證：
+
+```text
+pnpm exec tsc --noEmit
+```
+
+### 10.18 Footer 與共編編輯器高度修正
+
+成員列表變長後，footer 曾出現在畫面中間並蓋住內容。原因是 router 外層使用 `h-screen`，內容超過一個視窗高度時，footer 仍被排在固定高度內。
+
+第一次修正將一般頁面的外層 `h-screen` 改成 `min-h-screen`，讓頁面內容可以自然撐開，footer 會被推到內容後面。
+
+但共編編輯器是 Monaco Editor，需要明確高度。若 `/collab/edit/:fileUuid` 也使用 `min-h-screen`，Monaco 容器會失去可繼承高度，導致編輯畫面看不到。
+
+最終修正：
+
+- 一般頁面外層使用 `min-h-screen`。
+- `/collaboration` 保留自然延伸，解決 footer 蓋住成員列表。
+- `/collab/edit/:fileUuid` 單獨使用 `h-screen`。
+- `CollabEditor` route 傳入 `layoutClass="flex-1 min-h-0"`。
+- `CollabEditor` 根容器改為 `flex flex-col min-h-0`，讓 Monaco Editor 能穩定填滿 Nav 與 Footer 中間剩餘空間。
+
+影響檔案：
+
+- `frontend/src/router/index.tsx`
+- `frontend/src/pages/Collaboration/CollaborationPage.tsx`
+- `frontend/src/pages/Collaboration/CollabEditor.tsx`
+
+驗證：
+
+```text
+pnpm exec tsc --noEmit
+```
+
+### 10.19 重複邀請提示修正
+
+後端已經會在重複邀請時回傳：
+
+```text
+該使用者已經在共編名單中
+```
+
+但前端 axios interceptor 會把錯誤轉成 `Error(message)`，頁面原本只讀 `e.response?.data?.detail`，因此讀不到後端訊息，最後顯示 fallback 的「邀請失敗」。
+
+修正方式：
+
+- 新增共編成員失敗時，前端優先顯示 `e.message`。
+- 若錯誤訊息包含「已經在共編名單」，前端顯示「已經邀請過此成員」。
+- 移除成員失敗時也改成優先顯示 `e.message`。
+
+影響檔案：
+
+- `frontend/src/pages/Collaboration/CollaborationPage.tsx`
+
+驗證：
+
+```text
+pnpm exec tsc --noEmit
+```
