@@ -1,4 +1,6 @@
 import traceback as tb
+import threading
+import time
 from redis import Redis
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -14,10 +16,11 @@ from app.models.account import Account
 from app.utils import logger as log
 
 from app.api.dependencies import get_redis
-from app.api.v1 import accounts, files, folders, share
+from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws
 
 from app.middleware.session_middleware import SessionMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
+from app.services.snapshot_service import auto_save_to_disk, save_snapshot
 
 # Create FastAPI app
 app = FastAPI(title="File Management Backend", version="1.0.0")
@@ -49,6 +52,27 @@ app.add_middleware(SessionMiddleware, redis_client=redis_client)
 rate_limit_middleware = RateLimitMiddleware(redis_client)
 
 
+# Background scheduler for auto-save and snapshots
+def _scheduler():
+    elapsed = 0
+    while True:
+        time.sleep(30)
+        elapsed += 30
+        try:
+            for key in redis_client.scan_iter("collab_content:*"):
+                file_uuid = key.replace("collab_content:", "")
+                auto_save_to_disk(file_uuid, redis_client)
+            if elapsed >= settings.SNAPSHOT_INTERVAL:
+                elapsed = 0
+                for key in redis_client.scan_iter("collab_content:*"):
+                    file_uuid = key.replace("collab_content:", "")
+                    save_snapshot(file_uuid, redis_client)
+        except Exception:
+            pass
+
+threading.Thread(target=_scheduler, daemon=True).start()
+
+
 # Global exception handler for debugging
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -64,6 +88,8 @@ app.include_router(accounts.router)
 app.include_router(files.router)
 app.include_router(folders.router)
 app.include_router(share.router)
+app.include_router(collaboration.router)
+app.include_router(collab_ws.router)
 
 
 @app.get("/api/email/verify/{user_id}/{hash}")

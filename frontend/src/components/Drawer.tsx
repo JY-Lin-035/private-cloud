@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Menu, Cloud, Settings, LogOut,  Share2, User, Trash2, FolderInput, FolderTree } from 'lucide-react';
+import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree, Users } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import { authApi } from '../api/authApi';
 
@@ -124,6 +124,17 @@ function Drawer() {
                         >
                           <Trash2 className="w-6 h-6 mr-2 text-white" />
                           <span>Trash</span>
+                        </button>
+                      </li>
+
+                      {/* Collaboration */}
+                      <li>
+                        <button
+                          onClick={() => { navigate('/collaboration'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 group hover:bg-gray-700 cursor-pointer"
+                        >
+                          <Users className="w-6 h-6 mr-2 text-white" />
+                          <span>Collaboration</span>
                         </button>
                       </li>
                     </ul>

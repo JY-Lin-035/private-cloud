@@ -6,9 +6,8 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.config import settings
+import app.models  # noqa: F401 - register model metadata for Alembic autogenerate
 from app.models.base import Base
-#from app.models.account import Account
-#from app.models.share_link import ShareLink
 from app.utils.logger import get_logger
 
 # this is the Alembic Config object, which provides

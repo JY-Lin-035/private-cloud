@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, BigInteger, ForeignKey, TIMESTAMP, Boolean, Text
+from sqlalchemy import Column, String, Integer, BigInteger, ForeignKey, TIMESTAMP, Boolean, Text, UniqueConstraint
+
 from sqlalchemy.orm import relationship
 from .base import Base, BaseModel
 from app.constants import FolderValidation
@@ -7,8 +8,12 @@ from app.constants import FolderValidation
 
 class Folder(BaseModel):
     __tablename__ = "folders"
+    __table_args__ = (
+        UniqueConstraint("uuid"),
+        UniqueConstraint("shared", name="uq_folders_shared_non_null"),
+    )
 
-    uuid = Column(String(36), unique=True, index=True,  nullable=False)
+    uuid = Column(String(36), index=True,  nullable=False)
     owner_id = Column(
         Integer,
         ForeignKey('accounts.id', ondelete='CASCADE'),
@@ -26,7 +31,7 @@ class Folder(BaseModel):
         nullable=False
     )
     size = Column(BigInteger, default=0, nullable=False)
-    shared = Column(String(100), nullable=True, unique=True, index=True)
+    shared = Column(String(100), nullable=True)
     deleted_at = Column(TIMESTAMP, nullable=True, index=True)
     is_system = Column(Boolean, default=False, nullable=False)  # System folders cannot be deleted
     limited_date = Column(TIMESTAMP, nullable=True)  # Expiration date for sharing
