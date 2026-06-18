@@ -54,16 +54,16 @@ rate_limit_middleware = RateLimitMiddleware(redis_client)
 
 # Background scheduler for auto-save and snapshots
 def _scheduler():
-    counter = 0
+    elapsed = 0
     while True:
         time.sleep(30)
-        counter += 1
+        elapsed += 30
         try:
             for key in redis_client.scan_iter("collab_content:*"):
                 file_uuid = key.replace("collab_content:", "")
                 auto_save_to_disk(file_uuid, redis_client)
-            if counter >= 30:
-                counter = 0
+            if elapsed >= settings.SNAPSHOT_INTERVAL:
+                elapsed = 0
                 for key in redis_client.scan_iter("collab_content:*"):
                     file_uuid = key.replace("collab_content:", "")
                     save_snapshot(file_uuid, redis_client)

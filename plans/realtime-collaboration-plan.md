@@ -296,3 +296,249 @@ flowchart LR
 3. **連線中斷**：使用者斷線後重新連線時，從 Redis 恢復狀態
 4. **游標顯示**：使用 Y.js Awareness 協定顯示其他使用者的游標位置
 5. **檔案類型**：目前只支援文字檔案（.txt、.md、.py、.js 等）
+
+---
+
+## 10. 2026-06-18 實作紀錄
+
+### 10.1 本次目標
+
+原本共編採用「整份文字內容同步」：
+
+```text
+Client A 編輯 -> 傳整份 content -> Backend 廣播整份 content -> Client B 覆蓋 editor
+```
+
+這種方式在兩人以上同時編輯時會有幾個問題：
+
+- 遠端更新會干擾本地游標與選取範圍
+- 編輯區會閃爍
+- 兩人同時修改同一段文字時，後送出的整份內容容易覆蓋另一人的修改
+
+本次目標是把共編核心改成 Yjs CRDT 更新同步，讓多人編輯時由 Yjs 合併操作，而不是用整份文字互相覆蓋。
+
+### 10.2 實際採用架構
+
+目前未新增後端 `y-py`，而是採用「前端 Yjs 合併 + 後端 WebSocket relay」：
+
+```text
+Monaco Editor
+  -> y-monaco / Y.Text
+  -> Yjs binary update
+  -> FastAPI WebSocket relay
+  -> Redis 保存 update log
+  -> 其他 Client 套用 Yjs update
+```
+
+後端同時保存純文字內容到 `collab_content:{file_uuid}`，供以下功能使用：
+
+- 手動儲存
+- 30 秒自動儲存
+- Redis 快照
+- 版本切換
+
+### 10.3 已修改檔案
+
+| 檔案 | 說明 |
+|------|------|
+| [`frontend/src/hooks/useYCollab.ts`](../frontend/src/hooks/useYCollab.ts) | 新增 Yjs WebSocket hook，處理 `y_update`、`y_reset`、快照列表、儲存與版本切換 |
+| [`frontend/src/pages/Collaboration/CollabEditor.tsx`](../frontend/src/pages/Collaboration/CollabEditor.tsx) | 改用 `Y.Doc`、`Y.Text`、`MonacoBinding`，移除整份文字 `value/onChange` 同步 |
+| [`backend/app/api/v1/collab_ws.py`](../backend/app/api/v1/collab_ws.py) | 新增 Yjs update relay、Redis update log、Yjs base content、版本切換 reset |
+| [`backend/app/config.py`](../backend/app/config.py) | 新增 `SNAPSHOT_INTERVAL` 設定，允許 `.env` 控制快照間隔 |
+| [`backend/app/main.py`](../backend/app/main.py) | 快照排程改成依 `settings.SNAPSHOT_INTERVAL` 判斷 |
+| [`backend/app/services/snapshot_service.py`](../backend/app/services/snapshot_service.py) | 快照改成讀 env 設定、去重、最多保留 3 筆、最新版本排第一 |
+| [`backend/.env.example`](../backend/.env.example) | 補上 `SNAPSHOT_INTERVAL` 範例設定 |
+
+### 10.4 WebSocket 訊息
+
+#### Client -> Server: Yjs 更新
+
+```json
+{
+  "type": "y_update",
+  "update": "base64 encoded Yjs update",
+  "content": "目前純文字內容"
+}
+```
+
+#### Server -> Client: Yjs 更新廣播
+
+```json
+{
+  "type": "y_update",
+  "user_id": 2,
+  "update": "base64 encoded Yjs update"
+}
+```
+
+#### Server -> Client: 初始載入
+
+```json
+{
+  "type": "load_file",
+  "content": "Yjs 文件基底文字",
+  "y_updates": ["base64 update 1", "base64 update 2"],
+  "needs_y_init": false,
+  "users": [1, 2],
+  "snapshots": [
+    { "id": 123, "timestamp": "2026-06-18 10:00:00" }
+  ]
+}
+```
+
+`needs_y_init` 用來避免多個 client 同時各自建立不同的 Yjs 初始文件。只有第一個進入房間且 Redis 尚無 `collab_yupdates:{file_uuid}` 的 client 會收到 `needs_y_init: true`，並回傳第一份 `y_init_state`。
+
+#### Client -> Server: 初始化 Yjs state
+
+```json
+{
+  "type": "y_init_state",
+  "update": "base64 encoded Yjs full state",
+  "content": "目前純文字內容"
+}
+```
+
+#### Server -> Client: 版本切換後重置 Yjs 狀態
+
+```json
+{
+  "type": "y_reset",
+  "content": "指定版本內容",
+  "version_id": 123,
+  "snapshots": []
+}
+```
+
+### 10.5 Redis Key
+
+| Key | 說明 |
+|-----|------|
+| `collab_content:{file_uuid}` | 目前純文字內容，供儲存與快照使用 |
+| `collab_ybase:{file_uuid}` | Yjs 文件基底文字 |
+| `collab_yupdates:{file_uuid}` | Yjs update log，最多保留 1000 筆 |
+| `collab_yversion:{file_uuid}` | Yjs state 格式版本，用來自動清掉舊版不相容 update log |
+| `collab_snapshot:{file_uuid}` | 版本快照 JSON，最多保留 3 筆 |
+
+初始化流程：
+
+1. 後端載入 `collab_yupdates:{file_uuid}`。
+2. 如果 update log 已存在，client 直接套用這些 Yjs updates。
+3. 如果 update log 不存在且目前 client 是房間第一人，後端送 `needs_y_init: true`。
+4. 第一個 client 根據檔案純文字建立 Yjs document，回傳 `y_init_state`。
+5. 其他同房 client 等待並套用同一份 `y_init_state`，避免不同 client 各自建立互不相容的 CRDT 初始基底。
+
+### 10.6 與原規劃差異
+
+原規劃提到後端可使用 `y-py` 管理 Yjs document。這次尚未引入 `y-py`，原因是目前前端依賴已經有 `yjs`、`y-monaco`，可先用後端 relay 方式完成多人合併核心，避免新增後端依賴與資料轉換複雜度。
+
+目前後端不解析 Yjs 文件，只保存和轉發更新。純文字內容由前端隨 `y_update` 或 `save` 傳回後端，用於檔案儲存與快照。
+
+### 10.7 已驗證項目
+
+```text
+pnpm exec tsc --noEmit
+uv run python -m py_compile app/api/v1/collab_ws.py
+uv run python -c "from app.main import app; print('backend ok')"
+```
+
+檢查結果：前端 TypeScript 通過，後端匯入與語法檢查通過。
+
+### 10.8 待測與後續改善
+
+1. 兩個不同帳號同時開啟同一份共編檔案，確認文字不再互相覆蓋。
+2. 測試同一段文字同時插入與刪除，確認 Yjs 合併行為穩定。
+3. 測試重整頁面後，後端能從 `collab_ybase` + `collab_yupdates` 恢復文件狀態。
+4. 測試版本切換後，所有在線使用者都會收到 `y_reset` 並切到指定版本內容。
+5. 若未來需要更完整的後端持久化，可再導入 `y-py` 或改用標準 `y-websocket` provider。
+6. 目前尚未接入 Yjs Awareness，因此還沒有顯示其他使用者的即時游標顏色與選取範圍。
+
+### 10.9 版本切換修正紀錄
+
+快照 id 目前由後端用 `time.time_ns()` 產生，數值會超過 JavaScript 的安全整數範圍。前端若使用 `Number(e.target.value)` 會造成 id 精度失真，導致送回後端的 `version_id` 對不到 Redis 中的快照 id，表現為「點版本沒有反應」。
+
+修正方式：
+
+- 前端版本選單一律用 `String(s.id)` 當 option value
+- `switchVersion` 改成傳遞字串 id，不再轉成 `Number`
+- 後端 `switch_to_snapshot` 改成用 `str(s["id"]) == str(snapshot_id)` 比對
+- 選單切換後重設回預設值，避免重複選同一版本時瀏覽器不觸發 `change`
+- 切換版本時不再先呼叫 `save_snapshot(current)`，避免新增快照後因最多保留 3 筆而把使用者正要切換的舊版本擠掉
+- 後端新增 `switch_version_failed` 訊息，找不到指定版本時不再靜默失敗
+
+### 10.10 共編無法同步修正紀錄
+
+修正兩個容易造成「看似連線成功但不能共同編輯」的問題：
+
+1. 前端 `CollabEditor` 原本在 cleanup 中呼叫 `ydoc.destroy()`。React/Vite 開發模式可能反覆執行 effect cleanup，導致仍在使用的 Yjs document 被銷毀。已移除該 cleanup，只保留 `MonacoBinding.destroy()`。
+2. Redis 可能保留前幾版壞掉的 `collab_yupdates:{file_uuid}`。後端新增 `collab_yversion:{file_uuid}`，版本不符時會用目前 `collab_content:{file_uuid}` 重新建立乾淨的 Yjs base state，避免舊 state 阻斷同步。
+
+### 10.11 空內容覆寫事故修正紀錄
+
+測試共編時曾出現檔案內容看似被清空的情況。檢查後確認磁碟檔案仍有內容，Redis 的 `collab_content:{file_uuid}` 也仍有內容，但 `collab_ybase:{file_uuid}` 停在舊內容，`collab_yupdates:{file_uuid}` 堆到 1000 筆，導致 Yjs 初始化用錯 base/update log，畫面表現像內容消失或不同步。
+
+修正方式：
+
+- `Y_STATE_VERSION` 升到 `3`，強制舊版不相容 Yjs state 重建
+- `_ensure_y_state_version` 不再先刪 `collab_content:{file_uuid}`，避免丟失 Redis 中尚未落盤的非空內容
+- `_load_file_content` 不再把空字串 Redis cache 當成有效來源，空 cache 會回退讀磁碟檔
+- `_save_file_content` 若收到空字串，且磁碟上已有非空檔案，會拒絕覆寫
+- `save` 訊息只有在 content 非空時才會更新 Redis 與磁碟
+- 針對測試檔 `54367b4c-c213-4bbd-9f7d-3f4acd594579`，已將 `collab_ybase` 重建成目前 `collab_content`，清空錯誤的 `collab_yupdates`，並設定 `collab_yversion=3`
+- 後端送給前端的 snapshot summary 會把 `id` 轉成字串，避免 JSON parse 後 JavaScript 將奈秒級 id 轉成不安全整數
+- 針對測試檔已從 Redis 中最後保留的非空 `collab_ybase` 復原磁碟檔、`collab_content`、`collab_ybase` 與一份非空 snapshot
+
+### 10.12 純 Yjs 重整紀錄
+
+使用者確認共編核心要直接完整採用 Yjs，同時仍需保證版本、共編、自動儲存正確性。因此將共編同步與文字持久化分離：
+
+#### 同步路徑
+
+```text
+Monaco Editor
+  -> y-monaco / Y.Text
+  -> y_update
+  -> FastAPI WebSocket relay
+  -> 其他 client apply Yjs update
+```
+
+#### 持久化路徑
+
+```text
+Y.Text.toString()
+  -> persist_text
+  -> collab_content:{file_uuid}
+  -> 磁碟檔案
+  -> snapshot scheduler
+```
+
+本次重整：
+
+- 前端 `useYCollab` 將手動/自動儲存訊息改為 `persist_text`
+- 後端 `collab_ws.py` 不再處理舊的 `update` 整份內容廣播
+- `persist_text` 只作為文字投影，不參與共編同步
+- 後端仍保留 `save` 作為相容 alias，但前端不再使用
+- `Y_STATE_VERSION` 升到 `4`，讓舊版 Yjs state 自動重建
+- 快照排序可同時處理字串與整數 id，避免混合型別排序錯誤
+
+目前協定邊界：
+
+| 訊息 | 方向 | 用途 |
+|------|------|------|
+| `load_file` | Server -> Client | 載入 Yjs base/update log、線上使用者、快照列表 |
+| `y_init_state` | Client -> Server / Server -> Client | 第一個 client 初始化 Yjs full state |
+| `y_update` | Client -> Server / Server -> Client | 唯一共編同步訊息 |
+| `persist_text` | Client -> Server | 將目前 `Y.Text.toString()` 作為文字投影持久化 |
+| `get_snapshots` | Client -> Server | 查詢版本快照 |
+| `snapshots` | Server -> Client | 回傳版本快照列表 |
+| `switch_version` | Client -> Server | 切換到指定快照 |
+| `y_reset` | Server -> Client | 版本切換後重置所有 client 的 Yjs 可見內容 |
+
+驗證：
+
+```text
+pnpm exec tsc --noEmit
+uv run python -m py_compile app/api/v1/collab_ws.py app/services/snapshot_service.py
+uv run python -c "from app.main import app; from app.config import settings; print('backend ok', settings.SNAPSHOT_INTERVAL)"
+```
+
+前端 TypeScript 通過，後端語法通過，設定讀取 `SNAPSHOT_INTERVAL=30`。`app.main` 匯入會啟動背景 scheduler，因此該檢查印出成功訊息後可能等到命令逾時。

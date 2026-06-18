@@ -11,7 +11,7 @@ from app.repositories.file_repository import FileRepository
 SNAPSHOT_PREFIX = "collab_snapshot:"
 CONTENT_PREFIX = "collab_content:"
 MAX_SNAPSHOTS = 3
-SNAPSHOT_INTERVAL = 900  # 15 minutes in seconds
+SNAPSHOT_INTERVAL = settings.SNAPSHOT_INTERVAL
 AUTO_SAVE_INTERVAL = 30  # 30 seconds
 
 
@@ -38,25 +38,43 @@ def _get_file_path(file_uuid: str) -> Optional[str]:
         db.close()
 
 
+def _normalize_snapshots(snapshots: List[Dict]) -> List[Dict]:
+    by_id = {}
+    for snapshot in snapshots:
+        snapshot_id = snapshot.get("id")
+        if snapshot_id is not None:
+            by_id[str(snapshot_id)] = snapshot
+
+    def sort_key(snapshot: Dict) -> int:
+        try:
+            return int(snapshot.get("id", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return sorted(
+        by_id.values(),
+        key=sort_key,
+        reverse=True
+    )[:MAX_SNAPSHOTS]
+
+
 def save_snapshot(file_uuid: str, redis: Redis):
     """Save current content as a snapshot (called every 15 minutes)."""
     content = redis.get(_get_content_key(file_uuid))
-    if not content:
+    if not content or not content.strip():
         return
 
     snapshots = get_snapshots(file_uuid, redis)
 
     # Add new snapshot
     new_snapshot = {
-        "id": int(time.time()),
+        "id": time.time_ns(),
         "content": content,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     snapshots.append(new_snapshot)
 
-    # Keep only the latest MAX_SNAPSHOTS
-    if len(snapshots) > MAX_SNAPSHOTS:
-        snapshots = snapshots[-MAX_SNAPSHOTS:]
+    snapshots = _normalize_snapshots(snapshots)
 
     redis.set(_get_snapshot_key(file_uuid), json.dumps(snapshots))
 
@@ -65,15 +83,17 @@ def get_snapshots(file_uuid: str, redis: Redis) -> List[Dict]:
     """Get all snapshots for a file."""
     data = redis.get(_get_snapshot_key(file_uuid))
     if data:
-        return json.loads(data)
+        snapshots = _normalize_snapshots(json.loads(data))
+        redis.set(_get_snapshot_key(file_uuid), json.dumps(snapshots))
+        return snapshots
     return []
 
 
-def switch_to_snapshot(file_uuid: str, snapshot_id: int, redis: Redis) -> Optional[str]:
+def switch_to_snapshot(file_uuid: str, snapshot_id: int | str, redis: Redis) -> Optional[str]:
     """Switch editor content to a specific snapshot version."""
     snapshots = get_snapshots(file_uuid, redis)
     for s in snapshots:
-        if s["id"] == snapshot_id:
+        if str(s["id"]) == str(snapshot_id):
             content = s["content"]
             redis.set(_get_content_key(file_uuid), content)
             return content
@@ -83,7 +103,7 @@ def switch_to_snapshot(file_uuid: str, snapshot_id: int, redis: Redis) -> Option
 def auto_save_to_disk(file_uuid: str, redis: Redis):
     """Save latest content from Redis to disk (called every 30 seconds)."""
     content = redis.get(_get_content_key(file_uuid))
-    if not content:
+    if not content or not content.strip():
         return
 
     file_path = _get_file_path(file_uuid)

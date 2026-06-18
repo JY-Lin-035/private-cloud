@@ -245,6 +245,20 @@ export interface FilterState {
 }
 
 // Collaboration Types
+export interface CollaborationMember {
+  collaborator_id: number;
+  collaborator_name: string;
+  collaborator_email: string;
+  permission: string;
+  created_at: string;
+}
+
+export interface CollaborationGroup {
+  file_uuid: string;
+  file_name: string;
+  members: CollaborationMember[];
+}
+
 export interface CollaborationItem {
   id: number;
   file_uuid: string;

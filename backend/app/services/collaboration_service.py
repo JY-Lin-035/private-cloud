@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any, List
+from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from app.models.account import Account
 from app.models.file import File
@@ -33,9 +34,29 @@ class CollaborationService:
             if file.owner_id != owner_id:
                 return {'error': '你不是這個檔案的擁有者', 'stateCode': HTTPStatus.FORBIDDEN}
 
-            # 2. Find the collaborator by name and email
-            collaborator = self.account_repo.get_by_field('name', collaborator_name)
-            if not collaborator or collaborator.email != collaborator_email:
+            # 2. Find the collaborator by name and/or email
+            # Support formats: "name", "email", "name/email"
+            search_name = collaborator_name
+            search_email = collaborator_email
+
+            # If name contains /, split it
+            if '/' in collaborator_name:
+                parts = collaborator_name.split('/', 1)
+                search_name = parts[0].strip()
+                if not search_email:
+                    search_email = parts[1].strip()
+
+            # If name looks like an email, use it as email (ignore the email field)
+            if '@' in search_name:
+                search_email = search_name
+                search_name = ''
+
+            collaborator = None
+            if search_name:
+                collaborator = self.account_repo.get_by_field('name', search_name)
+            if not collaborator and search_email:
+                collaborator = self.account_repo.get_by_field('email', search_email)
+            if not collaborator:
                 return {'error': '找不到符合名稱與 Email 的使用者', 'stateCode': HTTPStatus.NOT_FOUND}
             if collaborator.id == owner_id:
                 return {'error': '不能邀請自己', 'stateCode': HTTPStatus.BAD_REQUEST}
@@ -95,20 +116,26 @@ class CollaborationService:
         """Get all collaborations initiated by the current user (inviter view)."""
         try:
             collabs = self.collab_repo.get_by_owner(owner_id)
-            items = []
+            # Group by file_uuid
+            file_groups: Dict[str, Dict] = {}
             for c in collabs:
                 file = self.file_repo.get_by_uuid(c.file_uuid)
                 collaborator = self.account_repo.get_by_id(c.collaborator_id)
-                items.append({
-                    'id': c.id,
-                    'file_uuid': c.file_uuid,
-                    'file_name': file.name if file else '未知檔案',
+                file_uuid = c.file_uuid
+                if file_uuid not in file_groups:
+                    file_groups[file_uuid] = {
+                        'file_uuid': file_uuid,
+                        'file_name': file.name if file else '未知檔案',
+                        'members': []
+                    }
+                file_groups[file_uuid]['members'].append({
                     'collaborator_id': c.collaborator_id,
                     'collaborator_name': collaborator.name if collaborator else '未知',
                     'collaborator_email': collaborator.email if collaborator else '未知',
                     'permission': c.permission,
-                    'created_at': c.created_at.isoformat()
+                    'created_at': (c.created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
                 })
+            items = list(file_groups.values())
             return {'items': items, 'total': len(items), 'stateCode': HTTPStatus.OK}
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
