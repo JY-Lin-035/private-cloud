@@ -15,9 +15,11 @@ from sqlalchemy import select
 from app.models.account import Account
 from app.models.file import File
 from app.models.folder import Folder
+from app.models.collaboration import Collaboration
 from app.repositories.account_repository import AccountRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.folder_repository import FolderRepository
+from app.repositories.collaboration_repository import CollaborationRepository
 from app.services.folder_service import FolderService
 from app.constants import StorageLimits, HTTPStatus
 from app.config import settings
@@ -29,6 +31,7 @@ class FileService:
         self.account_repo = AccountRepository(db)
         self.file_repo = FileRepository(db)
         self.folder_repo = FolderRepository(db)
+        self.collab_repo = CollaborationRepository(db)
         self.folder_service = FolderService(db)
         self.storage_base_path = settings.STORAGE_BASE_PATH
     
@@ -74,26 +77,42 @@ class FileService:
             file_list = []
             
             for folder in folders:
+                # Check if share link is expired
+                if folder.shared and folder.limited_date:
+                    now_local = datetime.utcnow() + timedelta(hours=8)
+                    if now_local > folder.limited_date:
+                        folder.shared = None
+                        folder.limited_date = None
+                        self.db.commit()
+                
                 file_list.append({
                     'type': 'folder',
                     'uuid': folder.uuid,
                     'name': folder.name,
                     'size': folder.size,
-                    # 'date': folder.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                     'date': _fmt_utc8(folder.updated_at),
-                    'shared': folder.shared
+                    'shared': folder.shared,
+                    'limited_date': folder.limited_date.strftime('%Y-%m-%d %H:%M:%S') if folder.limited_date else None
                 })
             
             for file in files:
+                # Check if share link is expired
+                if file.shared and file.limited_date:
+                    now_local = datetime.utcnow() + timedelta(hours=8)
+                    if now_local > file.limited_date:
+                        file.shared = None
+                        file.limited_date = None
+                        self.db.commit()
+                
                 file_list.append({
                     'type': 'file',
                     'uuid': file.uuid,
                     'name': file.name,
                     'size': file.size,
-                    # 'date': file.created_at.strftime('%Y-%m-%d %H:%M:%S'),
                     'date': _fmt_utc8(file.updated_at),
                     'mime_type': file.mime_type,
-                    'shared': file.shared
+                    'shared': file.shared,
+                    'limited_date': file.limited_date.strftime('%Y-%m-%d %H:%M:%S') if file.limited_date else None
                 })
             
             return {'files': file_list, 'stateCode': HTTPStatus.OK}
@@ -201,7 +220,14 @@ class FileService:
         try:
             file = self.file_repo.get_by_uuid(file_uuid)
 
-            if not file or file.owner_id != user_id or file.deleted_at:
+            if not file or file.deleted_at:
+                return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            # Check if user is the owner or a collaborator
+            is_owner = file.owner_id == user_id
+            is_collaborator = self.collab_repo.get_by_file_and_collaborator(file_uuid, user_id) is not None
+
+            if not is_owner and not is_collaborator:
                 return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
 
             file_path = os.path.join(self.storage_base_path, file.uuid)

@@ -67,6 +67,8 @@ export interface ShareItem {
   name: string;
   path: string;
   link: string;
+  limited_date?: string | null;
+  available_user?: string | null;
 }
 
 export interface ShareListResponse {
@@ -242,4 +244,51 @@ export interface FilterState {
   search: string;
   sortType: SortType;
   sortUpDown: boolean;
+}
+
+// Collaboration Types
+export interface CollaborationMember {
+  collaborator_id: number;
+  collaborator_name: string;
+  collaborator_email: string;
+  permission: string;
+  created_at: string;
+}
+
+export interface CollaborationGroup {
+  file_uuid: string;
+  file_name: string;
+  members: CollaborationMember[];
+}
+
+export interface CollaborationItem {
+  id: number;
+  file_uuid: string;
+  file_name: string;
+  collaborator_id: number;
+  collaborator_name: string;
+  collaborator_email: string;
+  permission: string;
+  created_at: string;
+}
+
+export interface MyCollaborationItem {
+  id: number;
+  file_uuid: string;
+  file_name: string;
+  owner_id: number;
+  owner_name: string;
+  owner_email: string;
+  permission: string;
+  created_at: string;
+}
+
+export interface CollaborationListResponse {
+  items: CollaborationItem[];
+  total: number;
+}
+
+export interface MyCollaborationListResponse {
+  items: MyCollaborationItem[];
+  total: number;
 }
