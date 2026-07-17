@@ -27,6 +27,8 @@ class FileResponse(BaseModel):
     mime_type: Optional[str]
     storage_path: str
     shared: Optional[str]
+    limited_date: Optional[datetime] = None
+    available_user: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime]
