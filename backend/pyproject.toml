@@ -17,7 +17,6 @@ dependencies = [
     "pydantic>=2.13.2",
     "pydantic-settings>=2.13.1",
     "pymysql>=1.1.2",
-    "python-jose>=3.5.0",
     "python-multipart>=0.0.26",
     "redis>=7.4.0",
     "slowapi>=0.1.9",
