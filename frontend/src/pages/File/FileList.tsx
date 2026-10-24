@@ -34,6 +34,23 @@ import {
 
 
 
+function parseSize(v: any): number {
+  if (typeof v === 'number') return v;
+  if (typeof v !== 'string' || !v.trim()) return 0;
+  const [num, unit] = v.trim().split(' ');
+  const n = Number(num);
+  if (Number.isNaN(n)) return 0;
+  const units: { [key: string]: number } = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 };
+  const exp = units[(unit ?? 'B').toUpperCase()];
+  return exp === undefined ? n : n * Math.pow(1024, exp);
+}
+
+function parseTime(v: any): number {
+  if (typeof v === 'number') return v;
+  const t = Date.parse(String(v ?? '').replace(' ', 'T'));
+  return Number.isNaN(t) ? 0 : t;
+}
+
 function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
   const { folderUuid } = useParams();
@@ -117,26 +134,18 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
       if (a.type === 'folder' && b.type !== 'folder') return -1;
       if (a.type !== 'folder' && b.type === 'folder') return 1;
 
-      if (sortType === 'size' && a.type === 'file' && b.type === 'file') {
-        const aSplit = a['size'].split(' ');
-        const bSplit = b['size'].split(' ');
+      const dir = sortUpDown ? 1 : -1;
 
-        if (aSplit[1].localeCompare(bSplit[1]) === 0) {
-          return sortUpDown
-            ? Number(aSplit[0]) - Number(bSplit[0])
-            : Number(bSplit[0]) - Number(aSplit[0]);
-        } else {
-          const units: { [key: string]: number } = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 };
-          const A = units[aSplit[1]];
-          const B = units[bSplit[1]];
-
-          return sortUpDown ? A - B : B - A;
-        }
+      if (sortType === 'size') {
+        return (parseSize(a.size) - parseSize(b.size)) * dir;
       }
 
-      return sortUpDown
-        ? a[sortType].localeCompare(b[sortType])
-        : b[sortType].localeCompare(a[sortType]);
+      if (sortType === 'date') {
+        return (parseTime(a.date) - parseTime(b.date)) * dir;
+      }
+
+      return String(a[sortType] ?? '')
+        .localeCompare(String(b[sortType] ?? ''), 'zh-CN', { numeric: true }) * dir;
     });
 
     return fList;
@@ -147,7 +156,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
       setSortUpDown(!sortUpDown);
     } else {
       setSortType(type);
-      setSortUpDown(true);
+      setSortUpDown(type !== 'date');
     }
   }
 
