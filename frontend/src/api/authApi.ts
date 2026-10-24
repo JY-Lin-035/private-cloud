@@ -34,7 +34,7 @@ export const authApi = {
 
   // Public feature flags for login/register pages
   getPublicSettings: async (): Promise<{ allow_registration: boolean; enable_verification_email: boolean }> => {
-    const response = await api.get('/api/accounts/settings/public');
-    return response.data;
+    const { fetchPublicFlags } = await import('./publicFlags');
+    return fetchPublicFlags();
   }
 };

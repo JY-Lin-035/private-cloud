@@ -68,6 +68,22 @@ class TestFeatureFlagService:
         assert set(flags.keys()) == {"allow_registration", "enable_verification_email"}
         assert "enable_auth_code_email" not in flags
 
+    def test_registration_close_links_verification_email(self, seeded_db):
+        svc = FeatureFlagService(seeded_db)
+        assert svc.effective_enabled("enable_verification_email") is True
+        svc.set_enabled("allow_registration", False)
+        assert svc.effective_enabled("enable_verification_email") is False
+        assert svc.public_flags()["enable_verification_email"] is False
+        # stored value untouched: reopening registration restores it
+        assert svc.is_enabled("enable_verification_email") is True
+        svc.set_enabled("allow_registration", True)
+        assert svc.effective_enabled("enable_verification_email") is True
+
+    def test_verification_email_off_does_not_affect_registration(self, seeded_db):
+        svc = FeatureFlagService(seeded_db)
+        svc.set_enabled("enable_verification_email", False)
+        assert svc.effective_enabled("allow_registration") is True
+
 
 class TestSettingsApiSecurity:
     def test_anonymous_list_denied(self, seeded_db):

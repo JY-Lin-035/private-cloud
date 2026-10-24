@@ -1,0 +1,79 @@
+<mxfile host="65bd71144e">
+    <diagram id="private-cloud-erd" name="Private Cloud ERD">
+        <mxGraphModel dx="1233" dy="899" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="accounts" value="&lt;b&gt;accounts&lt;/b&gt;&lt;hr&gt;&lt;font face=&quot;Courier New&quot;&gt;id int PK&lt;br&gt;name varchar UK&lt;br&gt;password varchar&lt;br&gt;email varchar UK&lt;br&gt;signal_file_size bigint&lt;br&gt;total_file_size bigint&lt;br&gt;used_size bigint&lt;br&gt;identity smallint&lt;br&gt;enable boolean&lt;br&gt;email_verified_at timestamp&lt;br&gt;delete_date timestamp&lt;br&gt;last_sign_in_date timestamp&lt;br&gt;created_at timestamp&lt;br&gt;updated_at timestamp&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;verticalAlign=top;spacing=10;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="40" width="280" height="390" as="geometry"/>
+                </mxCell>
+                <mxCell id="folders" value="&lt;b&gt;folders&lt;/b&gt;&lt;hr&gt;&lt;font face=&quot;Courier New&quot;&gt;id int PK&lt;br&gt;uuid varchar UK&lt;br&gt;owner_id int FK&lt;br&gt;parent_id varchar FK&lt;br&gt;name varchar&lt;br&gt;size bigint&lt;br&gt;shared varchar&lt;br&gt;deleted_at timestamp&lt;br&gt;is_system boolean&lt;br&gt;limited_date timestamp&lt;br&gt;available_user text&lt;br&gt;created_at timestamp&lt;br&gt;updated_at timestamp&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;verticalAlign=top;spacing=10;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="410" y="40" width="280" height="370" as="geometry"/>
+                </mxCell>
+                <mxCell id="files" value="&lt;b&gt;files&lt;/b&gt;&lt;hr&gt;&lt;font face=&quot;Courier New&quot;&gt;id int PK&lt;br&gt;uuid varchar UK&lt;br&gt;owner_id int FK&lt;br&gt;parent_folder_id varchar FK&lt;br&gt;name varchar&lt;br&gt;size bigint&lt;br&gt;mime_type varchar&lt;br&gt;storage_path varchar&lt;br&gt;shared varchar&lt;br&gt;deleted_at timestamp&lt;br&gt;limited_date timestamp&lt;br&gt;available_user text&lt;br&gt;created_at timestamp&lt;br&gt;updated_at timestamp&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacing=10;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="780" y="40" width="300" height="390" as="geometry"/>
+                </mxCell>
+                <mxCell id="collaborations" value="&lt;b&gt;collaborations&lt;/b&gt;&lt;hr&gt;&lt;font face=&quot;Courier New&quot;&gt;id int PK&lt;br&gt;file_uuid varchar FK&lt;br&gt;owner_id int FK&lt;br&gt;collaborator_id int FK&lt;br&gt;permission varchar&lt;br&gt;created_at timestamp&lt;br&gt;updated_at timestamp&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacing=10;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="1170" y="120" width="300" height="230" as="geometry"/>
+                </mxCell>
+                <mxCell id="accounts_folders" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;" parent="1" source="accounts" target="folders" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="340" y="110" as="sourcePoint"/>
+                        <mxPoint x="390" y="110" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="accounts_files" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;" parent="1" source="accounts" target="files" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="320" y="450" as="sourcePoint"/>
+                        <mxPoint x="780" y="450" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="550" y="500"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="folders_files" value="contains" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;" parent="1" source="folders" target="files" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="700" y="160" as="sourcePoint"/>
+                        <mxPoint x="760" y="160" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="folders_parent" value="parent" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;" parent="1" source="folders" target="folders" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="550" y="20" as="sourcePoint"/>
+                        <mxPoint x="640" y="20" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="550" y="10"/>
+                            <mxPoint x="640" y="10"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="files_collaborations" value="shared via" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;" parent="1" source="files" target="collaborations" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="1090" y="200" as="sourcePoint"/>
+                        <mxPoint x="1160" y="200" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="accounts_collaborations_owner" value="owner" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;" parent="1" source="accounts" target="collaborations" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="180" y="460" as="sourcePoint"/>
+                        <mxPoint x="1320" y="390" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="180" y="560"/>
+                            <mxPoint x="1320" y="560"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="accounts_collaborations_collaborator" value="collaborator" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;startArrow=ERone;startFill=0;endArrow=ERmany;endFill=0;strokeColor=#333333;fontSize=12;dashed=1;" parent="1" source="accounts" target="collaborations" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="320" y="500" as="sourcePoint"/>
+                        <mxPoint x="1470" y="390" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="320" y="620"/>
+                            <mxPoint x="1470" y="620"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

@@ -1,16 +1,18 @@
 import { useState, useMemo } from 'react';
 import { authApi } from '../../api/authApi';
+import type { PublicFlags } from '../../api/publicFlags';
 
 
 
 interface RegisterProps {
   onFlip: () => void;
   onNotice: (res: string | string[], cn: string) => void;
-  allowRegistration?: boolean;
-  enableVerificationEmail?: boolean;
+  flags: PublicFlags | null;
 }
 
-function Register({ onFlip, onNotice, allowRegistration = true, enableVerificationEmail = true }: RegisterProps) {
+function Register({ onFlip, onNotice, flags }: RegisterProps) {
+  const allowRegistration = flags?.allow_registration ?? false;
+  const enableVerificationEmail = flags?.enable_verification_email ?? false;
   const [userName, setUserName] = useState('');
   const [email, setEmail] = useState('');
   const [PW, setPW] = useState('');
@@ -72,12 +74,12 @@ function Register({ onFlip, onNotice, allowRegistration = true, enableVerificati
   return (
     <div className="absolute w-full h-full bg-white rounded-xl shadow-md flex flex-col items-center justify-center gap-4 p-6 [backface-visibility:hidden] [transform:rotateY(180deg)_translateZ(250px)]">
       <h2 className="text-xl font-bold">註冊</h2>
-      {!allowRegistration && (
+      {flags && !allowRegistration && (
         <p className="text-amber-600 text-[13px] text-center">
           註冊功能暫時關閉，如有需要請聯絡管理員。
         </p>
       )}
-      {allowRegistration && !enableVerificationEmail && (
+      {flags && allowRegistration && !enableVerificationEmail && (
         <p className="text-amber-600 text-[13px] text-center">
           郵件驗證服務暫時無法使用，目前無法註冊。<br />請稍後再試或聯絡管理員。
         </p>

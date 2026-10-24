@@ -21,6 +21,7 @@ export interface UserListResponse {
 export interface FeatureFlagInfo {
   key: string;
   enabled: boolean;
+  effective: boolean;
   description: string | null;
 }
 

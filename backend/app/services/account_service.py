@@ -88,8 +88,8 @@ class AccountService:
             if not account.email_verified_at:
                 # Re-send verification email like Laravel does
                 if email_service:
-                    from app.services.feature_flag_service import is_feature_enabled
-                    if is_feature_enabled("enable_verification_email"):
+                    from app.services.feature_flag_service import FeatureFlagService
+                    if FeatureFlagService(self.db).effective_enabled("enable_verification_email"):
                         email_service.send_verification_email(account.id, account.email)
                 return {'error': '信箱地址尚未驗證!', 'stateCode': HTTPStatus.FORBIDDEN}
             
