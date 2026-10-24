@@ -35,12 +35,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         # Backend
-        "https://saturday-antiques-invitation-sin.trycloudflare.com",
         "https://meowcloud-api.jun.org.uk",
         # Frontend
-        "https://hazardous-ratings-cleaner-management.trycloudflare.com",
         "https://meowcloud.jun.org.uk",
-        "https://meowcloud.wuaze.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],

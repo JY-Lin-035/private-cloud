@@ -22,5 +22,5 @@ db/.env
 /plans/version-snapshot-plan.md
 roo_task_*.md
 
-celerybeat-schedule.db
+celerybeat*.db
 *.drawio

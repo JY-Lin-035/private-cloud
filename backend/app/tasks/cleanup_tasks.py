@@ -37,23 +37,66 @@ celery_app.conf.update(
     worker_pool=worker_pool,
     worker_prefetch_multiplier=1,
     beat_schedule={
-        'cleanup-soft-deleted-items-weekly': {
+        'cleanup-soft-deleted-items': {
             'task': 'app.tasks.cleanup_tasks.cleanup_soft_deleted_items',
-            'schedule': 604800.0,  # 7 days in seconds (weekly)
+            'schedule': settings.TRASH_CLEANUP_INTERVAL_SECONDS,
+            'options': {'queue': 'cleanup'},
         },
         'recalculate-all-users-storage': {
             'task': 'app.tasks.cleanup_tasks.recalculate_all_users_storage',
-            'schedule': settings.STORAGE_RECALCULATION_PERIOD,  # Configurable period
+            'schedule': settings.STORAGE_RECALCULATION_PERIOD,
+            'options': {'queue': 'cleanup'},
         },
     },
 )
 
 
+def _file_storage_path(file) -> str:
+    """Resolve the physical storage path for a file row."""
+    return file.storage_path or os.path.join(settings.STORAGE_BASE_PATH, file.uuid)
+
+
+def _purge_folder_subtree(db, file_repo, folder_uuid: str) -> tuple[int, int]:
+    """Recursively delete a folder subtree: physical files first, then rows.
+
+    Returns (files_removed, bytes_freed). Deleting the DB rows without this
+    walk would let the FK CASCADE silently drop child File rows and orphan
+    their physical files on disk forever.
+    """
+    from app.repositories.folder_repository import FolderRepository
+    folder_repo = FolderRepository(db)
+
+    files_removed = 0
+    bytes_freed = 0
+
+    child_folders = db.execute(
+        select(Folder).where(Folder.parent_id == folder_uuid)
+    ).scalars().all()
+    for child in child_folders:
+        f, b = _purge_folder_subtree(db, file_repo, child.uuid)
+        files_removed += f
+        bytes_freed += b
+
+    child_files = db.execute(
+        select(File).where(File.parent_folder_id == folder_uuid)
+    ).scalars().all()
+    for child_file in child_files:
+        path = _file_storage_path(child_file)
+        if os.path.exists(path):
+            os.remove(path)
+        file_repo.hard_delete(child_file.uuid)
+        files_removed += 1
+        bytes_freed += child_file.size or 0
+
+    return files_removed, bytes_freed
+
+
 @celery_app.task(bind=True, max_retries=3)
 def cleanup_soft_deleted_items(self):
-    """Clean up soft-deleted items older than 30 days."""
+    """Hard delete soft-deleted files/folders older than the retention period."""
     try:
-        logger.info("Starting cleanup of soft-deleted items older than 30 days")
+        retention = settings.TRASH_RETENTION_DAYS
+        logger.info(f"Starting cleanup of soft-deleted items older than {retention} days")
         
         # Get database session
         db = next(get_db())
@@ -62,14 +105,15 @@ def cleanup_soft_deleted_items(self):
             folder_repo = FolderRepository(db)
             file_repo = FileRepository(db)
             
-            # Calculate cutoff date (30 days ago)
-            cutoff_date = datetime.utcnow() - timedelta(days=30)
+            # Calculate cutoff date
+            cutoff_date = datetime.utcnow() - timedelta(days=retention)
             
             total_folders_deleted = 0
             total_files_deleted = 0
             total_size_freed = 0
             
-            # Get soft-deleted folders older than 30 days
+            # Purge soft-deleted folders older than cutoff, including their
+            # whole subtree (children may share the parent's deleted_at)
             old_folders = db.execute(
                 select(Folder).where(
                     Folder.deleted_at.isnot(None),
@@ -78,14 +122,16 @@ def cleanup_soft_deleted_items(self):
             ).scalars().all()
             
             for folder in old_folders:
-                # Hard delete folder
-                folder_size = folder.size
+                if not db.get(Folder, folder.id):
+                    continue  # already purged as part of an ancestor's subtree
+                f, b = _purge_folder_subtree(db, file_repo, folder.uuid)
                 folder_repo.hard_delete(folder.uuid)
                 total_folders_deleted += 1
-                total_size_freed += folder_size
-                logger.info(f"Hard deleted folder: {folder.uuid} (size: {folder_size})")
+                total_files_deleted += f
+                total_size_freed += b
+                logger.info(f"Purged folder {folder.uuid} with {f} files ({b} bytes)")
             
-            # Get soft-deleted files older than 30 days
+            # Delete remaining soft-deleted loose files older than cutoff
             old_files = db.execute(
                 select(File).where(
                     File.deleted_at.isnot(None),
@@ -94,22 +140,22 @@ def cleanup_soft_deleted_items(self):
             ).scalars().all()
             
             for file in old_files:
-                # Delete actual file from storage
-                file_path = os.path.join(settings.STORAGE_BASE_PATH, file.uuid)
+                file_path = _file_storage_path(file)
                 if os.path.exists(file_path):
                     os.remove(file_path)
                     logger.info(f"Deleted file from storage: {file_path}")
 
-                # Hard delete file record
                 file_repo.hard_delete(file.uuid)
                 total_files_deleted += 1
-                total_size_freed += file.size
-                logger.info(f"Hard deleted file: {file.uuid} (size: {file.size})")
+                total_size_freed += file.size or 0
             
             logger.info(
                 f"Cleanup completed: {total_folders_deleted} folders, "
                 f"{total_files_deleted} files, {total_size_freed} bytes freed"
             )
+            
+            # Reconcile used_size accounting after physical removals
+            recalculate_all_users_storage.apply_async(queue='cleanup')
             
             return {
                 "status": "success",
@@ -139,7 +185,6 @@ def recalculate_all_users_storage(self):
             from app.repositories.account_repository import AccountRepository
             from app.repositories.file_repository import FileRepository
             from app.repositories.folder_repository import FolderRepository
-            from app.services.account_service import AccountService
             from app.models.file import File
             from app.models.folder import Folder
             from sqlalchemy import select
@@ -147,7 +192,6 @@ def recalculate_all_users_storage(self):
             account_repo = AccountRepository(db)
             file_repo = FileRepository(db)
             folder_repo = FolderRepository(db)
-            account_service = AccountService(account_repo)
             
             # Get all users
             all_users = account_repo.get_all()
