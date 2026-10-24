@@ -18,7 +18,21 @@ export interface UserListResponse {
   total_pages: number;
 }
 
+export interface FeatureFlagInfo {
+  key: string;
+  enabled: boolean;
+  description: string | null;
+}
+
 export const adminApi = {
+  getFeatureFlags(): Promise<FeatureFlagInfo[]> {
+    return api.get('/api/accounts/admin/settings/features').then(r => r.data);
+  },
+
+  updateFeatureFlag(key: string, enabled: boolean): Promise<FeatureFlagInfo> {
+    return api.put('/api/accounts/admin/settings/features/' + key, { enabled }).then(r => r.data);
+  },
+
   getUsers(page: number = 1, perPage: number = 10, search: string = ''): Promise<UserListResponse> {
       return api.get('/api/accounts/admin/users', { params: { page, per_page: perPage, search } }).then(r => r.data);
     },
