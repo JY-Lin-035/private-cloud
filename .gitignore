@@ -24,3 +24,6 @@ roo_task_*.md
 
 celerybeat*.db
 *.drawio
+
+/logs/
+deploy/.credentials
