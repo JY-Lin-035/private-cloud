@@ -1,11 +1,12 @@
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.services.share_service import ShareService
 from app.api.dependencies import get_db, get_current_user_id
+from app.api.rate_limit import rate_limit
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/share", tags=["share"])
@@ -16,6 +17,16 @@ class ShareLinkRequest(BaseModel):
     item_uuid: str
     item_type: str  # 'folder' or 'file'
     limited_date: Optional[str] = None  # Expiration date for the share link (ISO string)
+    password: Optional[str] = None  # None = keep, "" = clear, text = set
+
+
+class ShareStatusRequest(BaseModel):
+    link: str
+
+
+class ShareVerifyRequest(BaseModel):
+    link: str
+    password: str
 
 
 @router.get("/getList")
@@ -67,7 +78,7 @@ async def create_share_link(
         
         share_service = ShareService(db)
         
-        result = share_service.create_link(user_id, request.item_uuid, request.item_type, limited_date=parsed_limited_date)
+        result = share_service.create_link(user_id, request.item_uuid, request.item_type, limited_date=parsed_limited_date, password=request.password)
         logger.info(f"Create share link result: {result}")
         
         if result and 'error' in result:
@@ -112,6 +123,7 @@ async def delete_share_link(
 @router.get("/downloadFile")
 async def download_shared_file(
     link: str = Query(...),
+    ticket: Optional[str] = Query(None),
     db: Session = Depends(get_db)
 ):
     """Download a file via share link (no authentication required)."""
@@ -120,7 +132,7 @@ async def download_shared_file(
     try:        
         share_service = ShareService(db)
         
-        result = share_service.download(link)
+        result = share_service.download(link, ticket=ticket)
         logger.info(f"Download shared file result: {result}")
         
         if result and 'error' in result:
@@ -136,3 +148,35 @@ async def download_shared_file(
     except Exception as e:
         logger.error(f"Download shared file endpoint error: {e}")
         raise
+
+
+@router.post("/status")
+async def share_status(
+    request: ShareStatusRequest,
+    db: Session = Depends(get_db)
+):
+    """Public: report whether a link exists / needs password / is expired. No content leaked."""
+    share_service = ShareService(db)
+    result = share_service.get_share_status(request.link)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    return {
+        'exists': result['exists'],
+        'type': result['type'],
+        'password_required': result['password_required'],
+        'expired': result['expired'],
+    }
+
+
+@router.post("/verifyPassword", dependencies=[Depends(rate_limit(5, 300))])
+async def share_verify_password(
+    request: ShareVerifyRequest,
+    db: Session = Depends(get_db)
+):
+    """Public: exchange the share password for a short-lived download ticket."""
+    share_service = ShareService(db)
+    result = share_service.verify_share_password(request.link, request.password)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    logger.info(f"Share password verified, ticket issued for link: {request.link}")
+    return {'ticket': result['ticket'], 'expires_in': result['expires_in']}
