@@ -38,7 +38,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       restrictions: {
         maxFileSize: storage.signalStorage,
         allowedFileTypes: null,
-        maxNumberOfFiles: 3,
+        maxNumberOfFiles: 1000,
       },
       autoProceed: false,
     });
@@ -47,10 +47,12 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       inline: true,
       target: uppyContainer.current,
       proudlyDisplayPoweredByUppy: false,
+      fileManagerSelectionType: 'both',
       locale: {
         strings: {
           dropPasteFiles: '請將檔案拖曳到這裡或 %{browseFiles}',
           browseFiles: '選擇檔案',
+          browseFolders: '選擇資料夾',
         },
       },
     });
@@ -62,9 +64,11 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       withCredentials: true,
       allowedMetaFields: ['name', 'type'],
       headers: (file) => {
+        const relativePath = (file.data as File)?.webkitRelativePath || '';
         const metadata = [
           `filename ${encodeTusMetadata(file.name || 'unknown')}`,
           `filetype ${encodeTusMetadata(file.type || 'application/octet-stream')}`,
+          ...(relativePath ? [`relative_path ${encodeTusMetadata(relativePath)}`] : []),
         ].join(' ');
 
         return {

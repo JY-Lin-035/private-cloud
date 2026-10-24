@@ -501,3 +501,107 @@ class FolderService:
             return ' / '.join(path_parts)
         except Exception:
             return 'Unknown'
+
+    def resolve_or_create_path(self, user_id: int, base_folder_uuid: Optional[str], rel_path: str) -> Dict[str, Any]:
+        """Resolve a relative path under base (or Home), creating missing folders."""
+        try:
+            from app.utils.pathing import sanitize_rel_path
+            segments, err = sanitize_rel_path(rel_path)
+            if err:
+                return {'error': err, 'stateCode': HTTPStatus.BAD_REQUEST}
+            if not segments:
+                return {'uuid': base_folder_uuid, 'created': []}
+
+            current = base_folder_uuid
+            if not current:
+                home = self.folder_repo.get_home_folder(user_id)
+                if not home:
+                    return {'error': '找不到 Home 資料夾', 'stateCode': HTTPStatus.NOT_FOUND}
+                current = home.uuid
+
+            created = []
+            for seg in segments:
+                child = self.db.execute(
+                    select(Folder).where(
+                        Folder.owner_id == user_id,
+                        Folder.parent_id == current,
+                        Folder.name == seg,
+                        Folder.deleted_at.is_(None),
+                    )
+                ).scalars().first()
+                if child:
+                    current = child.uuid
+                    continue
+                new_folder = Folder(uuid=str(uuid.uuid4()), owner_id=user_id, parent_id=current, name=seg, size=0)
+                made = self.folder_repo.create_with_uuid_retry(new_folder)
+                current = made.uuid
+                created.append(seg)
+            return {'uuid': current, 'created': created}
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def _ancestor_uuids(self, folder_uuid: str) -> set:
+        """Set of uuids from this folder up to the root (inclusive)."""
+        chain = set()
+        cur = self.folder_repo.get_by_uuid(folder_uuid)
+        guard = 0
+        while cur and guard < 64:
+            chain.add(cur.uuid)
+            cur = self.folder_repo.get_by_uuid(cur.parent_id) if cur.parent_id else None
+            guard += 1
+        return chain
+
+    def move_folders(self, user_id: int, folder_uuids: list[str], target_folder_uuid: str) -> Dict[str, Any]:
+        """Move folders under target. Cycles/foreign are rejected per item; name collisions auto-renamed."""
+        try:
+            target = self.folder_repo.get_by_uuid(target_folder_uuid)
+            if not target or target.owner_id != user_id or target.deleted_at:
+                return {'error': '目標資料夾無效', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            moved, renamed, failed = [], {}, []
+            rows = []
+            for u in folder_uuids[:500]:
+                folder = self.folder_repo.get_by_uuid(u)
+                if not folder:
+                    continue
+                rows.append((len(self._ancestor_uuids(folder.uuid)), folder))
+            rows.sort(key=lambda pair: pair[0])  # shallowest first
+
+            for _, folder in rows:
+                if folder.owner_id != user_id or folder.is_system:
+                    failed.append({'uuid': folder.uuid, 'name': folder.name, 'reason': '無權限或系統資料夾'})
+                    continue
+                if folder.uuid in self._ancestor_uuids(target_folder_uuid):
+                    failed.append({'uuid': folder.uuid, 'name': folder.name, 'reason': '無法移動到自身或其子資料夾'})
+                    continue
+                if folder.parent_id == target_folder_uuid:
+                    moved.append(folder.uuid)
+                    continue
+
+                old_parent = folder.parent_id
+                siblings = {
+                    f.name for f in self.db.execute(
+                        select(Folder).where(
+                            Folder.parent_id == target_folder_uuid,
+                            Folder.deleted_at.is_(None),
+                            Folder.uuid != folder.uuid,
+                        )
+                    ).scalars().all()
+                }
+                from app.utils.pathing import unique_name
+                new_name = unique_name(folder.name, siblings)
+                folder.parent_id = target_folder_uuid
+                if new_name != folder.name:
+                    renamed[folder.name] = new_name
+                    folder.name = new_name
+                self.folder_repo.update(folder)
+
+                size = folder.size or 0
+                if old_parent:
+                    self._update_parent_folder_size(old_parent, -size)
+                self._update_parent_folder_size(target_folder_uuid, size)
+                moved.append(folder.uuid)
+
+            return {'moved': moved, 'renamed': renamed, 'failed': failed, 'stateCode': HTTPStatus.OK}
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

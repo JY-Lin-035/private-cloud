@@ -29,7 +29,9 @@ import {
   Plus,
   Upload,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ListChecks,
+  FolderDown
 } from 'lucide-react';
 
 
@@ -83,6 +85,13 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [shareIsLimited, setShareIsLimited] = useState(false);
   const [shareUsePassword, setShareUsePassword] = useState(false);
   const [sharePassword, setSharePassword] = useState('');
+
+  // Selection mode state (checkboxes only visible when active)
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [movePath, setMovePath] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function getFileList(parent_folder_uuid: string | null) {
     try {
@@ -160,6 +169,105 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
       setSortType(type);
       setSortUpDown(type !== 'date');
     }
+  }
+
+  const selectedFiles = selected.filter(k => k.startsWith('file:')).map(k => k.slice(5));
+  const selectedFolders = selected.filter(k => k.startsWith('folder:')).map(k => k.slice(7));
+
+  function toggleSelectionMode() {
+    setSelectionMode(v => !v);
+    setSelected([]);
+  }
+
+  function toggleItem(item: any) {
+    const key = `${item.type}:${item.uuid}`;
+    setSelected(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  }
+
+  const allSelected = filterList.length > 0 && selected.length === filterList.length;
+
+  function toggleSelectAll() {
+    setSelected(allSelected ? [] : filterList.map(i => `${i.type}:${i.uuid}`));
+  }
+
+  async function batchDelete() {
+    if (!selected.length || busy) return;
+    if (!window.confirm(`確定要將選取的 ${selected.length} 項目移入資源回收筒？`)) return;
+    setBusy(true);
+    try {
+      for (const u of selectedFiles) await fileApi.delete({ file_uuid: u, permanent: false });
+      for (const u of selectedFolders) await folderApi.delete({ folder_uuid: u, permanent: false });
+      setResponse([`已將 ${selected.length} 個項目移入資源回收筒`]);
+      setClassName('text-green-500');
+      setShowMode(true);
+      await getFileList(currentFolderUuid);
+    } catch (e: any) {
+      setResponse([e?.message ?? '批次刪除失敗']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+    setSelected([]);
+    setSelectionMode(false);
+    setBusy(false);
+  }
+
+  async function batchDownload() {
+    if (!selected.length || busy) return;
+    setBusy(true);
+    try {
+      if (selectedFiles.length === 1 && !selectedFolders.length) {
+        await fileApi.download(selectedFiles[0]);
+      } else if (selectedFolders.length === 1 && !selectedFiles.length) {
+        const it = filterList.find(i => `folder:${i.uuid}` === selected[0]);
+        await fileApi.downloadFolderZip(selectedFolders[0], it?.name ?? 'folder');
+      } else {
+        await fileApi.downloadBulk(selectedFiles, selectedFolders);
+      }
+    } catch (e: any) {
+      setResponse([e?.message ?? '下載失敗']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+    setBusy(false);
+  }
+
+  async function confirmMove() {
+    const target = movePath.trim();
+    if (!target || busy) return;
+    setBusy(true);
+    try {
+      let renamed = 0;
+      const failed: { name: string; reason: string }[] = [];
+      if (selectedFiles.length) {
+        const r = await fileApi.moveFiles({ file_uuids: selectedFiles, target_path: target });
+        renamed += Object.keys(r.renamed || {}).length;
+        failed.push(...(r.failed || []));
+      }
+      if (selectedFolders.length) {
+        const r = await fileApi.moveFolders({ folder_uuids: selectedFolders, target_path: target });
+        renamed += Object.keys(r.renamed || {}).length;
+        failed.push(...(r.failed || []));
+      }
+      const movedCount = selectedFiles.length + selectedFolders.length - failed.length;
+      if (failed.length) {
+        setResponse([`已移動 ${movedCount} 項；失敗：`, ...failed.map(f => `${f.name}（${f.reason}）`)]);
+        setClassName('text-red-500');
+      } else {
+        setResponse([`已移動 ${movedCount} 項到 ${target}`, ...(renamed ? [`其中 ${renamed} 項因名稱重複已自動改名`] : [])]);
+        setClassName('text-green-500');
+      }
+      setShowMode(true);
+      setMoveOpen(false);
+      setMovePath('');
+      await getFileList(currentFolderUuid);
+      setSelected([]);
+      setSelectionMode(false);
+    } catch (e: any) {
+      setResponse([e?.message ?? '移動失敗']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+    setBusy(false);
   }
 
   const totalPages = useMemo(() =>
@@ -462,6 +570,83 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         </>
       )}
 
+      {selectionMode && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-3 rounded-xl bg-gray-800 text-white shadow-2xl border border-gray-600 w-[92vw] max-w-[560px] justify-between">
+          <span className="text-sm whitespace-nowrap">已選 {selected.length} 項</span>
+          <span className="flex gap-2">
+            <button
+              onClick={toggleSelectAll}
+              className="px-3 py-1.5 rounded text-sm bg-gray-600 hover:bg-gray-500 cursor-pointer"
+            >
+              {allSelected ? '取消全選' : '一鍵全選'}
+            </button>
+            <button
+              onClick={() => selected.length && setMoveOpen(true)}
+              disabled={!selected.length || busy}
+              className="px-3 py-1.5 rounded text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              移動
+            </button>
+            <button
+              onClick={batchDownload}
+              disabled={!selected.length || busy}
+              className="px-3 py-1.5 rounded text-sm bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              下載
+            </button>
+            <button
+              onClick={batchDelete}
+              disabled={!selected.length || busy}
+              className="px-3 py-1.5 rounded text-sm bg-red-600 hover:bg-red-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              刪除
+            </button>
+            <button
+              onClick={toggleSelectionMode}
+              className="px-3 py-1.5 rounded text-sm bg-gray-600 hover:bg-gray-500 cursor-pointer"
+            >
+              離開
+            </button>
+          </span>
+        </div>
+      )}
+
+      {moveOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50" onClick={() => setMoveOpen(false)}></div>
+          <div className="relative z-10 w-full max-w-[420px] p-6 rounded-lg shadow-xl bg-gray-800 text-white">
+            <h3 className="text-lg font-semibold mb-2">移動 {selected.length} 個項目</h3>
+            <p className="text-sm text-gray-400 mb-3">
+              輸入相對 Home 的目標路徑（例：照片/2026/台東）。
+              不存在的資料夾會自動建立；名稱重複的項目將自動改名。
+            </p>
+            <input
+              type="text"
+              value={movePath}
+              onChange={(e) => setMovePath(e.target.value)}
+              placeholder="目標路徑"
+              className="w-full px-3 py-2 rounded bg-white text-gray-900 border border-gray-300"
+              autoFocus
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => { setMoveOpen(false); setMovePath(''); }}
+                className="px-4 py-2 rounded bg-gray-600 hover:bg-gray-500 cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                onClick={confirmMove}
+                disabled={!movePath.trim() || busy}
+                className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {busy ? '處理中…' : '移動'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Breadcrumb currentFolderUuid={currentFolderUuid} />
 
       <div
@@ -493,6 +678,11 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
               className="w-9 h-9 text-green-600 inline cursor-pointer"
               onClick={() => setShowUpLoad(true)}
             />
+
+            <ListChecks
+              className={`w-9 h-9 ml-4 inline cursor-pointer ${selectionMode ? 'text-blue-400' : 'text-gray-100'}`}
+              onClick={toggleSelectionMode}
+            />
           </span>
 
           <span className="text-sm text-gray-500">
@@ -518,6 +708,11 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
           <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>
               <tr className="bg-blue-200 text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl text-center">
+                {selectionMode && (
+                  <th className="p-2 w-[5%] border border-white">
+                    <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="w-5 h-5 cursor-pointer" />
+                  </th>
+                )}
                 <th
                   onClick={() => changeSortType('date')}
                   className="cursor-pointer p-2 w-[10%] border border-white hidden sm:table-cell"
@@ -607,6 +802,14 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                     }
                   }}
                 >
+                  {selectionMode && (
+                    <td
+                      className="p-2 text-center border border-white"
+                      onClick={(e) => { e.stopPropagation(); toggleItem(item); }}
+                    >
+                      <input type="checkbox" checked={selected.includes(`${item.type}:${item.uuid}`)} readOnly className="w-5 h-5 cursor-pointer pointer-events-none" />
+                    </td>
+                  )}
                   <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden sm:table-cell">
                     {item.date}
                   </td>
@@ -634,6 +837,22 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                           onClick={(e) => {
                             e.stopPropagation();
                             callDownloadFile(item.uuid);
+                          }}
+                        />
+                      )}
+
+                      {item.type === 'folder' && !selectionMode && (
+                        <FolderDown
+                          className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-300 cursor-pointer"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await fileApi.downloadFolderZip(item.uuid, item.name);
+                            } catch (err: any) {
+                              setResponse([err?.message ?? '資料夾下載失敗']);
+                              setClassName('text-red-500');
+                              setShowMode(true);
+                            }
                           }}
                         />
                       )}

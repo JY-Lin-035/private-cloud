@@ -616,6 +616,52 @@ class FileService:
         except Exception:
             return 'Unknown'
 
+    def move_files(self, user_id: int, file_uuids: list[str], target_folder_uuid: str) -> Optional[Dict[str, Any]]:
+        """Move files under target folder. Foreign items rejected; name collisions auto-renamed."""
+        try:
+            from app.utils.pathing import unique_name
+
+            target = self.folder_repo.get_by_uuid(target_folder_uuid)
+            if not target or target.owner_id != user_id or target.deleted_at:
+                return {'error': '目標資料夾無效', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            moved, renamed, failed = [], {}, []
+            for file_uuid in file_uuids[:1000]:
+                file = self.file_repo.get_by_uuid(file_uuid)
+                if not file or file.owner_id != user_id:
+                    failed.append({'uuid': file_uuid, 'name': file.name if file else file_uuid, 'reason': '找不到檔案或無權限'})
+                    continue
+                old_parent = file.parent_folder_id
+                if old_parent == target_folder_uuid:
+                    moved.append(file.uuid)
+                    continue
+
+                siblings = {
+                    f.name for f in self.db.execute(
+                        select(File).where(
+                            File.parent_folder_id == target_folder_uuid,
+                            File.deleted_at.is_(None),
+                            File.uuid != file.uuid,
+                        )
+                    ).scalars().all()
+                }
+                new_name = unique_name(file.name, siblings)
+                file.parent_folder_id = target_folder_uuid
+                if new_name != file.name:
+                    renamed[file.name] = new_name
+                    file.name = new_name
+                self.file_repo.update(file)
+
+                size = file.size or 0
+                if old_parent:
+                    self.folder_service._update_parent_folder_size(old_parent, -size)
+                self.folder_service._update_parent_folder_size(target_folder_uuid, size)
+                moved.append(file.uuid)
+
+            return {'moved': moved, 'renamed': renamed, 'failed': failed, 'stateCode': HTTPStatus.OK}
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
     def recalculate_used_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Recalculate used storage from actual non-deleted files."""
         try:

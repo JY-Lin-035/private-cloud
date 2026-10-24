@@ -4,6 +4,7 @@ import secrets
 from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from redis import Redis
 from app.schemas.file import (
@@ -11,6 +12,8 @@ from app.schemas.file import (
     FileListResponse, StorageInfoResponse, FileUploadResponse, FileDeleteResponse, FileRestoreResponse
 )
 from app.services.file_service import FileService
+from app.services.folder_service import FolderService
+from app.services import zip_service
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
 from app.config import settings
 from app.utils import logger as log
@@ -75,8 +78,17 @@ async def tus_create_upload(
         if file_size <= 0:
             raise HTTPException(status_code=400, detail='Invalid Upload-Length')
 
+        parent_uuid = x_parent_folder_uuid or None
+        relative_path = metadata.get('relative_path')
+        if relative_path and '/' in relative_path:
+            folder_service = FolderService(db)
+            resolved = folder_service.resolve_or_create_path(user_id, parent_uuid, relative_path.rsplit('/', 1)[0])
+            if 'error' in resolved:
+                raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+            parent_uuid = resolved['uuid'] or parent_uuid
+
         file_service = FileService(db)
-        result = file_service.create_tus_upload(user_id, x_parent_folder_uuid, filename, file_size)
+        result = file_service.create_tus_upload(user_id, parent_uuid, filename, file_size)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
@@ -267,12 +279,20 @@ async def get_file_list(
 async def upload_file(
     file: UploadFile = File(...),
     parent_folder_uuid: str = Form(None),
+    relative_path: str = Form(None),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """Upload a file."""
     try:
-        logger.info(f"Upload file request received, user_id: {user_id}, parent_folder_uuid: {parent_folder_uuid}, filename: {file.filename}")
+        logger.info(f"Upload file request received, user_id: {user_id}, parent_folder_uuid: {parent_folder_uuid}, relative_path: {relative_path}, filename: {file.filename}")
+        
+        if relative_path and '/' in relative_path:
+            folder_service = FolderService(db)
+            resolved = folder_service.resolve_or_create_path(user_id, parent_folder_uuid, relative_path.rsplit('/', 1)[0])
+            if 'error' in resolved:
+                raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+            parent_folder_uuid = resolved['uuid'] or parent_folder_uuid
         
         file_service = FileService(db)
         
@@ -482,3 +502,54 @@ async def recalculate_storage(
     except Exception as e:
         logger.error(f"Recalculate storage endpoint error: {e}")
         raise
+
+
+class FileMoveRequest(BaseModel):
+    file_uuids: list[str]
+    target_folder_uuid: Optional[str] = None
+    target_path: Optional[str] = None
+
+
+class BulkDownloadRequest(BaseModel):
+    file_uuids: list[str] = []
+    folder_uuids: list[str] = []
+
+
+@router.post("/move")
+async def move_files(
+    request: FileMoveRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Move files to an existing folder or a (auto-created) nested path."""
+    target = request.target_folder_uuid
+    if not target and request.target_path:
+        resolved = FolderService(db).resolve_or_create_path(user_id, None, request.target_path)
+        if 'error' in resolved:
+            raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+        target = resolved['uuid']
+    if not target:
+        raise HTTPException(status_code=400, detail='需要提供目標資料夾或路徑')
+
+    result = FileService(db).move_files(user_id, request.file_uuids, target)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    logger.info(f"Moved {len(result['moved'])} files for user {user_id} -> {target}; renamed={result['renamed']}")
+    return result
+
+
+@router.post("/downloadBulk")
+async def download_bulk(
+    request: BulkDownloadRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Stream multiple selected files/folders as one zip archive."""
+    if not request.file_uuids and not request.folder_uuids:
+        raise HTTPException(status_code=400, detail='沒有選擇任何項目')
+
+    items, kept_files, kept_folders = zip_service.collect_zip_items(
+        db, user_id, request.file_uuids[:1000], request.folder_uuids[:200]
+    )
+    logger.info(f"Bulk zip for user {user_id}: {kept_files} files, {kept_folders} folders, {len(items)} entries")
+    return zip_service.build_zip_response(items, 'meowcloud-download')

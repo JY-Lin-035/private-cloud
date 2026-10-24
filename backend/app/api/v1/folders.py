@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.schemas.folder import (
     CreateFolderRequest, RenameFolderRequest, DeleteFolderRequest, RestoreFolderRequest,
     FolderCreateResponse, FolderRenameResponse, FolderDeleteResponse, FolderRestoreResponse
 )
 from app.services.folder_service import FolderService
+from app.services import zip_service
 from app.api.dependencies import get_db, get_current_user_id
 from app.utils import logger as log
 
@@ -209,3 +211,49 @@ async def list_trash(
     except Exception as e:
         logger.error("List trash folders endpoint error", e)
         raise
+
+
+class FolderMoveRequest(BaseModel):
+    folder_uuids: list[str]
+    target_folder_uuid: str | None = None
+    target_path: str | None = None
+
+
+@router.post("/move")
+async def move_folders(
+    request: FolderMoveRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Move folders to an existing folder or a (auto-created) nested path."""
+    target = request.target_folder_uuid
+    if not target and request.target_path:
+        resolved = FolderService(db).resolve_or_create_path(user_id, None, request.target_path)
+        if 'error' in resolved:
+            raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+        target = resolved['uuid']
+    if not target:
+        raise HTTPException(status_code=400, detail='需要提供目標資料夾或路徑')
+
+    result = FolderService(db).move_folders(user_id, request.folder_uuids, target)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    logger.info(f"Moved {len(result['moved'])} folders for user {user_id} -> {target}; renamed={result['renamed']}")
+    return result
+
+
+@router.get("/download")
+async def download_folder(
+    folder_uuid: str = Query(...),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Stream a whole folder as one zip archive."""
+    svc = FolderService(db)
+    folder = svc.folder_repo.get_by_uuid(folder_uuid)
+    if not folder or folder.owner_id != user_id or folder.deleted_at:
+        raise HTTPException(status_code=404, detail='找不到資料夾')
+
+    items, kept_files, _ = zip_service.collect_zip_items(db, user_id, [], [folder_uuid])
+    logger.info(f"Folder zip download for user {user_id}: {folder_uuid}, {kept_files} files")
+    return zip_service.build_zip_response(items, folder.name)
