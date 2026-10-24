@@ -35,6 +35,12 @@ function SelfStorage() {
       setShowMode(true);
       return;
     }
+    if (newSize < usedStorage) {
+      setClassName('text-red-500');
+      setResponse([`無法設定低於目前已使用容量的上限（已使用 ${format(usedStorage)[0]} ${format(usedStorage)[1]}）`]);
+      setShowMode(true);
+      return;
+    }
     setLock(false);
     try {
       await adminApi.updateOwnQuota(newSize);
@@ -94,8 +100,8 @@ function SelfStorage() {
       <button
         type="button"
         onClick={save}
-        disabled={!lock || newSize === null}
-        className={`text-white bg-gradient-to-r from-cyan-500 to-blue-500 hover:bg-gradient-to-bl font-medium rounded-lg text-sm px-5 py-2.5 text-center me-2 mb-2 ${!lock || newSize === null ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        disabled={!lock || newSize === null || (newSize !== null && newSize < usedStorage)}
+        className={`text-white bg-gradient-to-r from-cyan-500 to-blue-500 hover:bg-gradient-to-bl font-medium rounded-lg text-sm px-5 py-2.5 text-center me-2 mb-2 ${!lock || newSize === null || (newSize !== null && newSize < usedStorage) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
       >
         儲存
       </button>

@@ -455,6 +455,9 @@ async def admin_update_quota(
         raise HTTPException(status_code=404, detail="User not found")
     if account.identity == Identity.ADMIN and account.id != getattr(request.state, 'user_id', None):
         raise HTTPException(status_code=403, detail="Cannot modify another admin account")
+    used = account.used_size or 0
+    if total_storage < used:
+        raise HTTPException(status_code=400, detail=f"無法設定低於目前已使用容量的上限（已使用 {used} bytes）")
     account.total_file_size = total_storage
     db.commit()
     return {"message": "success", "total_storage": total_storage}
@@ -508,6 +511,9 @@ async def update_own_quota(
     account = db.query(Account).filter(Account.id == user_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="User not found")
+    used = account.used_size or 0
+    if total_storage < used:
+        raise HTTPException(status_code=400, detail=f"無法設定低於目前已使用容量的上限（已使用 {used} bytes）")
     account.total_file_size = total_storage
     db.commit()
     logger.info(f"[Admin] self quota updated user_id={user_id} total_storage={total_storage}")
