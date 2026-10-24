@@ -24,7 +24,7 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
-      - /home/Jun/safe_box/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ${REDIS_CONF:?set REDIS_CONF in db/.env}:/usr/local/etc/redis/redis.conf:ro
     command: redis-server /usr/local/etc/redis/redis.conf
 
 volumes:
