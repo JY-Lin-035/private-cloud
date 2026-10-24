@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     TRASH_RETENTION_DAYS: int = 30
     TRASH_CLEANUP_INTERVAL_SECONDS: int = 604800  # 7 days
 
+    # Password-protected share links
+    SHARE_TICKET_SECRET: str = ""  # empty = per-process ephemeral key (tickets die on restart)
+    SHARE_TICKET_TTL_SECONDS: int = 900  # 15 minutes
+
     class Config:
         env_file = ".env"
         case_sensitive = True

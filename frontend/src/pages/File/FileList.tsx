@@ -81,6 +81,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [shareItemType, setShareItemType] = useState<string>('');
   const [shareLimitedDate, setShareLimitedDate] = useState<string>('');
   const [shareIsLimited, setShareIsLimited] = useState(false);
+  const [shareUsePassword, setShareUsePassword] = useState(false);
+  const [sharePassword, setSharePassword] = useState('');
 
   async function getFileList(parent_folder_uuid: string | null) {
     try {
@@ -199,6 +201,8 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     setShareItemType(item_type);
     setShareIsLimited(false);
     setShareLimitedDate('');
+    setShareUsePassword(false);
+    setSharePassword('');
     setShowShareModal(true);
   }
 
@@ -222,7 +226,15 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     
     console.log('Calling getShareFileLink with:', { shareItemUuid, shareItemType, limitedDateStr });
 
-    const [res, cn, show, link, copy] = await getShareFileLink(shareItemUuid, shareItemType, limitedDateStr);
+    if (shareUsePassword && !sharePassword) {
+      setResponse(['請輸入密碼，或取消勾選密碼保護。']);
+      setClassName('text-red-500');
+      setShowMode(true);
+      return;
+    }
+    const passwordToSend = shareUsePassword ? sharePassword : '';
+
+    const [res, cn, show, link, copy] = await getShareFileLink(shareItemUuid, shareItemType, limitedDateStr, passwordToSend);
     console.log('getShareFileLink returned', { res, cn, show, link, copy });
     
     setResponse(res);
@@ -392,6 +404,33 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                     />
                   </div>
                 )}
+              </div>
+
+              <div className="mb-4 text-left">
+                <label className="flex items-center gap-2 cursor-pointer text-white">
+                  <input
+                    type="checkbox"
+                    checked={shareUsePassword}
+                    onChange={(e) => setShareUsePassword(e.target.checked)}
+                  />
+                  <span>密碼保護</span>
+                </label>
+                {shareUsePassword && (
+                  <div className="mt-2 ml-6 text-left">
+                    <label className="block text-sm text-gray-400 mb-1">訪客需輸入此密碼才能下載</label>
+                    <input
+                      type="password"
+                      value={sharePassword}
+                      onChange={(e) => setSharePassword(e.target.value)}
+                      placeholder="設定分享密碼"
+                      className="w-full px-3 py-2 mt-2 mb-2 border rounded bg-white text-gray-900 border-gray-300"
+                      autoComplete="new-password"
+                    />
+                  </div>
+                )}
+                <p className="mt-1 ml-6 text-xs text-gray-500">
+                  取消勾選並重新產生連結，將移除既有密碼。
+                </p>
               </div>
 
               <button
