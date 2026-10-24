@@ -58,6 +58,7 @@ function FunctionControl({ layoutClass = "" }: Props) {
     try {
       const updated = await adminApi.updateFeatureFlag(flag.key, !flag.enabled);
       setFlags(prev => prev.map(f => f.key === updated.key ? { ...f, enabled: updated.enabled } : f));
+      await loadFlags();
       setNotice({ text: `「${FLAG_LABELS[flag.key] ?? flag.key}」已${updated.enabled ? "開啟" : "關閉"}`, ok: true });
     } catch (e: any) {
       setNotice({ text: e?.message ?? "更新失敗，請稍後再試", ok: false });
