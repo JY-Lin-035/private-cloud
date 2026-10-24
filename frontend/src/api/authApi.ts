@@ -30,5 +30,11 @@ export const authApi = {
   getCode: async (data: { mode: 'mail' | 'pw'; email: string }) => {
     const response = await api.post('/api/accounts/getCode', data);
     return response.data;
+  },
+
+  // Public feature flags for login/register pages
+  getPublicSettings: async (): Promise<{ allow_registration: boolean; enable_verification_email: boolean }> => {
+    const response = await api.get('/api/accounts/settings/public');
+    return response.data;
   }
 };

@@ -7,9 +7,10 @@ import { authApi } from '../../api/authApi';
 interface LoginProps {
   onFlip: () => void;
   onNotice: (res: string | string[], cn: string) => void;
+  allowRegistration?: boolean;
 }
 
-function Login({ onFlip, onNotice }: LoginProps) {
+function Login({ onFlip, onNotice, allowRegistration = true }: LoginProps) {
   const navigate = useNavigate();
   const [userName, setUserName] = useState('');
   const [PW, setPW] = useState('');
@@ -74,9 +75,11 @@ function Login({ onFlip, onNotice }: LoginProps) {
         <button onClick={goForgetPW} className={`text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
           忘記密碼?
         </button>
-        <button onClick={onFlip} className={`text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
-          註冊
-        </button>
+        {allowRegistration && (
+          <button onClick={onFlip} className={`text-blue-500 ${lock ? 'cursor-pointer' : 'cursor-not-allowed'}`} disabled={!lock}>
+            註冊
+          </button>
+        )}
       </span>
       <div className="flex-1"></div>
     </div>

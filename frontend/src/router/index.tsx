@@ -8,6 +8,7 @@ import FileList from '../pages/File/FileList';
 import ShareList from '../pages/File/ShareList';
 import DownloadShareFile from '../pages/File/DownloadShareFile';
 import Account from '../pages/Setting/Account';
+import FunctionControl from '../pages/Setting/FunctionControl';
 import AdminPage from '../pages/AdminManagement/AdminManagement';
 import Trash from '../pages/File/Trash';
 import CollaborationPage from '../pages/Collaboration/CollaborationPage';
@@ -165,6 +166,19 @@ const router = createBrowserRouter([
                   <div className="flex flex-col min-h-screen">
                     <Nav layoutClass="flex-0" />
                     <AdminPage layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+                    <Footer layoutClass="flex-0" />
+                  </div>
+                </>
+              ),
+            },
+            {
+              path: '/setting/function-control',
+              element: (
+                <>
+                  <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
+                  <div className="flex flex-col min-h-screen">
+                    <Nav layoutClass="flex-0" />
+                    <FunctionControl layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
                     <Footer layoutClass="flex-0" />
                   </div>
                 </>

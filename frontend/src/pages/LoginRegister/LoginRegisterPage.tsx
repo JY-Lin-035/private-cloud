@@ -12,6 +12,13 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
   const [response, setResponse] = useState<string | string[]>('');
   const [className, setClassName] = useState('');
   const [IN, setIN] = useState(false);
+  const [publicFlags, setPublicFlags] = useState<{ allow_registration: boolean; enable_verification_email: boolean }>({ allow_registration: true, enable_verification_email: true });
+
+  useEffect(() => {
+    authApi.getPublicSettings()
+      .then(setPublicFlags)
+      .catch(() => { /* fail-open: 後端仍會硬擋 */ });
+  }, []);
 
   const checkSession = async () => {
       try {
@@ -69,11 +76,14 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
           <Login
             onFlip={() => setFlipped(true)}
             onNotice={handleNotice}
+            allowRegistration={publicFlags.allow_registration}
           />
 
           <Register
             onFlip={() => setFlipped(false)}
             onNotice={handleNotice}
+            allowRegistration={publicFlags.allow_registration}
+            enableVerificationEmail={publicFlags.enable_verification_email}
           />
         </div>
       </div>
