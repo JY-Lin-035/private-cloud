@@ -22,6 +22,21 @@ function AdminPage({ layoutClass = "" }: Props) {
   const [editingQuota, setEditingQuota] = useState<number | null>(null);
   const [quotaEdits, setQuotaEdits] = useState<Record<number, string>>({});
   const [togglingId, setTogglingId] = useState<number | null>(null);
+  const [quotaError, setQuotaError] = useState('');
+
+  const saveQuota = async (id: number) => {
+    const n = Number(quotaEdits[id]);
+    try {
+      if (!isNaN(n) && n >= 0) {
+        await adminApi.updateQuota(id, n);
+        setQuotaError('');
+      }
+    } catch (e: any) {
+      setQuotaError(e?.message ?? '更新空間上限失敗');
+    }
+    setEditingQuota(null);
+    loadUsers();
+  };
 
   useEffect(() => {
     authApi.checkSession().then((s: any) => {
@@ -65,8 +80,11 @@ function AdminPage({ layoutClass = "" }: Props) {
 
   return (
     <div className={`flex flex-col min-h-screen text-white p-4 sm:p-6 ${layoutClass}`}>
-              <div className="w-full max-w-7xl mx-auto mt-[1%] flex-1">
-                <div className="mb-4 flex flex-col sm:flex-row justify-between items-center gap-2">
+      <div className="w-full max-w-7xl mx-auto mt-[1%] flex-1">
+        {quotaError && (
+          <p className="mb-2 px-3 py-2 rounded bg-red-900/30 text-red-400 ring-1 ring-red-500/30 text-sm">{quotaError}</p>
+        )}
+        <div className="mb-4 flex flex-col sm:flex-row justify-between items-center gap-2">
                   <span>
                     <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="搜尋" className="border border-white rounded px-3 py-1 w-full sm:w-64" />
                     <button onClick={() => { setSearch(searchInput); setPage(1); }} className="cursor-pointer border border-white rounded px-3 py-1 text-white hover:bg-white hover:text-gray-800 transition-colors">Search</button>
@@ -110,14 +128,7 @@ function AdminPage({ layoutClass = "" }: Props) {
                             type="number" min="0"
                             className="w-32 bg-gray-700 text-white px-2 py-1 rounded text-sm border border-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500"
                           />
-                          <button onClick={async () => {
-                            const n = Number(quotaEdits[u.id]);
-                            if (!isNaN(n) && n >= 0) {
-                              await adminApi.updateQuota(u.id, n);
-                            }
-                            setEditingQuota(null);
-                            loadUsers();
-                            }} className="cursor-pointer px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded transition-colors">Save</button>
+                          <button onClick={() => saveQuota(u.id)} className="cursor-pointer px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded transition-colors">Save</button>
                           <button onClick={() => setEditingQuota(null)}
                             className="cursor-pointer px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-colors">X</button>
                         </div>
@@ -177,14 +188,7 @@ function AdminPage({ layoutClass = "" }: Props) {
                       min="0"
                       className="cursor-pointer w-48 bg-gray-700 text-white px-2 py-1 rounded text-sm border border-gray-600 focus:outline-none focus:ring-1 focus:ring-green-500"
                     />
-                    <button onClick={async () =>  {
-                                            const n = Number(quotaEdits[u.id]);
-                                            if (!isNaN(n) && n >= 0) {
-                                              await adminApi.updateQuota(u.id, n);
-                                            }
-                                            setEditingQuota(null);
-                                            loadUsers();
-                                          }} className="cursor-pointer px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded transition-colors">Save</button>
+                    <button onClick={() => saveQuota(u.id)} className="cursor-pointer px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded transition-colors">Save</button>
                                           <button onClick={() => setEditingQuota(null)} className="cursor-pointer px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-colors">X</button>
                   </span>
                 ) : (

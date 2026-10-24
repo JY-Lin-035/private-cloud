@@ -143,12 +143,12 @@ class TestSettingsApiSecurity:
 
 
 class TestQuotaSelfEdit:
-    def _call(self, db, admin_id, target_id, target_identity):
+    def _call(self, db, admin_id, target_id, target_identity, used=0):
         from app.api.v1.accounts import admin_update_quota
         from app.models.account import Account
         target = Account(
             name=f"u{target_id}", password="p", email=f"u{target_id}@x.io",
-            identity=target_identity,
+            identity=target_identity, used_size=used,
         )
         target.id = target_id
         db.add(target)
@@ -173,6 +173,25 @@ class TestQuotaSelfEdit:
 
     def test_admin_can_update_normal_user(self, db_session):
         result = self._call(db_session, admin_id=9, target_id=11, target_identity=Identity.USER)
+        assert result["total_storage"] == 123
+
+    def test_below_usage_rejected(self, db_session):
+        with pytest.raises(HTTPException) as exc:
+            self._call(db_session, admin_id=9, target_id=11, target_identity=Identity.USER, used=500)
+        assert exc.value.status_code == 400
+
+    def test_equal_to_usage_allowed(self, db_session):
+        from app.api.v1.accounts import admin_update_quota
+        import asyncio
+        from app.models.account import Account
+        u = Account(name="u12", password="p", email="u12@x.io", identity=Identity.USER, used_size=123)
+        u.id = 12
+        db_session.add(u)
+        db_session.commit()
+        result = asyncio.run(admin_update_quota(
+            request=_admin_request(9), user_id=12, total_storage=123,
+            db=db_session, redis_client=MagicMock(),
+        ))
         assert result["total_storage"] == 123
 
 
@@ -211,3 +230,18 @@ class TestSelfQuotaEndpoint:
                 request=_admin_request(99), total_storage=456, db=db_session,
             ))
         assert exc.value.status_code == 404
+
+    def test_self_quota_below_usage_rejected(self, db_session):
+        from app.api.v1.accounts import update_own_quota
+        import asyncio
+        from app.models.account import Account
+        account = Account(name="biguser", password="p", email="big@x.io",
+                          identity=Identity.ADMIN, used_size=10_000)
+        account.id = 9
+        db_session.add(account)
+        db_session.commit()
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(update_own_quota(
+                request=_admin_request(9), total_storage=9_999, db=db_session,
+            ))
+        assert exc.value.status_code == 400
