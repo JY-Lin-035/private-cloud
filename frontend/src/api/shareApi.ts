@@ -35,6 +35,25 @@ export const shareApi = {
     return response.data as Blob;
   },
 
+  // Public: verify password & obtain ticket
+  browseFolder: async (link: string, sub: string, ticket?: string | null): Promise<{ name: string; folders: { name: string; size: number }[]; files: { name: string; size: number }[] }> => {
+    const response = await api.get('/api/share/browse', { params: { link, sub, ...(ticket ? { ticket } : {}) } });
+    return response.data;
+  },
+
+  downloadFolderZipPublic: async (link: string, ticket: string | null, folderName: string) => {
+    const response = await api.get('/api/share/downloadFolder', {
+      params: { link, ...(ticket ? { ticket } : {}) },
+      responseType: 'blob',
+    });
+    saveBlobPublic(response.data as Blob, `${folderName}.zip`);
+  },
+
+  downloadItemsPublic: async (link: string, paths: string[], ticket: string | null) => {
+    const response = await api.post('/api/share/downloadItems', { link, paths, ticket }, { responseType: 'blob' });
+    saveBlobPublic(response.data as Blob, 'shared-download.zip');
+  },
+
   // Delete share link
   deleteLink: async (item_uuid: string, item_type: string) => {
     const response = await api.delete('/api/share/deleteLink', {
@@ -43,3 +62,14 @@ export const shareApi = {
     return response.data;
   },
 };
+
+function saveBlobPublic(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

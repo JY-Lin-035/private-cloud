@@ -361,3 +361,112 @@ class ShareService:
                 return hash_value
         
         raise Exception("Failed to generate unique share hash")
+
+    def _resolve_shared_folder(self, share_hash: str, ticket: Optional[str]):
+        """Resolve a public folder link; enforces expiry + password ticket."""
+        folder = self.db.execute(
+            select(Folder).where(Folder.shared == share_hash)
+        ).scalar_one_or_none()
+        if not folder or folder.deleted_at:
+            return None, {'error': '分享連結不存在', 'stateCode': HTTPStatus.NOT_FOUND}
+        access_error = self._check_share_access(folder)
+        if access_error:
+            return None, access_error
+        if folder.share_password and not verify_ticket(share_hash, ticket):
+            return None, {'error': '此分享需要密碼', 'stateCode': 428}
+        return folder, None
+
+    @staticmethod
+    def _split_public_path(sub: Optional[str]) -> Optional[List[str]]:
+        """Split a browse sub-path into safe segments; None when invalid."""
+        if not sub:
+            return []
+        segments = [s for s in sub.replace('\\', '/').split('/') if s not in ('', '.')]
+        if any(s == '..' or len(s) > 255 for s in segments):
+            return None
+        return segments
+
+    def _walk_shared(self, root: Folder, segments: List[str]):
+        cur = root
+        for seg in segments:
+            child = self.db.execute(
+                select(Folder).where(
+                    Folder.parent_id == cur.uuid,
+                    Folder.name == seg,
+                    Folder.owner_id == root.owner_id,
+                    Folder.deleted_at.is_(None),
+                )
+            ).scalars().first()
+            if not child:
+                return None
+            cur = child
+        return cur
+
+    def browse(self, share_hash: str, sub: Optional[str], ticket: Optional[str]) -> Dict[str, Any]:
+        """List one level of a shared folder tree (names/sizes only, no uuids)."""
+        try:
+            folder, err = self._resolve_shared_folder(share_hash, ticket)
+            if err:
+                return err
+            segments = self._split_public_path(sub)
+            if segments is None:
+                return {'error': '非法的路徑', 'stateCode': HTTPStatus.BAD_REQUEST}
+            cur = self._walk_shared(folder, segments)
+            if not cur:
+                return {'error': '找不到目錄', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            child_folders = self.db.execute(
+                select(Folder).where(
+                    Folder.parent_id == cur.uuid,
+                    Folder.deleted_at.is_(None),
+                ).order_by(Folder.name)
+            ).scalars().all()
+            child_files = self.db.execute(
+                select(File).where(
+                    File.parent_folder_id == cur.uuid,
+                    File.deleted_at.is_(None),
+                ).order_by(File.name)
+            ).scalars().all()
+
+            return {
+                'name': cur.name,
+                'folders': [{'name': f.name, 'size': f.size or 0} for f in child_folders],
+                'files': [{'name': f.name, 'size': f.size or 0} for f in child_files],
+                'stateCode': HTTPStatus.OK,
+            }
+        except Exception as e:
+            self.logger.error(f"Error browsing share: {str(e)}")
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def collect_shared_items(self, share_hash: str, paths: List[str], ticket: Optional[str]):
+        """Resolve public relative paths inside a shared folder into (file_uuids, folder_uuids)."""
+        folder, err = self._resolve_shared_folder(share_hash, ticket)
+        if err:
+            return None, None, None, err
+        file_uuids, folder_uuids = [], []
+        for p in paths[:1000]:
+            segments = self._split_public_path(p)
+            if segments is None or not segments:
+                continue
+            parent = self._walk_shared(folder, segments[:-1])
+            if not parent:
+                continue
+            last = segments[-1]
+            sub = self.db.execute(
+                select(Folder).where(
+                    Folder.parent_id == parent.uuid, Folder.name == last,
+                    Folder.owner_id == folder.owner_id, Folder.deleted_at.is_(None))
+            ).scalars().first()
+            if sub:
+                folder_uuids.append(sub.uuid)
+                continue
+            f = self.db.execute(
+                select(File).where(
+                    File.parent_folder_id == parent.uuid, File.name == last,
+                    File.owner_id == folder.owner_id, File.deleted_at.is_(None))
+            ).scalars().first()
+            if f:
+                file_uuids.append(f.uuid)
+        if not file_uuids and not folder_uuids:
+            return None, None, None, {'error': '找不到可下載的項目', 'stateCode': HTTPStatus.NOT_FOUND}
+        return folder.owner_id, file_uuids, folder_uuids, None

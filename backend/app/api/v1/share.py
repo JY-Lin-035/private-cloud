@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.services.share_service import ShareService
+from app.services import zip_service
 from app.api.dependencies import get_db, get_current_user_id
 from app.api.rate_limit import rate_limit
 from app.utils import logger as log
@@ -180,3 +181,54 @@ async def share_verify_password(
         raise HTTPException(status_code=result['stateCode'], detail=result['error'])
     logger.info(f"Share password verified, ticket issued for link: {request.link}")
     return {'ticket': result['ticket'], 'expires_in': result['expires_in']}
+
+
+class ShareItemsRequest(BaseModel):
+    link: str
+    paths: list[str]
+    ticket: Optional[str] = None
+
+
+@router.get("/browse")
+async def share_browse(
+    link: str = Query(...),
+    sub: str = Query(''),
+    ticket: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Public: browse one level inside a shared folder."""
+    result = ShareService(db).browse(link, sub, ticket)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    return {k: v for k, v in result.items() if k != 'stateCode'}
+
+
+@router.get("/downloadFolder")
+async def share_download_folder(
+    link: str = Query(...),
+    ticket: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Public: download the whole shared folder as a zip."""
+    share_service = ShareService(db)
+    folder, err = share_service._resolve_shared_folder(link, ticket)
+    if err:
+        raise HTTPException(status_code=err['stateCode'], detail=err['error'])
+    items, kept_files, _ = zip_service.collect_zip_items(db, folder.owner_id, [], [folder.uuid])
+    logger.info(f"Public folder zip: link={link}, files={kept_files}")
+    return zip_service.build_zip_response(items, folder.name)
+
+
+@router.post("/downloadItems", dependencies=[Depends(rate_limit(10, 60))])
+async def share_download_items(
+    request: ShareItemsRequest,
+    db: Session = Depends(get_db)
+):
+    """Public: download selected paths inside a shared folder as one zip."""
+    share_service = ShareService(db)
+    owner_id, file_uuids, folder_uuids, err = share_service.collect_shared_items(request.link, request.paths, request.ticket)
+    if err:
+        raise HTTPException(status_code=err['stateCode'], detail=err['error'])
+    items, kept_files, kept_folders = zip_service.collect_zip_items(db, owner_id, file_uuids, folder_uuids)
+    logger.info(f"Public items zip: link={request.link}, files={kept_files}, folders={kept_folders}")
+    return zip_service.build_zip_response(items, 'shared-download')
