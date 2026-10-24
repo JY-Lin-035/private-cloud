@@ -494,3 +494,21 @@ async def admin_toggle_enable(
     account.enable = not account.enable
     db.commit()
     return {"enabled": account.enable}
+
+
+@router.put("/quota/self")
+async def update_own_quota(
+    request: Request,
+    total_storage: int = Query(..., ge=0),
+    db: Session = Depends(get_db),
+):
+    """Update the signed-in admin's own storage quota."""
+    _admin_required(request)
+    user_id = getattr(request.state, 'user_id', None)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    account.total_file_size = total_storage
+    db.commit()
+    logger.info(f"[Admin] self quota updated user_id={user_id} total_storage={total_storage}")
+    return {"message": "success", "total_storage": total_storage}

@@ -174,3 +174,40 @@ class TestQuotaSelfEdit:
     def test_admin_can_update_normal_user(self, db_session):
         result = self._call(db_session, admin_id=9, target_id=11, target_identity=Identity.USER)
         assert result["total_storage"] == 123
+
+
+class TestSelfQuotaEndpoint:
+    def _make_admin(self, db, uid=9):
+        from app.models.account import Account
+        account = Account(name="selfie", password="p", email="selfie@x.io", identity=Identity.ADMIN)
+        account.id = uid
+        db.add(account)
+        db.commit()
+        return account
+
+    def test_admin_updates_own_quota(self, db_session):
+        from app.api.v1.accounts import update_own_quota
+        import asyncio
+        self._make_admin(db_session)
+        result = asyncio.run(update_own_quota(
+            request=_admin_request(9), total_storage=456, db=db_session,
+        ))
+        assert result["total_storage"] == 456
+
+    def test_normal_user_denied(self, db_session):
+        from app.api.v1.accounts import update_own_quota
+        import asyncio
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(update_own_quota(
+                request=_user_request(), total_storage=456, db=db_session,
+            ))
+        assert exc.value.status_code == 403
+
+    def test_missing_account_404(self, db_session):
+        from app.api.v1.accounts import update_own_quota
+        import asyncio
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(update_own_quota(
+                request=_admin_request(99), total_storage=456, db=db_session,
+            ))
+        assert exc.value.status_code == 404

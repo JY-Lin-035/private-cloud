@@ -42,6 +42,10 @@ export const adminApi = {
       return api.put('/api/accounts/admin/users/' + userId + '/quota', null, { params: { total_storage: totalStorage } }).then(r => r.data);
     },
 
+    updateOwnQuota(totalStorage: number) {
+      return api.put('/api/accounts/quota/self', null, { params: { total_storage: totalStorage } }).then(r => r.data);
+    },
+
     forceLogout(userId: number) {
       return api.post('/api/accounts/admin/users/' + userId + '/force-logout').then(r => r.data);
     },
