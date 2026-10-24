@@ -876,7 +876,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                         />
                       )}
 
-                      {item.type === 'file' && (
+                      {!selectionMode && (
                         <div className="relative">
                           {(() => {
                             const hasValidLink = item.shared && (!item.limited_date || new Date(item.limited_date) > new Date());
