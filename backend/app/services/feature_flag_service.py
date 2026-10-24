@@ -22,6 +22,17 @@ class FeatureFlagService:
         flag = self.repo.get_by_key(key)
         return bool(flag.enabled) if flag else default
 
+    def effective_enabled(self, key: str) -> bool:
+        """Effective state after derived links.
+
+        Closing registration also disables the registration
+        verification email without touching its stored value.
+        """
+        enabled = self.is_enabled(key)
+        if key == "enable_verification_email":
+            return enabled and self.is_enabled("allow_registration")
+        return enabled
+
     def set_enabled(self, key: str, enabled: bool):
         if key not in ALLOWED_FEATURE_KEYS:
             raise ValueError(f"Unknown feature key: {key}")
@@ -31,8 +42,8 @@ class FeatureFlagService:
         return self.repo.list_all()
 
     def public_flags(self) -> dict:
-        """Flags safe to expose to anonymous visitors."""
-        return {key: self.is_enabled(key) for key in PUBLIC_FEATURE_KEYS}
+        """Flags safe to expose to anonymous visitors (effective values)."""
+        return {key: self.effective_enabled(key) for key in PUBLIC_FEATURE_KEYS}
 
 
 def is_feature_enabled(key: str, default: bool = True) -> bool:

@@ -10,7 +10,7 @@ interface LoginProps {
   allowRegistration?: boolean;
 }
 
-function Login({ onFlip, onNotice, allowRegistration = true }: LoginProps) {
+function Login({ onFlip, onNotice, allowRegistration = false }: LoginProps) {
   const navigate = useNavigate();
   const [userName, setUserName] = useState('');
   const [PW, setPW] = useState('');

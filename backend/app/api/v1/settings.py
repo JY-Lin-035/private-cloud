@@ -22,13 +22,15 @@ async def public_settings(db: Session = Depends(get_db)):
 async def list_feature_flags(request: Request, db: Session = Depends(get_db)):
     """List all feature flags (admin only)."""
     require_admin(request)
+    svc = FeatureFlagService(db)
     return [
         {
             "key": flag.key,
             "enabled": bool(flag.enabled),
+            "effective": svc.effective_enabled(flag.key),
             "description": flag.description,
         }
-        for flag in FeatureFlagService(db).list_flags()
+        for flag in svc.list_flags()
     ]
 
 

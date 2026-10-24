@@ -16,7 +16,7 @@ const FLAG_LABELS: Record<string, string> = {
 
 const FLAG_HINTS: Record<string, string> = {
   allow_registration: "關閉後登入頁將隱藏註冊入口，後端同時拒絕註冊請求。",
-  enable_verification_email: "關閉時新帳號無法完成信箱驗證流程，註冊功能將一併暫停。",
+  enable_verification_email: "註冊／登入驗證信開關；關閉註冊時此功能連同關閉（原設定保留）。",
   enable_auth_code_email: "關閉後密碼重設與信箱變更的驗證碼郵件將暫停發送。",
 };
 
@@ -67,6 +67,27 @@ function FunctionControl({ layoutClass = "" }: Props) {
 
   if (loading || !adminUser) return null;
 
+  const statusPill = (flag: FeatureFlagInfo) => flag.effective
+    ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ring-1 bg-green-900/30 text-green-400 ring-green-500/30">Enabled</span>
+    : flag.enabled
+      ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ring-1 bg-gray-700/50 text-gray-400 ring-gray-500/30">隨註冊關閉</span>
+      : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ring-1 bg-red-900/30 text-red-400 ring-red-500/30">Disabled</span>;
+
+  const actionButton = (flag: FeatureFlagInfo, full: boolean) => {
+    const linked = flag.enabled && !flag.effective;
+    return (
+      <button
+        onClick={() => toggle(flag)}
+        disabled={busyKey === flag.key || linked}
+        className={`cursor-pointer ${full ? 'w-full ' : 'inline-flex '}items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed
+          ${linked ? "bg-gray-600" : flag.enabled ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}`}
+      >
+        {!linked && (flag.enabled ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />)}
+        {linked ? "隨註冊關閉" : flag.enabled ? "Disable" : "Enable"}
+      </button>
+    );
+  };
+
   return (
     <div className={`flex flex-col min-h-screen text-white p-4 sm:p-6 ${layoutClass}`}>
       <div className="w-full max-w-7xl mx-auto mt-[1%] flex-1">
@@ -88,19 +109,9 @@ function FunctionControl({ layoutClass = "" }: Props) {
                   <div className="font-semibold text-cyan-400 truncate">{FLAG_LABELS[flag.key] ?? flag.key}</div>
                   <div className="text-xs text-gray-400">{FLAG_HINTS[flag.key] ?? flag.description}</div>
                 </div>
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${flag.enabled ? "bg-green-900/30 text-green-400 ring-green-500/30" : "bg-red-900/30 text-red-400 ring-red-500/30"}`}>
-                  {flag.enabled ? "Enabled" : "Disabled"}
-                </span>
+                {statusPill(flag)}
               </div>
-              <button
-                onClick={() => toggle(flag)}
-                disabled={busyKey === flag.key}
-                className={`cursor-pointer w-full flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed
-                  ${flag.enabled ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}`}
-              >
-                {flag.enabled ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
-                {flag.enabled ? "Disable" : "Enable"}
-              </button>
+              {actionButton(flag, true)}
             </div>
           ))}
         </div>
@@ -122,22 +133,8 @@ function FunctionControl({ layoutClass = "" }: Props) {
                   <tr key={flag.key} className="hover:bg-gray-800/50 transition-colors border-b border-gray-700/50">
                     <td className="px-6 py-4 text-sm font-medium text-cyan-400 truncate">{FLAG_LABELS[flag.key] ?? flag.key}</td>
                     <td className="px-6 py-4 text-sm text-gray-300">{FLAG_HINTS[flag.key] ?? flag.description}</td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${flag.enabled ? "bg-green-900/30 text-green-400 ring-green-500/30" : "bg-red-900/30 text-red-400 ring-red-500/30"}`}>
-                        {flag.enabled ? "Enabled" : "Disabled"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <button
-                        onClick={() => toggle(flag)}
-                        disabled={busyKey === flag.key}
-                        className={`cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed
-                          ${flag.enabled ? "bg-red-600 hover:bg-red-700" : "bg-green-600 hover:bg-green-700"}`}
-                      >
-                        {flag.enabled ? <PowerOff className="w-3.5 h-3.5" /> : <Power className="w-3.5 h-3.5" />}
-                        {flag.enabled ? "Disable" : "Enable"}
-                      </button>
-                    </td>
+                    <td className="px-6 py-4">{statusPill(flag)}</td>
+                    <td className="px-6 py-4">{actionButton(flag, false)}</td>
                   </tr>
                 ))}
               </tbody>
