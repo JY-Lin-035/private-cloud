@@ -21,3 +21,6 @@ db/.env
 /plans/realtime-collaboration-plan.md
 /plans/version-snapshot-plan.md
 roo_task_*.md
+
+celerybeat-schedule.db
+*.drawio
