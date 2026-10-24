@@ -3,7 +3,7 @@ import base64
 import secrets
 from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File, Form, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
 from redis import Redis
 from app.schemas.file import (
@@ -40,7 +40,7 @@ def _decode_tus_metadata(metadata_header: Optional[str]) -> dict:
 @router.options("/tus")
 async def tus_options():
     """Return tus handshake headers for browser clients."""
-    return JSONResponse(
+    return Response(
         status_code=204,
         headers={
             'Tus-Resumable': '1.0.0',

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # Collaboration snapshots
     SNAPSHOT_INTERVAL: int = 900  # 15 minutes in seconds
 
+    # Trash cleanup (celery beat)
+    TRASH_RETENTION_DAYS: int = 30
+    TRASH_CLEANUP_INTERVAL_SECONDS: int = 604800  # 7 days
+
     class Config:
         env_file = ".env"
         case_sensitive = True
