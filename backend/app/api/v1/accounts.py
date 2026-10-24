@@ -30,6 +30,11 @@ async def register(
     email_service: EmailService = Depends(get_email_service)
 ):
     """Register a new account."""
+    from app.services.feature_flag_service import is_feature_enabled
+    if not is_feature_enabled("allow_registration"):
+        raise HTTPException(status_code=403, detail="註冊功能暫時關閉，如有需要請聯絡管理員。")
+    if not is_feature_enabled("enable_verification_email"):
+        raise HTTPException(status_code=403, detail="郵件驗證服務暫時無法使用，目前無法註冊。請稍後再試或聯絡管理員。")
     try:
         logger.info(f"Register request received, username: {request.username}, email: {request.email}")
         
@@ -136,6 +141,9 @@ async def get_code(
     redis_client: Redis = Depends(get_redis)
 ):
     """Get verification code."""
+    from app.services.feature_flag_service import is_feature_enabled
+    if not is_feature_enabled("enable_auth_code_email"):
+        raise HTTPException(status_code=403, detail="驗證碼郵件服務暫時關閉，密碼重設／信箱變更暫時不可用。請稍後再試或聯絡管理員。")
     try:
         logger.info(f"Get code request received, email: {request.email}, mode: {request.mode}")
         
@@ -445,8 +453,8 @@ async def admin_update_quota(
     account = db.query(Account).filter(Account.id == user_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="User not found")
-    if account.identity == Identity.ADMIN:
-        raise HTTPException(status_code=403, detail="Cannot modify admin account")
+    if account.identity == Identity.ADMIN and account.id != getattr(request.state, 'user_id', None):
+        raise HTTPException(status_code=403, detail="Cannot modify another admin account")
     account.total_file_size = total_storage
     db.commit()
     return {"message": "success", "total_storage": total_storage}

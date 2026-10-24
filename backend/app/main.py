@@ -17,6 +17,7 @@ from app.utils import logger as log
 
 from app.api.dependencies import get_redis
 from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws
+from app.api.v1 import settings as settings_api
 
 from app.middleware.session_middleware import SessionMiddleware
 from app.middleware.rate_limit_middleware import RateLimitMiddleware
@@ -92,11 +93,11 @@ threading.Thread(target=_scheduler, daemon=True).start()
 # Global exception handler for debugging
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"ERROR: {exc}")
-    print(f"TRACEBACK:\n{tb.format_exc()}")
+    logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}")
+    logger.error(f"TRACEBACK:\n{tb.format_exc()}")
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc), "traceback": tb.format_exc()}
+        content={"detail": "Internal server error"}
     )
 
 # Include routers
@@ -106,6 +107,7 @@ app.include_router(folders.router)
 app.include_router(share.router)
 app.include_router(collaboration.router)
 app.include_router(collab_ws.router)
+app.include_router(settings_api.router)
 
 
 @app.get("/api/email/verify/{user_id}/{hash}")
