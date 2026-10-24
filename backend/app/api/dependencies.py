@@ -44,6 +44,16 @@ def get_current_user(request: Request):
     return request.state.user
 
 
+def require_admin(request: Request) -> dict:
+    """Ensure the authenticated user is an admin; returns the user dict."""
+    from app.constants import Identity
+    if not hasattr(request.state, 'user'):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if request.state.user.get("identity") != Identity.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return request.state.user
+
+
 def get_account_service(db: Session = Depends(get_db)):
     """Get account service instance."""
     account_repo = AccountRepository(db)
