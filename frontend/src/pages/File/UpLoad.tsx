@@ -1,12 +1,21 @@
 import { useEffect, useRef } from 'react';
 import Uppy from '@uppy/core';
 import Dashboard from '@uppy/dashboard';
-import XHRUpload from '@uppy/xhr-upload';
+import Tus from '@uppy/tus';
 import '@uppy/core/css/style.css';
 import '@uppy/dashboard/css/style.css';
 
 import { useStorage } from '../../store/storage';
 import { API_BASE_URL } from '../../config/api';
+
+const encodeTusMetadata = (value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+};
 
 
 
@@ -46,16 +55,30 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       },
     });
 
-    uppy.use(XHRUpload, {
-      endpoint: `${API_BASE_URL}/api/files/uploadFile`,
-      formData: true,
-      fieldName: 'file',
-      bundle: false,
+    uppy.use(Tus, {
+      endpoint: `${API_BASE_URL}/api/files/tus`,
+      chunkSize: 1024 * 1024 * 50,
+      retryDelays: [0, 1000, 3000, 5000],
       withCredentials: true,
+      allowedMetaFields: ['name', 'type'],
+      headers: (file) => {
+        const metadata = [
+          `filename ${encodeTusMetadata(file.name || 'unknown')}`,
+          `filetype ${encodeTusMetadata(file.type || 'application/octet-stream')}`,
+        ].join(' ');
+
+        return {
+          'X-Parent-Folder-Uuid': parentFolderUuid ?? '',
+          'Upload-Metadata': metadata,
+        };
+      },
+      removeFingerprintOnSuccess: true,
     });
 
     uppy.on('file-added', (file) => {
       uppy.setFileMeta(file.id, {
+        name: file.name,
+        type: file.type || 'application/octet-stream',
         parent_folder_uuid: parentFolderUuid,
       });
     });

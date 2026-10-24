@@ -1,5 +1,6 @@
 import uuid
 import os
+import json
 import mimetypes
 from datetime import datetime, timezone, timedelta
 
@@ -119,6 +120,214 @@ class FileService:
         except Exception as e:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
+    def _validate_upload_filename(self, filename: str) -> bool:
+        """Validate a filename for upload safety."""
+        return not (
+            '..' in filename
+            or filename.startswith('.')
+            or filename.startswith('/')
+            or filename.startswith('\\')
+        )
+
+    def _get_tus_upload_dir(self, upload_id: str) -> str:
+        """Return the temporary tus upload directory for an upload id."""
+        return os.path.join(self.storage_base_path, StorageLimits.TUS_TEMP_DIR_NAME, upload_id)
+
+    def _get_tus_upload_path(self, upload_id: str) -> str:
+        """Return the temporary tus upload binary path."""
+        return os.path.join(self._get_tus_upload_dir(upload_id), 'upload.bin')
+
+    def _get_tus_metadata_path(self, upload_id: str) -> str:
+        """Return the temporary tus upload metadata path."""
+        return os.path.join(self._get_tus_upload_dir(upload_id), 'upload.meta.json')
+
+    def _write_tus_metadata(self, upload_id: str, metadata: Dict[str, Any]) -> None:
+        """Persist tus metadata in the temp upload directory."""
+        os.makedirs(self._get_tus_upload_dir(upload_id), exist_ok=True)
+        with open(self._get_tus_metadata_path(upload_id), 'w', encoding='utf-8') as f:
+            json.dump(metadata, f)
+
+    def create_tus_upload(self, user_id: int, parent_folder_uuid: Optional[str], filename: str, file_size: int) -> Optional[Dict[str, Any]]:
+        """Create a new temporary tus upload session."""
+        try:
+            account = self.account_repo.get_by_id(user_id)
+            if not account:
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            if not self._validate_upload_filename(filename):
+                return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            if file_size > account.signal_file_size:
+                return {'error': '檔案大小超過限制', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            if parent_folder_uuid:
+                parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
+                if not parent_folder or parent_folder.owner_id != user_id:
+                    return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            upload_id = str(uuid.uuid4())
+            upload_dir = self._get_tus_upload_dir(upload_id)
+            upload_path = self._get_tus_upload_path(upload_id)
+            os.makedirs(upload_dir, exist_ok=True)
+            with open(upload_path, 'wb'):
+                pass
+
+            metadata = {
+                'upload_id': upload_id,
+                'filename': filename,
+                'file_size': file_size,
+                'parent_folder_uuid': parent_folder_uuid,
+                'user_id': user_id,
+                'created_at': _fmt_utc8(datetime.now(timezone.utc).astimezone(_tz_utc8))
+            }
+            self._write_tus_metadata(upload_id, metadata)
+
+            return {
+                'upload_id': upload_id,
+                'upload_path': upload_path,
+                'filename': filename,
+                'file_size': file_size,
+                'stateCode': HTTPStatus.OK,
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def get_tus_upload(self, upload_id: str) -> Optional[Dict[str, Any]]:
+        """Read current tus upload progress information."""
+        try:
+            upload_path = self._get_tus_upload_path(upload_id)
+            metadata_path = self._get_tus_metadata_path(upload_id)
+
+            if not os.path.exists(upload_path) or not os.path.exists(metadata_path):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            offset = os.path.getsize(upload_path)
+            return {
+                'upload_id': upload_id,
+                'filename': metadata.get('filename'),
+                'file_size': metadata.get('file_size'),
+                'offset': offset,
+                'stateCode': HTTPStatus.OK,
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def append_tus_chunk(self, upload_id: str, upload_offset: int, chunk: bytes) -> Optional[Dict[str, Any]]:
+        """Append one chunk to a temporary tus upload."""
+        try:
+            upload_path = self._get_tus_upload_path(upload_id)
+            metadata_path = self._get_tus_metadata_path(upload_id)
+
+            if not os.path.exists(upload_path) or not os.path.exists(metadata_path):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            current_offset = os.path.getsize(upload_path)
+            if current_offset != upload_offset:
+                return {'error': 'Upload offset mismatch', 'stateCode': HTTPStatus.CONFLICT}
+
+            with open(upload_path, 'ab') as f:
+                f.write(chunk)
+
+            new_offset = os.path.getsize(upload_path)
+            completed = new_offset >= int(metadata.get('file_size', 0))
+
+            return {
+                'upload_id': upload_id,
+                'offset': new_offset,
+                'completed': completed,
+                'stateCode': HTTPStatus.OK,
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def finalize_tus_upload(self, upload_id: str) -> Optional[Dict[str, Any]]:
+        """Finalize a tus upload by moving the temp file into persistent storage."""
+        try:
+            upload_path = self._get_tus_upload_path(upload_id)
+            metadata_path = self._get_tus_metadata_path(upload_id)
+
+            if not os.path.exists(upload_path) or not os.path.exists(metadata_path):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+
+            filename = metadata.get('filename')
+            file_size = int(metadata.get('file_size', 0))
+            user_id = int(metadata.get('user_id', 0))
+            parent_folder_uuid = metadata.get('parent_folder_uuid')
+
+            account = self.account_repo.get_by_id(user_id)
+            if not account:
+                return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            if file_size > account.signal_file_size:
+                return {'error': '檔案大小超過限制', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            existing_file = self.db.execute(
+                select(File).where(
+                    File.owner_id == user_id,
+                    File.parent_folder_id == parent_folder_uuid,
+                    File.name == filename,
+                    File.deleted_at.is_(None)
+                )
+            ).scalar_one_or_none()
+
+            old_file_size = 0
+            if existing_file:
+                old_file_size = existing_file.size
+                old_storage_path = os.path.join(self.storage_base_path, existing_file.uuid)
+                if os.path.exists(old_storage_path):
+                    os.remove(old_storage_path)
+                self.file_repo.hard_delete(existing_file.uuid)
+                account.used_size = max(0, account.used_size - old_file_size)
+                self.account_repo.update(account)
+                if parent_folder_uuid:
+                    self.folder_service._update_parent_folder_size(parent_folder_uuid, -old_file_size)
+
+            file_uuid = str(uuid.uuid4())
+            storage_path = os.path.join(self.storage_base_path, file_uuid)
+            os.makedirs(self.storage_base_path, exist_ok=True)
+            os.replace(upload_path, storage_path)
+
+            new_file = File(
+                uuid=file_uuid,
+                owner_id=user_id,
+                parent_folder_id=parent_folder_uuid,
+                name=filename,
+                size=file_size,
+                mime_type=self._get_mime_type(filename),
+                storage_path=storage_path
+            )
+            created_file = self.file_repo.create_with_uuid_retry(new_file)
+
+            if parent_folder_uuid:
+                self.folder_service._update_parent_folder_size(parent_folder_uuid, file_size)
+
+            account.used_size += file_size
+            self.account_repo.update(account)
+
+            if os.path.exists(metadata_path):
+                os.remove(metadata_path)
+            if os.path.exists(self._get_tus_upload_dir(upload_id)):
+                os.rmdir(self._get_tus_upload_dir(upload_id))
+
+            return {
+                'uuid': created_file.uuid,
+                'name': created_file.name,
+                'size': created_file.size,
+                'mime_type': created_file.mime_type,
+                'created_at': _fmt_utc8(created_file.created_at)
+            }
+        except Exception as e:
+            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
     def upload_file(self, user_id: int, parent_folder_uuid: Optional[str], file, file_size: int) -> Optional[Dict[str, Any]]:
         """Upload a file."""
         try:

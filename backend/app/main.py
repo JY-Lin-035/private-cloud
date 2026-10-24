@@ -33,12 +33,24 @@ logger = log.get_logger("main.log")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://technological-jets-combination-nail.trycloudflare.com",
-        "https://meowcloud.gleeze.com",
+        # Backend
+        "https://saturday-antiques-invitation-sin.trycloudflare.com",
+        "https://meowcloud-api.jun.org.uk",
+        # Frontend
+        "https://hazardous-ratings-cleaner-management.trycloudflare.com",
+        "https://meowcloud.jun.org.uk",
+        "https://meowcloud.wuaze.com",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Location",
+        "Upload-Offset",
+        "Upload-Length",
+        "Tus-Resumable",
+        "Upload-Complete",
+    ],
 )
 
 # (engine and SessionLocal imported from app.database above)

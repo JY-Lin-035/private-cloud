@@ -15,6 +15,7 @@
     "@uppy/core": "^5.2.0",
     "@uppy/dashboard": "^5.1.1",
     "@uppy/react": "^5.2.0",
+    "@uppy/tus": "^5.1.1",
     "@uppy/xhr-upload": "^5.2.0",
     "antd": "^6.3.6",
     "apexcharts": "^5.10.6",
