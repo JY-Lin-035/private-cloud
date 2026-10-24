@@ -17,3 +17,7 @@ frontend/README.md
 frontend/README-Plan.md
 frontend/README-Frontend.md
 db/.env
+
+/plans/realtime-collaboration-plan.md
+/plans/version-snapshot-plan.md
+roo_task_*.md
