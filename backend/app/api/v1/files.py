@@ -156,10 +156,9 @@ async def tus_patch_upload(
                 raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
             response_headers['Upload-Complete'] = 'true'
 
-        return JSONResponse(
+        return Response(
             status_code=204,
             headers=response_headers,
-            content=None,
         )
     except HTTPException:
         raise

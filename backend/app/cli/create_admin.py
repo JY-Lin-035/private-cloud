@@ -8,10 +8,12 @@ import re
 import secrets
 import string
 import sys
+import uuid as uuid_mod
 from datetime import datetime
 
 from app.constants import Identity, StorageLimits
 from app.models.account import Account
+from app.models.folder import Folder
 from app.utils.security import hash_password
 from app.database import SessionLocal
 
@@ -76,6 +78,8 @@ def main() -> int:
             total_file_size=StorageLimits.DEFAULT_TOTAL_FILE_SIZE,
         )
         db.add(account)
+        db.flush()
+        db.add(Folder(uuid=str(uuid_mod.uuid4()), owner_id=account.id, parent_id=None, name='Home', size=0, is_system=True))
         db.commit()
         print(f'admin created: {args.username}')
         if args.generate:
