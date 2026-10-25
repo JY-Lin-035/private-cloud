@@ -58,11 +58,11 @@ function toBody(f: FormState) {
     token: f.subject_type === 'ip_token' ? f.token.trim() : null,
     username: f.subject_type === 'user' ? f.username.trim() : null,
     action: f.action,
-    scope: f.action === 'block' ? 'full' : f.scope,
-    direction: f.action === 'block' ? 'both' : f.direction,
+    scope: f.scope,
+    direction: f.scope === 'full' ? 'both' : f.direction,
     delay_ms: f.action === 'block' ? 0 : Number(f.delay) || 0,
-    upload_kbps: (f.action !== 'block' && f.direction !== 'down' && f.upK) ? Number(f.upK) : null,
-    download_kbps: (f.action !== 'block' && f.direction !== 'up' && f.dnK) ? Number(f.dnK) : null,
+    upload_kbps: (f.action !== 'block' && (f.scope === 'full' || f.direction !== 'down') && f.upK) ? Number(f.upK) : null,
+    download_kbps: (f.action !== 'block' && (f.scope === 'full' || f.direction !== 'up') && f.dnK) ? Number(f.dnK) : null,
     expires_in_hours: (f.hours && f.hours !== 'custom') ? Number(f.hours) : null,
     expires_at: f.hours === 'custom' ? localToIso(f.customAt) : null,
     reason: f.reason.trim() || (f.action === 'block' ? '手動封鎖' : '手動設定'),
@@ -95,31 +95,35 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
         </select>
       </label>
       <label className={labCls}>範圍
-        <select className={inputCls} value={f.action === 'block' ? 'full' : f.scope} disabled={f.action === 'block'}
+        <select className={inputCls} value={f.scope}
           onChange={e => set({ scope: e.target.value as FormState['scope'] })}>
           <option value="transfer">僅傳輸</option>
           <option value="full">全站</option>
         </select>
       </label>
       {/* row 2 */}
-      <label className={labCls}>方向
-        <select className={inputCls} value={f.action === 'block' ? 'both' : f.direction} disabled={f.action === 'block'}
-          onChange={e => set({ direction: e.target.value as FormState['direction'] })}>
-          <option value="both">上傳＋下載</option>
-          <option value="up">僅上傳</option>
-          <option value="down">僅下載</option>
-        </select>
-      </label>
-      <label className={labCls}>請求延遲（毫秒）
-        <input type="number" min="0" className={inputCls} disabled={f.action === 'block'}
-          value={f.action === 'block' ? '0' : f.delay} onChange={e => set({ delay: e.target.value })} />
-      </label>
-      {f.action !== 'block' && f.direction !== 'down' ? (
+      {f.scope === 'transfer' ? (
+        <label className={labCls}>方向
+          <select className={inputCls} value={f.direction}
+            onChange={e => set({ direction: e.target.value as FormState['direction'] })}>
+            <option value="both">上傳＋下載</option>
+            <option value="up">僅上傳</option>
+            <option value="down">僅下載</option>
+          </select>
+        </label>
+      ) : <div className="hidden md:block" aria-hidden />}
+      {f.action === 'slow' ? (
+        <label className={labCls}>請求延遲（毫秒）
+          <input type="number" min="0" className={inputCls}
+            value={f.delay} onChange={e => set({ delay: e.target.value })} />
+        </label>
+      ) : <div className="hidden md:block" aria-hidden />}
+      {f.action === 'slow' && (f.scope === 'full' || f.direction !== 'down') ? (
         <label className={labCls}>上傳頻寬上限（KB/秒）
           <input type="number" min="16" className={inputCls} value={f.upK} onChange={e => set({ upK: e.target.value })} />
         </label>
       ) : <div className="hidden md:block" aria-hidden />}
-      {f.action !== 'block' && f.direction !== 'up' ? (
+      {f.action === 'slow' && (f.scope === 'full' || f.direction !== 'up') ? (
         <label className={labCls}>下載頻寬上限（KB/秒）
           <input type="number" min="16" className={inputCls} value={f.dnK} onChange={e => set({ dnK: e.target.value })} />
         </label>
@@ -229,11 +233,11 @@ function IPManagement({ layoutClass = "" }: Props) {
     run(async () => {
       await ipControlApi.update(editRule.id, {
         action: editForm.action,
-        scope: editForm.action === 'block' ? 'full' : editForm.scope,
-        direction: editForm.action === 'block' ? 'both' : editForm.direction,
+        scope: editForm.scope,
+        direction: editForm.scope === 'full' ? 'both' : editForm.direction,
         delay_ms: editForm.action === 'block' ? 0 : Number(editForm.delay) || 0,
-        upload_kbps: (editForm.action !== 'block' && editForm.direction !== 'down' && editForm.upK) ? Number(editForm.upK) : null,
-        download_kbps: (editForm.action !== 'block' && editForm.direction !== 'up' && editForm.dnK) ? Number(editForm.dnK) : null,
+        upload_kbps: (editForm.action !== 'block' && (editForm.scope === 'full' || editForm.direction !== 'down') && editForm.upK) ? Number(editForm.upK) : null,
+        download_kbps: (editForm.action !== 'block' && (editForm.scope === 'full' || editForm.direction !== 'up') && editForm.dnK) ? Number(editForm.dnK) : null,
         expires_in_hours: (editForm.hours && editForm.hours !== 'custom') ? Number(editForm.hours) : null,
         expires_at: editForm.hours === 'custom' ? localToIso(editForm.customAt) : (editForm.hours === '' ? '' : null),
         reason: editForm.reason.trim() || undefined,
@@ -263,7 +267,7 @@ function IPManagement({ layoutClass = "" }: Props) {
   const statusPill = (r: ControlRule) => (
     <span className="flex flex-col gap-1">
       <span className={`inline-flex w-max items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${r.action === 'block' ? 'bg-red-900/30 text-red-400 ring-red-500/30' : 'bg-amber-900/30 text-amber-300 ring-amber-500/30'}`}>
-        {r.action === 'block' ? '429 封鎖' : '慢速'}・{r.scope === 'full' ? '全站' : '傳輸'}・{r.direction === 'both' ? '上下' : r.direction === 'up' ? '上' : '下'}
+        {r.action === 'block' ? '429 封鎖' : '慢速'}・{r.scope === 'full' ? '全站' : `傳輸・${r.direction === 'both' ? '上下' : r.direction === 'up' ? '上' : '下'}`}
       </span>
       {r.action === 'slow' && (
         <span className="text-xs text-gray-400">
