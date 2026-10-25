@@ -30,6 +30,8 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
   const storage = useStorage();
   const uppyContainer = useRef<HTMLDivElement>(null);
   const uppyInstance = useRef<Uppy | null>(null);
+  // Safari 系不實作 webkitdirectory：隱藏資料夾按鈕並顯示指引，避免拖入資料夾變成 0B 垃圾檔
+  const supportsFolderUpload = typeof window !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
 
   useEffect(() => {
     if (!uppyContainer.current) return;
@@ -47,7 +49,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       inline: true,
       target: uppyContainer.current,
       proudlyDisplayPoweredByUppy: false,
-      fileManagerSelectionType: 'both',
+      fileManagerSelectionType: supportsFolderUpload ? 'both' : 'files',
       locale: {
         strings: {
           dropPasteFiles: '請將檔案拖曳到這裡或 %{browseFiles}',
@@ -126,7 +128,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
         uppyInstance.current = null;
       }
     };
-  }, [parentFolderUuid, storage, onRefresh, onComplete]);
+  }, [parentFolderUuid, storage, onRefresh, onComplete, supportsFolderUpload]);
 
   return (
     <div className="fixed inset-0 z-20 flex items-center justify-center">
@@ -137,6 +139,11 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
 
       <div className="relative z-10 max-w-[95vw] sm:max-w-[750px]">
         <div ref={uppyContainer}></div>
+        {!supportsFolderUpload && (
+          <p className="text-amber-200 text-xs mt-2 text-center">
+            此瀏覽器不支援資料夾上傳：請改用 Chrome / Firefox，或先將資料夾壓縮成 zip 後以單一檔案上傳。
+          </p>
+        )}
       </div>
     </div>
   );

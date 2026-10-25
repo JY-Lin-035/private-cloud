@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Pencil, Ban, ShieldCheck } from "lucide-react";
+import { Pencil, Ban, ShieldCheck, X } from "lucide-react";
 import { ipControlApi, type ControlRule } from "../../api/ipControlApi";
 import { authApi } from "../../api/authApi";
 
@@ -18,13 +18,133 @@ function localToIso(v: string): string | null {
   const sign = off >= 0 ? '+' : '-';
   const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, '0');
   const mm = String(Math.abs(off) % 60).padStart(2, '0');
-  return `${v}:00`.slice(0, 19) + `${sign}${hh}:${mm}`;
+  const base = v.length === 16 ? `${v}:00` : v;
+  return `${base.slice(0, 19)}${sign}${hh}:${mm}`;
 }
 
 function subjectLabel(r: ControlRule): string {
   if (r.subject_type === 'user') return `帳號 ${r.username ?? '?'}`;
   if (r.subject_type === 'ip_token') return `${r.ip_masked} → 連結 #${r.token_prefix}`;
   return r.ip_masked ?? '-';
+}
+
+interface FormState {
+  subject_type: 'ip' | 'ip_token' | 'user';
+  ip: string;
+  token: string;
+  username: string;
+  action: 'slow' | 'block';
+  scope: 'transfer' | 'full';
+  direction: 'up' | 'down' | 'both';
+  delay: string;
+  upK: string;
+  dnK: string;
+  hours: string;      // '1' | '6' | '24' | 'custom' | '' (indefinite)
+  customAt: string;
+  reason: string;
+}
+
+const emptyForm: FormState = {
+  subject_type: 'ip', ip: '', token: '', username: '',
+  action: 'slow', scope: 'transfer', direction: 'both',
+  delay: '2000', upK: '256', dnK: '512',
+  hours: '1', customAt: '', reason: '',
+};
+
+function toBody(f: FormState) {
+  return {
+    subject_type: f.subject_type,
+    ip: f.subject_type === 'user' ? null : f.ip.trim() || null,
+    token: f.subject_type === 'ip_token' ? f.token.trim() : null,
+    username: f.subject_type === 'user' ? f.username.trim() : null,
+    action: f.action,
+    scope: f.action === 'block' ? 'full' : f.scope,
+    direction: f.action === 'block' ? 'both' : f.direction,
+    delay_ms: f.action === 'block' ? 0 : Number(f.delay) || 0,
+    upload_kbps: (f.action !== 'block' && f.direction !== 'down' && f.upK) ? Number(f.upK) : null,
+    download_kbps: (f.action !== 'block' && f.direction !== 'up' && f.dnK) ? Number(f.dnK) : null,
+    expires_in_hours: (f.hours && f.hours !== 'custom') ? Number(f.hours) : null,
+    expires_at: f.hours === 'custom' ? localToIso(f.customAt) : null,
+    reason: f.reason.trim() || (f.action === 'block' ? '手動封鎖' : '手動設定'),
+  };
+}
+
+function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patch: Partial<FormState>) => void; subjectFixed?: boolean }) {
+  const inputCls = "w-full bg-gray-700 text-white px-2 py-1.5 rounded border border-gray-600 text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500 disabled:opacity-50";
+  const labCls = "flex flex-col gap-1 text-xs text-gray-400";
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-3">
+      {/* row 1 */}
+      <label className={labCls}>對象類型
+        <select className={inputCls} disabled={subjectFixed} value={f.subject_type} onChange={e => set({ subject_type: e.target.value as FormState['subject_type'] })}>
+          <option value="ip">全站 IP</option>
+          <option value="ip_token">IP×連結</option>
+          <option value="user">帳號</option>
+        </select>
+      </label>
+      <label className={labCls}>
+        {f.subject_type === 'user' ? '帳號名稱' : f.subject_type === 'ip_token' ? 'IP' : 'IP 位址'}
+        <input className={inputCls} disabled={subjectFixed} placeholder={f.subject_type === 'user' ? '例 meowking' : '例 1.2.3.4'}
+          value={f.subject_type === 'user' ? f.username : f.ip}
+          onChange={e => set(f.subject_type === 'user' ? { username: e.target.value } : { ip: e.target.value })} />
+      </label>
+      <label className={labCls}>動作
+        <select className={inputCls} value={f.action} onChange={e => set({ action: e.target.value as FormState['action'] })}>
+          <option value="slow">慢速</option>
+          <option value="block">429 封鎖</option>
+        </select>
+      </label>
+      <label className={labCls}>範圍
+        <select className={inputCls} value={f.action === 'block' ? 'full' : f.scope} disabled={f.action === 'block'}
+          onChange={e => set({ scope: e.target.value as FormState['scope'] })}>
+          <option value="transfer">僅傳輸</option>
+          <option value="full">全站</option>
+        </select>
+      </label>
+      {/* row 2 */}
+      <label className={labCls}>方向
+        <select className={inputCls} value={f.action === 'block' ? 'both' : f.direction} disabled={f.action === 'block'}
+          onChange={e => set({ direction: e.target.value as FormState['direction'] })}>
+          <option value="both">上傳＋下載</option>
+          <option value="up">僅上傳</option>
+          <option value="down">僅下載</option>
+        </select>
+      </label>
+      <label className={labCls}>請求延遲（毫秒）
+        <input type="number" min="0" className={inputCls} disabled={f.action === 'block'}
+          value={f.action === 'block' ? '0' : f.delay} onChange={e => set({ delay: e.target.value })} />
+      </label>
+      {f.action !== 'block' && f.direction !== 'down' ? (
+        <label className={labCls}>上傳頻寬上限（KB/秒）
+          <input type="number" min="16" className={inputCls} value={f.upK} onChange={e => set({ upK: e.target.value })} />
+        </label>
+      ) : <div className="hidden md:block" aria-hidden />}
+      {f.action !== 'block' && f.direction !== 'up' ? (
+        <label className={labCls}>下載頻寬上限（KB/秒）
+          <input type="number" min="16" className={inputCls} value={f.dnK} onChange={e => set({ dnK: e.target.value })} />
+        </label>
+      ) : <div className="hidden md:block" aria-hidden />}
+      {/* row 3 */}
+      <label className={labCls}>期限
+        <select className={inputCls} value={f.hours} onChange={e => set({ hours: e.target.value })}>
+          <option value="1">1 小時</option>
+          <option value="6">6 小時</option>
+          <option value="24">24 小時</option>
+          <option value="custom">自定義…</option>
+          <option value="">無限期</option>
+        </select>
+      </label>
+      {f.hours === 'custom' ? (
+        <label className={labCls}>自定義到期（精準到秒）
+          <input type="datetime-local" step="1" className={inputCls} value={f.customAt} onChange={e => set({ customAt: e.target.value })} />
+        </label>
+      ) : <div className="hidden md:block" aria-hidden />}
+      <label className={labCls}>原因
+        <input className={inputCls} placeholder="例：批量拖檔疑似外洩" value={f.reason} onChange={e => set({ reason: e.target.value })} />
+      </label>
+      <div aria-hidden className="hidden md:block" />
+    </div>
+  );
 }
 
 function IPManagement({ layoutClass = "" }: Props) {
@@ -37,30 +157,12 @@ function IPManagement({ layoutClass = "" }: Props) {
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const [fType, setFType] = useState<'ip' | 'ip_token' | 'user'>('ip');
-  const [fIp, setFIp] = useState('');
-  const [fToken, setFToken] = useState('');
-  const [fUser, setFUser] = useState('');
-  const [fAction, setFAction] = useState<'slow' | 'block'>('slow');
-  const [fScope, setFScope] = useState<'transfer' | 'full'>('transfer');
-  const [fDir, setFDir] = useState<'up' | 'down' | 'both'>('both');
-  const [fDelay, setFDelay] = useState('2000');
-  const [fUpK, setFUpK] = useState('256');
-  const [fDnK, setFDnK] = useState('512');
-  const [fHours, setFHours] = useState('1');
-  const [fCustomAt, setFCustomAt] = useState('');
-  const [fReason, setFReason] = useState('');
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [editRule, setEditRule] = useState<ControlRule | null>(null);
+  const [editForm, setEditForm] = useState<FormState>(emptyForm);
 
-  const [editId, setEditId] = useState<number | null>(null);
-  const [eAction, setEAction] = useState<'slow' | 'block'>('slow');
-  const [eScope, setEScope] = useState<'transfer' | 'full'>('transfer');
-  const [eDir, setEDir] = useState<'up' | 'down' | 'both'>('both');
-  const [eDelay, setEDelay] = useState('');
-  const [eUpK, setEUpK] = useState('');
-  const [eDnK, setEDnK] = useState('');
-  const [eHours, setEHours] = useState('1');
-  const [eCustomAt, setECustomAt] = useState('');
-  const [eReason, setEReason] = useState('');
+  const setF = (patch: Partial<FormState>) => setForm(p => ({ ...p, ...patch }));
+  const setE = (patch: Partial<FormState>) => setEditForm(p => ({ ...p, ...patch }));
 
   useEffect(() => {
     authApi.checkSession().then((s: any) => {
@@ -87,49 +189,56 @@ function IPManagement({ layoutClass = "" }: Props) {
     setBusy(false);
   }
 
+  function validate(f: FormState): string | null {
+    if (f.subject_type !== 'user' && !f.ip.trim()) return '請輸入 IP';
+    if (f.subject_type === 'ip_token' && f.token.trim().length < 8) return '請輸入完整的連結 token（至少 8 字）';
+    if (f.subject_type === 'user' && !f.username.trim()) return '請輸入帳號名稱';
+    if (f.hours === 'custom' && !f.customAt) return '請選擇自定義到期時間';
+    return null;
+  }
+
   function create() {
-    if (fHours === 'custom' && !fCustomAt) { setNotice({ text: '請選擇自定義到期時間', ok: false }); return; }
+    const err = validate(form);
+    if (err) { setNotice({ text: err, ok: false }); return; }
     run(async () => {
-      await ipControlApi.create({
-        subject_type: fType,
-        ip: fType === 'user' ? null : fIp.trim() || null,
-        token: fType === 'ip_token' ? fToken.trim() : null,
-        username: fType === 'user' ? fUser.trim() : null,
-        action: fAction, scope: fScope, direction: fDir,
-        delay_ms: Number(fDelay) || 0,
-        upload_kbps: (fDir !== 'down' && fUpK) ? Number(fUpK) : null,
-        download_kbps: (fDir !== 'up' && fDnK) ? Number(fDnK) : null,
-        expires_in_hours: (fHours && fHours !== 'custom') ? Number(fHours) : null,
-        expires_at: fHours === 'custom' ? localToIso(fCustomAt) : null,
-        reason: fReason.trim() || '手動設定',
-      });
-      setFIp(''); setFToken(''); setFUser(''); setFReason(''); setFCustomAt('');
+      await ipControlApi.create(toBody(form));
+      setForm({ ...emptyForm, subject_type: form.subject_type });
     }, '管控已新增');
   }
 
   function startEdit(r: ControlRule) {
-    setEditId(r.id);
-    setEAction(r.action); setEScope(r.scope); setEDir(r.direction);
-    setEDelay(String(r.delay_ms ?? 0));
-    setEUpK(r.upload_kbps ? String(r.upload_kbps) : '');
-    setEDnK(r.download_kbps ? String(r.download_kbps) : '');
-    setEHours('1'); setEReason(r.reason ?? '');
+    setEditRule(r);
+    setEditForm({
+      subject_type: r.subject_type,
+      ip: r.ip_masked ?? '', token: r.token_prefix ?? '', username: r.username ?? '',
+      action: r.action, scope: r.scope, direction: r.direction,
+      delay: String(r.delay_ms ?? 0),
+      upK: r.upload_kbps ? String(r.upload_kbps) : '',
+      dnK: r.download_kbps ? String(r.download_kbps) : '',
+      hours: r.expires_at ? 'custom' : '',
+      customAt: r.expires_at ? localInputFromUtc(r.expires_at) : '',
+      reason: r.reason ?? '',
+    });
   }
 
   function saveEdit() {
-    if (editId == null) return;
-    if (eHours === 'custom' && !eCustomAt) { setNotice({ text: '請選擇自定義到期時間', ok: false }); return; }
+    if (!editRule) return;
+    // subject fields are immutable on edit; only the "action side" matters
+    const err = editRule.subject_type === 'ip_token' && editForm.hours === 'custom' && !editForm.customAt ? '請選擇自定義到期時間' : null;
+    if (err) { setNotice({ text: err, ok: false }); return; }
     run(async () => {
-      await ipControlApi.update(editId, {
-        action: eAction, scope: eScope, direction: eDir,
-        delay_ms: Number(eDelay) || 0,
-        upload_kbps: (eDir !== 'down' && eUpK) ? Number(eUpK) : null,
-        download_kbps: (eDir !== 'up' && eDnK) ? Number(eDnK) : null,
-        expires_in_hours: (eHours && eHours !== 'custom') ? Number(eHours) : null,
-        expires_at: eHours === 'custom' ? localToIso(eCustomAt) : null,
-        reason: eReason.trim() || undefined,
+      await ipControlApi.update(editRule.id, {
+        action: editForm.action,
+        scope: editForm.action === 'block' ? 'full' : editForm.scope,
+        direction: editForm.action === 'block' ? 'both' : editForm.direction,
+        delay_ms: editForm.action === 'block' ? 0 : Number(editForm.delay) || 0,
+        upload_kbps: (editForm.action !== 'block' && editForm.direction !== 'down' && editForm.upK) ? Number(editForm.upK) : null,
+        download_kbps: (editForm.action !== 'block' && editForm.direction !== 'up' && editForm.dnK) ? Number(editForm.dnK) : null,
+        expires_in_hours: (editForm.hours && editForm.hours !== 'custom') ? Number(editForm.hours) : null,
+        expires_at: editForm.hours === 'custom' ? localToIso(editForm.customAt) : (editForm.hours === '' ? '' : null),
+        reason: editForm.reason.trim() || undefined,
       });
-      setEditId(null);
+      setEditRule(null);
     }, '管控已更新');
   }
 
@@ -149,9 +258,22 @@ function IPManagement({ layoutClass = "" }: Props) {
   if (loading || !adminUser) return null;
 
   const shown = rules.filter(r => (tab === 'ip' ? r.subject_type !== 'user' : r.subject_type === 'user'));
-
   const cell = "px-3 py-2 text-sm align-top";
-  const inputCls = "bg-gray-700 text-white px-2 py-1.5 rounded border border-gray-600 text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500";
+
+  const statusPill = (r: ControlRule) => (
+    <span className="flex flex-col gap-1">
+      <span className={`inline-flex w-max items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${r.action === 'block' ? 'bg-red-900/30 text-red-400 ring-red-500/30' : 'bg-amber-900/30 text-amber-300 ring-amber-500/30'}`}>
+        {r.action === 'block' ? '429 封鎖' : '慢速'}・{r.scope === 'full' ? '全站' : '傳輸'}・{r.direction === 'both' ? '上下' : r.direction === 'up' ? '上' : '下'}
+      </span>
+      {r.action === 'slow' && (
+        <span className="text-xs text-gray-400">
+          {r.delay_ms ? `${r.delay_ms}ms/請求` : ''}
+          {r.upload_kbps ? `　↑${r.upload_kbps}KB/s` : ''}
+          {r.download_kbps ? `　↓${r.download_kbps}KB/s` : ''}
+        </span>
+      )}
+    </span>
+  );
 
   return (
     <div className={`flex flex-col min-h-screen text-white p-4 sm:p-6 ${layoutClass}`}>
@@ -178,62 +300,15 @@ function IPManagement({ layoutClass = "" }: Props) {
           </div>
         )}
 
-        {/* create form */}
-        <div className="mb-4 bg-gray-800/50 rounded-lg border border-gray-700 p-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
-          <select value={fType} onChange={e => setFType(e.target.value as any)} className={inputCls}>
-            <option value="ip">對象：全站 IP</option>
-            <option value="ip_token">對象：IP×連結</option>
-            <option value="user">對象：帳號</option>
-          </select>
-          {fType !== 'user' ? (
-            <input placeholder="IP（例 1.2.3.4）" value={fIp} onChange={e => setFIp(e.target.value)} className={inputCls} />
-          ) : (
-            <input placeholder="帳號名稱" value={fUser} onChange={e => setFUser(e.target.value)} className={inputCls} />
-          )}
-          {fType === 'ip_token' && (
-            <input placeholder="連結 token" value={fToken} onChange={e => setFToken(e.target.value)} className={inputCls} />
-          )}
-          <select value={fAction} onChange={e => setFAction(e.target.value as any)} className={inputCls}>
-            <option value="slow">動作：慢速</option>
-            <option value="block">動作：429 封鎖</option>
-          </select>
-          <select value={fScope} onChange={e => setFScope(e.target.value as any)} className={inputCls}>
-            <option value="transfer">範圍：僅傳輸</option>
-            <option value="full">範圍：全站</option>
-          </select>
-          <select value={fDir} onChange={e => setFDir(e.target.value as any)} className={inputCls}>
-            <option value="both">方向：上+下</option>
-            <option value="up">方向：上傳</option>
-            <option value="down">方向：下載</option>
-          </select>
-          <label className="flex flex-col gap-1 text-xs text-gray-400">請求延遲（毫秒）
-            <input type="number" min="0" value={fDelay} onChange={e => setFDelay(e.target.value)} className={inputCls} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-400">頻寬上限（KB/秒）
-            <span className="flex gap-2">
-              <input aria-label="上傳頻寬" type="number" min="16" value={fUpK} onChange={e => setFUpK(e.target.value)} className={inputCls + ' flex-1 min-w-0'} placeholder="上" />
-              <input aria-label="下載頻寬" type="number" min="16" value={fDnK} onChange={e => setFDnK(e.target.value)} className={inputCls + ' flex-1 min-w-0'} placeholder="下" />
-            </span>
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-gray-400">期限
-            <select value={fHours} onChange={e => setFHours(e.target.value)} className={inputCls}>
-              <option value="1">1 小時</option>
-              <option value="6">6 小時</option>
-              <option value="24">24 小時</option>
-              <option value="custom">自定義…</option>
-              <option value="">無限期</option>
-            </select>
-          </label>
-          {fHours === 'custom' && (
-            <label className="flex flex-col gap-1 text-xs text-gray-400">自定義到期（精準到秒）
-              <input type="datetime-local" step="1" value={fCustomAt} onChange={e => setFCustomAt(e.target.value)} className={inputCls} />
-            </label>
-          )}
-          <input placeholder="原因" value={fReason} onChange={e => setFReason(e.target.value)} className={inputCls} />
-          <button onClick={create} disabled={busy}
-            className="cursor-pointer px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors">
-            新增管控
-          </button>
+        {/* create form — fixed slots, never reflows */}
+        <div className="mb-4 bg-gray-800/50 rounded-lg border border-gray-700 p-4">
+          <FormFields f={form} set={setF} />
+          <div className="mt-3 flex justify-end">
+            <button onClick={create} disabled={busy}
+              className="cursor-pointer px-5 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors">
+              新增管控
+            </button>
+          </div>
         </div>
 
         {/* tabs */}
@@ -249,8 +324,8 @@ function IPManagement({ layoutClass = "" }: Props) {
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[6%]">序號</th>
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[20%]">對象</th>
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[22%]">處置</th>
-                <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[16%]">到期</th>
-                <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[18%]">近期帳號</th>
+                <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[14%]">到期</th>
+                <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[20%]">近期帳號</th>
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 text-center">操作</th>
               </tr>
             </thead>
@@ -262,66 +337,8 @@ function IPManagement({ layoutClass = "" }: Props) {
                     <div className="break-all">{subjectLabel(r)}</div>
                     <div className="text-xs text-gray-500 mt-1">{r.reason}{r.auto ? '（自動）' : ''}</div>
                   </td>
-                  <td className={cell}>
-                    {editId === r.id ? (
-                      <div className="flex flex-col gap-2">
-                        <div className="flex gap-2">
-                          <select value={eAction} onChange={e => setEAction(e.target.value as any)} className={inputCls}>
-                            <option value="slow">慢速</option>
-                            <option value="block">429</option>
-                          </select>
-                          <select value={eScope} onChange={e => setEScope(e.target.value as any)} className={inputCls}>
-                            <option value="transfer">傳輸</option>
-                            <option value="full">全站</option>
-                          </select>
-                          <select value={eDir} onChange={e => setEDir(e.target.value as any)} className={inputCls}>
-                            <option value="both">上下</option>
-                            <option value="up">上</option>
-                            <option value="down">下</option>
-                          </select>
-                        </div>
-                        <div className="flex gap-2 flex-wrap items-end">
-                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">延遲(ms)
-                            <input value={eDelay} onChange={e => setEDelay(e.target.value)} type="number" min="0" className={inputCls + ' w-24'} />
-                          </label>
-                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">上傳(KB/s)
-                            <input value={eUpK} onChange={e => setEUpK(e.target.value)} type="number" min="16" className={inputCls + ' w-24'} />
-                          </label>
-                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">下載(KB/s)
-                            <input value={eDnK} onChange={e => setEDnK(e.target.value)} type="number" min="16" className={inputCls + ' w-24'} />
-                          </label>
-                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">期限
-                            <select value={eHours} onChange={e => setEHours(e.target.value)} className={inputCls}>
-                              <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option>
-                              <option value="custom">自定義…</option><option value="">∞</option>
-                            </select>
-                          </label>
-                          {eHours === 'custom' && (
-                            <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">到期時間（到秒）
-                              <input type="datetime-local" step="1" value={eCustomAt} onChange={e => setECustomAt(e.target.value)} className={inputCls} />
-                            </label>
-                          )}
-                        </div>
-                        <input value={eReason} onChange={e => setEReason(e.target.value)} placeholder="原因" className={inputCls} />
-                        <span className="flex gap-2">
-                          <button onClick={saveEdit} className="cursor-pointer px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-xs rounded">儲存</button>
-                          <button onClick={() => setEditId(null)} className="cursor-pointer px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded">取消</button>
-                        </span>
-                      </div>
-                    ) : (
-                      <span className="flex flex-col gap-1">
-                        <span className={`inline-flex w-max items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${r.action === 'block' ? 'bg-red-900/30 text-red-400 ring-red-500/30' : 'bg-amber-900/30 text-amber-300 ring-amber-500/30'}`}>
-                          {r.action === 'block' ? '429 封鎖' : '慢速'}・{r.scope === 'full' ? '全站' : '傳輸'}・{r.direction === 'both' ? '上下' : r.direction === 'up' ? '上' : '下'}
-                        </span>
-                        {r.action === 'slow' && (
-                          <span className="text-xs text-gray-400">
-                            {r.delay_ms ? `${r.delay_ms}ms/請求` : ''}{r.upload_kbps ? `　↑${r.upload_kbps}KB/s` : ''}{r.download_kbps ? `　↓${r.download_kbps}KB/s` : ''}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </td>
-                  <td className={cell + ' text-sm'}>{r.expires_at ? fmt(r.expires_at) : <span className="text-gray-500">無限期</span>}</td>
+                  <td className={cell}>{statusPill(r)}</td>
+                  <td className={cell}>{r.expires_at ? fmt(r.expires_at) : <span className="text-gray-500">無限期</span>}</td>
                   <td className={cell}>
                     {r.recent_accounts.length === 0 ? <span className="text-xs text-gray-500">匿名（無帳號）</span> : (
                       <div className="flex flex-col gap-1">
@@ -353,8 +370,34 @@ function IPManagement({ layoutClass = "" }: Props) {
           處置台階：傳輸慢速 → 全站限速 → 全站 429 → 停用帳號。介面顯示的 IP 一律中段遮罩。
         </p>
       </div>
+
+      {/* edit modal — table rows never reflow */}
+      {editRule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/60" onClick={() => setEditRule(null)}></div>
+          <div className="relative z-10 w-[94vw] max-w-2xl max-h-[88vh] overflow-y-auto scrollbar-hide rounded-lg shadow-xl bg-gray-800 p-5">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-lg font-semibold">編輯管控 #{editRule.id}｜{subjectLabel(editRule)}</h3>
+              <button onClick={() => setEditRule(null)} className="p-1 text-gray-400 hover:text-white cursor-pointer"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">對象不可更改；如需換對象請解除後重建。</p>
+            <FormFields f={editForm} set={setE} subjectFixed />
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setEditRule(null)} className="px-4 py-2 rounded bg-gray-600 hover:bg-gray-500 cursor-pointer text-sm">取消</button>
+              <button onClick={saveEdit} disabled={busy} className="px-4 py-2 rounded bg-green-600 hover:bg-green-700 disabled:opacity-50 cursor-pointer text-sm">儲存</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function localInputFromUtc(iso: string): string {
+  const d = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 export default IPManagement;
