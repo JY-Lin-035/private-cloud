@@ -51,6 +51,7 @@ check_deps() {
   done
   command -v uv >/dev/null || { echo "缺少相依: uv (https://docs.astral.sh/uv/)"; missing=1; }
   command -v pnpm >/dev/null || { echo "缺少相依: pnpm"; missing=1; }
+  command -v envsubst >/dev/null || { echo "缺少相依: envsubst（Debian/Ubuntu: apt install gettext-base；Arch: pacman -S gettext）"; missing=1; }
   command -v node >/dev/null || { echo "缺少相依: node"; missing=1; }
   id -nG | grep -qw docker || echo "WARN: 目前使用者不在 docker 群組（compose 步驟可能需 sudo）"
   [ "$missing" = 0 ] && echo "依賴檢查通過"
@@ -229,14 +230,14 @@ log_format cfip '$remote_addr - $remote_user [$time_local] "$request" '
                 '$status $body_bytes_sent "$http_referer" '
                 '"$http_user_agent" "$http_x_forwarded_for" cf=$http_cf_connecting_ip';
 EOF
-  $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null' <<EOF
+  env BACKEND_PORT="$BACKEND_PORT" envsubst '$BACKEND_PORT' <<'EOF' | $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null'
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
 add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self' http://127.0.0.1:$BACKEND_PORT ws://127.0.0.1:$BACKEND_PORT https://cloudflareinsights.com https://cdn.jsdelivr.net; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 EOF
-  $SUDO tee /etc/nginx/api-gw/spa.conf >'/dev/null' <<EOF
+  env BACKEND_PORT="$BACKEND_PORT" STATIC_PORT="$STATIC_PORT" envsubst '$BACKEND_PORT $STATIC_PORT' <<'EOF' | $SUDO tee /etc/nginx/api-gw/spa.conf >'/dev/null'
 upstream meow_backend {
     server 127.0.0.1:$BACKEND_PORT;
     keepalive 64;
