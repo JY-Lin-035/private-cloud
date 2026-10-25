@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.services.share_service import ShareService
 from app.services import zip_service
-from app.api.dependencies import get_db, get_current_user_id
+from app.api.dependencies import get_db, get_current_user_id, get_redis
 from app.api.rate_limit import rate_limit
+from app.constants import HTTPStatus
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/share", tags=["share"])
@@ -172,13 +173,31 @@ async def share_status(
 @router.post("/verifyPassword", dependencies=[Depends(rate_limit(5, 300))])
 async def share_verify_password(
     request: ShareVerifyRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    redis_client = Depends(get_redis)
 ):
-    """Public: exchange the share password for a short-lived download ticket."""
+    """Public: exchange the share password for a short-lived download ticket.
+
+    Defences: per-IP rate limit (decorator) + per-link failure lockout
+    (10 failures / 15 min) + argon2's inherent verification cost.
+    """
+    lock_key = f"sharePwFail:{request.link}"
+    try:
+        failures = int(redis_client.get(lock_key) or 0)
+    except (ValueError, TypeError):
+        failures = 0
+    if failures >= 10:
+        raise HTTPException(status_code=429, detail='嘗試次數過多，請 15 分鐘後再試')
+
     share_service = ShareService(db)
     result = share_service.verify_share_password(request.link, request.password)
     if result and 'error' in result:
+        if result.get('stateCode') == HTTPStatus.FORBIDDEN:  # wrong password
+            attempts = redis_client.incr(lock_key)
+            if attempts == 1:
+                redis_client.expire(lock_key, 900)
         raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    redis_client.delete(lock_key)
     logger.info(f"Share password verified, ticket issued for link: {request.link}")
     return {'ticket': result['ticket'], 'expires_in': result['expires_in']}
 
@@ -187,6 +206,7 @@ class ShareItemsRequest(BaseModel):
     link: str
     paths: list[str]
     ticket: Optional[str] = None
+    folder_name: Optional[str] = None  # root folder display name -> "<name>-part.zip"
 
 
 @router.get("/browse")
@@ -230,5 +250,8 @@ async def share_download_items(
     if err:
         raise HTTPException(status_code=err['stateCode'], detail=err['error'])
     items, kept_files, kept_folders = zip_service.collect_zip_items(db, owner_id, file_uuids, folder_uuids)
+    import re as _re
+    clean = _re.sub(r'[\\/:*?"<>|\x00-\x1f]', '', request.folder_name or '')[:100].strip()
+    display = f'{clean}-part' if clean else 'shared-download'
     logger.info(f"Public items zip: link={request.link}, files={kept_files}, folders={kept_folders}")
-    return zip_service.build_zip_response(items, 'shared-download')
+    return zip_service.build_zip_response(items, display)

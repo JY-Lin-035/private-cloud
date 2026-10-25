@@ -49,9 +49,9 @@ export const shareApi = {
     saveBlobPublic(response.data as Blob, `${folderName}.zip`);
   },
 
-  downloadItemsPublic: async (link: string, paths: string[], ticket: string | null) => {
-    const response = await api.post('/api/share/downloadItems', { link, paths, ticket }, { responseType: 'blob' });
-    saveBlobPublic(response.data as Blob, 'shared-download.zip');
+  downloadItemsPublic: async (link: string, paths: string[], ticket: string | null, folderName?: string | null) => {
+    const response = await api.post('/api/share/downloadItems', { link, paths, ticket, folder_name: folderName || null }, { responseType: 'blob' });
+    saveBlobPublic(response.data as Blob, `${folderName ? folderName + '-part' : 'shared-download'}.zip`);
   },
 
   // Delete share link

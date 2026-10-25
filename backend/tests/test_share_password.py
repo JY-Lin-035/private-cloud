@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
+from unittest.mock import MagicMock
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -147,15 +148,22 @@ class TestRouterHandlers:
     def test_verify_handler_issues_ticket_and_password_never_in_response(self, env):
         from app.api.v1.share import share_verify_password, ShareVerifyRequest
         link = _svc(env).create_link(1, "f-uuid-1", "file", password="abc")["url"]
+        redis = MagicMock()
+        redis.get.return_value = None
         r = asyncio.run(share_verify_password(
-            request=ShareVerifyRequest(link=link, password="abc"), db=env["db"]))
+            request=ShareVerifyRequest(link=link, password="abc"), db=env["db"], redis_client=redis))
         assert set(r.keys()) == {"ticket", "expires_in"}
         assert "abc" not in str(r)
+        redis.delete.assert_called_once()
 
     def test_verify_handler_403_on_wrong_password(self, env):
         from app.api.v1.share import share_verify_password, ShareVerifyRequest
         link = _svc(env).create_link(1, "f-uuid-1", "file", password="abc")["url"]
+        redis = MagicMock()
+        redis.get.return_value = None
+        redis.incr.return_value = 1
         with pytest.raises(HTTPException) as exc:
             asyncio.run(share_verify_password(
-                request=ShareVerifyRequest(link=link, password="bad"), db=env["db"]))
+                request=ShareVerifyRequest(link=link, password="bad"), db=env["db"], redis_client=redis))
         assert exc.value.status_code == 403
+        redis.incr.assert_called_once()

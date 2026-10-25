@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Download, FolderOpen, FileText, ChevronLeft } from 'lucide-react';
 import { API_BASE_URL } from '../../config/api';
@@ -34,6 +34,7 @@ function DownloadShareFile({ layoutClass = "" }: { layoutClass?: string }) {
   const [sub, setSub] = useState('');
   const [listing, setListing] = useState<Listing | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const rootNameRef = useRef<string | null>(null);
 
   const startFileDownload = (tk?: string | null) => {
     const url = `${API_BASE_URL}/api/share/downloadFile?link=${link}&t=${Date.now()}${tk ? `&ticket=${encodeURIComponent(tk)}` : ''}`;
@@ -76,6 +77,7 @@ function DownloadShareFile({ layoutClass = "" }: { layoutClass?: string }) {
     if (!link || pageState !== 'folder') return;
     try {
       const r = await shareApi.browseFolder(link, sub, ticket);
+      if (!sub) rootNameRef.current = r.name;
       setListing(r);
       setSelected([]);
     } catch (e: any) {
@@ -236,7 +238,7 @@ function DownloadShareFile({ layoutClass = "" }: { layoutClass?: string }) {
               if (!selected.length || busy) return;
               setBusy(true); setError('');
               try {
-                await shareApi.downloadItemsPublic(link!, selected, ticket);
+                await shareApi.downloadItemsPublic(link!, selected, ticket, rootNameRef.current);
               } catch (e: any) {
                 setError(e?.message ?? '下載失敗');
               }

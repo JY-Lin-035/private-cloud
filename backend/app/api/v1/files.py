@@ -75,7 +75,7 @@ async def tus_create_upload(
             raise HTTPException(status_code=400, detail='Missing filename metadata')
 
         file_size = int(upload_length or 0)
-        if file_size <= 0:
+        if file_size < 0:
             raise HTTPException(status_code=400, detail='Invalid Upload-Length')
 
         parent_uuid = x_parent_folder_uuid or None
@@ -99,6 +99,10 @@ async def tus_create_upload(
             offset_result = file_service.append_tus_chunk(upload_id, 0, body)
             if offset_result and 'error' in offset_result:
                 raise HTTPException(status_code=offset_result['stateCode'], detail=offset_result['error'])
+        elif file_size == 0:
+            finalize_result = file_service.finalize_tus_upload(upload_id)
+            if finalize_result and 'error' in finalize_result:
+                raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
 
         return JSONResponse(
             status_code=201,
@@ -134,8 +138,6 @@ async def tus_patch_upload(
             raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
 
         body = await request.body()
-        if not body:
-            raise HTTPException(status_code=400, detail='Missing chunk body')
 
         if not upload_offset:
             raise HTTPException(status_code=400, detail='Missing Upload-Offset header')
@@ -472,9 +474,9 @@ async def list_trash(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         logger.info("Trash files listed successfully")
-        return result
+        return {**result, 'retention_days': settings.TRASH_RETENTION_DAYS}
     except Exception as e:
-        logger.error(f"List trash files endpoint error: {e}")
+        logger.error("List trash files endpoint error", e)
         raise
 
 

@@ -17,6 +17,7 @@ def collect_zip_items(db: Session, user_id: int, file_uuids: list[str], folder_u
 
     Selections covered by an ancestor selection are dropped (no duplicates in
     the zip); top-level arcname collisions are auto-renamed.
+    Fixed query count (4) - the whole owner subtree is indexed in memory.
     """
     folder_uuids = list(dict.fromkeys(folder_uuids))
     file_uuids = list(dict.fromkeys(file_uuids))
@@ -28,28 +29,41 @@ def collect_zip_items(db: Session, user_id: int, file_uuids: list[str], folder_u
         select(File).where(File.uuid.in_(file_uuids), File.owner_id == user_id, File.deleted_at.is_(None))
     ).scalars().all()
 
-    all_folders = db.execute(select(Folder).where(Folder.owner_id == user_id)).scalars().all()
+    all_folders = {
+        f.uuid: f for f in db.execute(
+            select(Folder).where(Folder.owner_id == user_id, Folder.deleted_at.is_(None))
+        ).scalars().all()
+    }
+    child_dirs: dict[str, list] = {}
+    for f in all_folders.values():
+        if f.parent_id:
+            child_dirs.setdefault(f.parent_id, []).append(f)
+    child_files: dict[str, list] = {}
+    for fl in db.execute(
+        select(File).where(File.owner_id == user_id, File.deleted_at.is_(None))
+    ).scalars().all():
+        if fl.parent_folder_id:
+            child_files.setdefault(fl.parent_folder_id, []).append(fl)
 
-    folder_by_uuid = {f.uuid: f for f in all_folders}
     selected_folder_uuids = {f.uuid for f in folders}
 
     def has_selected_folder_ancestor(parent_uuid):
-        cur = folder_by_uuid.get(parent_uuid)
+        cur = all_folders.get(parent_uuid) if parent_uuid else None
         guard = 0
         while cur and guard < 64:
             if cur.uuid in selected_folder_uuids:
                 return True
-            cur = folder_by_uuid.get(cur.parent_id)
+            cur = all_folders.get(cur.parent_id)
             guard += 1
         return False
 
     def is_covered(folder):
-        cur = folder_by_uuid.get(folder.parent_id)
+        cur = all_folders.get(folder.parent_id) if folder.parent_id else None
         guard = 0
         while cur and guard < 64:
             if cur.uuid in selected_folder_uuids and cur.uuid != folder.uuid:
                 return True
-            cur = folder_by_uuid.get(cur.parent_id)
+            cur = all_folders.get(cur.parent_id)
             guard += 1
         return False
 
@@ -70,21 +84,13 @@ def collect_zip_items(db: Session, user_id: int, file_uuids: list[str], folder_u
         queue = [(d.uuid, root + '/')]
         while queue:
             cur_uuid, prefix = queue.pop()
-            children = db.execute(
-                select(Folder).where(Folder.parent_id == cur_uuid, Folder.deleted_at.is_(None))
-            ).scalars().all()
-            for c in children:
+            sub_dirs = child_dirs.get(cur_uuid, [])
+            sub_files = child_files.get(cur_uuid, [])
+            for c in sub_dirs:
                 queue.append((c.uuid, prefix + c.name + '/'))
-                # preserve empty directories
-                child_files = db.execute(
-                    select(File).where(File.parent_folder_id == c.uuid, File.deleted_at.is_(None))
-                ).scalars().all()
-                if not child_files:
-                    items.append((None, prefix + c.name + '/'))
-            child_files = db.execute(
-                select(File).where(File.parent_folder_id == cur_uuid, File.deleted_at.is_(None))
-            ).scalars().all()
-            for file in child_files:
+                if not child_dirs.get(c.uuid) and not child_files.get(c.uuid):
+                    items.append((None, prefix + c.name + '/'))  # empty directory
+            for file in sub_files:
                 items.append((file.storage_path, prefix + file.name))
 
     return items, len(kept_files), len(kept_folders)
