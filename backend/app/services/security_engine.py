@@ -99,8 +99,7 @@ def _alert(kind, ip, actor, target, detail, action_taken=""):
         f"關聯帳號: {actor or '匿名（無帳號）'}\n"
         f"目標: {target or '-'}\n"
         f"明細: {detail}\n"
-        f"已採取動作: {action_taken or '僅記錄'}\n"
-        f"\n處置建議: 至後台「IP Management」檢視該來源，必要時升級為全站限速或 block。"
+        f"動作: {action_taken or '僅記錄'}"
     )
     _send_alert(subject, body)
 

@@ -155,7 +155,7 @@ class TestAlertPrivacy:
         finally:
             sec._redis = None
         body = sent.get('body', '')
-        for banned in ('security.log', 'log', '伺服器', 'server'):
+        for banned in ('security.log', 'log', '伺服器', 'server', 'IP Management'):
             assert banned not in body, f'alert body 不应包含 {banned}'
         assert '1.2.3.4' not in body  # full IP must never appear
         assert '1.xx.xx.4' in sent['subject'] or '1.2.3.4' not in sent['subject']
