@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { subscribeAnnouncements } from '../store/announcements';
 
-const HANDOFF_MS = 1800;
+const HANDOFF_MS = 3500;
 const HOLD_MS = 2000;
 const HOLD_SOLO_MS = 5000;
 
