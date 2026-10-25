@@ -196,3 +196,23 @@ class TestDirectionBandwidthHygiene:
         asyncio.run(api.admin_update(rid, api.ControlUpdate(direction="up"), request=admin_req(), db=db))
         rule = db.get(IpControl, rid)
         assert rule.direction == "up" and rule.download_kbps is None and rule.upload_kbps == 100
+
+
+class TestBlockGranularity:
+    def test_api_persists_transfer_up_block(self, db):
+        rid = asyncio.run(api.admin_create(
+            payload=api.ControlCreate(subject_type="ip", ip="198.51.100.77",
+                                      action="block", scope="transfer", direction="up"),
+            request=admin_req(), db=db))["id"]
+        rule = db.get(IpControl, rid)
+        assert rule.action == "block" and rule.scope == "transfer" and rule.direction == "up"
+
+    def test_match_blocks_only_upload(self, monkeypatch):
+        rule = dict(subject_type="ip", ip="7.7.7.7", token=None, user_id=None,
+                    action="block", scope="transfer", direction="up",
+                    delay_ms=0, upload_kbps=None, download_kbps=None, auto=True)
+        monkeypatch.setattr(sec, "_active_rules", lambda: [rule])
+        b_up, *_ = sec.match_rules("7.7.7.7", None, True, False, False)
+        b_dn, *_ = sec.match_rules("7.7.7.7", None, False, True, False)
+        b_page, *_ = sec.match_rules("7.7.7.7", None, False, False, False)
+        assert b_up is True and b_dn is False and b_page is False
