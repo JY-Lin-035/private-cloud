@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Drawer from './Drawer';
+import AnnouncementTicker from './AnnouncementTicker';
 import { authApi } from '../api/authApi';
 
 import logoImage from '../assets/Logo.png';
@@ -42,6 +43,7 @@ function Nav({ layoutClass = '' }: { layoutClass?: string }) {
                   <h2 className='self-center text-xl sm:text-2xl md:text-[2rem] font-semibold whitespace-nowrap text-white'>Meow</h2>
                 </a>
         {!isPublic && !isLoginPage && <Drawer />}
+        <AnnouncementTicker visible={!isLoginPage && ((!isPublic) || loggedIn)} />
                 {isLoginPage && !loading && (
                   <button onClick={() => navigate('/')} className='px-3 py-2 bg-gradient-to-r from-blue-400 to-cyan-400 text-white rounded-md cursor-pointer'>
                     Home

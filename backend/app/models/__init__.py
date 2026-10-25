@@ -3,5 +3,6 @@ from app.models.file import File
 from app.models.folder import Folder
 from app.models.collaboration import Collaboration
 from app.models.feature_flag import FeatureFlag
+from app.models.announcement import Announcement
 
-__all__ = ["Account", "File", "Folder", "Collaboration", "FeatureFlag"]
+__all__ = ["Account", "File", "Folder", "Collaboration", "FeatureFlag", "Announcement"]
