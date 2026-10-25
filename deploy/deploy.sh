@@ -222,6 +222,8 @@ server {
     root /srv/meowcloud/current;
     index index.html;
 
+    access_log /var/log/nginx/static-access.log cfip;
+
     sendfile on; tcp_nopush on; tcp_nodelay on;
     gzip on; gzip_comp_level 5; gzip_min_length 1024; gzip_vary on;
     gzip_types text/css application/javascript application/json image/svg+xml application/wasm;

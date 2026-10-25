@@ -68,12 +68,17 @@ class TestVerifyLockout:
         from app.api.v1.share import ShareVerifyRequest
         return ShareVerifyRequest(link=link, password=password)
 
+    def _http(self, ip='9.9.9.9'):
+        r = MagicMock()
+        r.client.host = ip
+        return r
+
     def test_locked_out_after_10_failures(self, env):
         from app.api.v1.share import share_verify_password
         redis = MagicMock()
         redis.get.return_value = b'10'
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(share_verify_password(request=self._req(), db=env["db"], redis_client=redis))
+            asyncio.run(share_verify_password(request=self._http(), body=self._req(), db=env["db"], redis_client=redis))
         assert exc.value.status_code == 429
 
     def test_wrong_password_increments_counter(self, env):
@@ -87,10 +92,10 @@ class TestVerifyLockout:
         redis.get.return_value = None
         redis.incr.return_value = 1
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(share_verify_password(request=self._req(link='lk2', password='bad'), db=env["db"], redis_client=redis))
+            asyncio.run(share_verify_password(request=self._http(), body=self._req(link='lk2', password='bad'), db=env["db"], redis_client=redis))
         assert exc.value.status_code == 403
-        redis.incr.assert_called_once_with('sharePwFail:lk2')
-        redis.expire.assert_called_once_with('sharePwFail:lk2', 900)
+        redis.incr.assert_called_once_with('sharePwFail:lk2:9.9.9.9')
+        redis.expire.assert_called_once_with('sharePwFail:lk2:9.9.9.9', 900)
 
     def test_success_clears_counter(self, env):
         from app.api.v1.share import share_verify_password
@@ -101,9 +106,9 @@ class TestVerifyLockout:
         env["db"].add(f); env["db"].commit()
         redis = MagicMock()
         redis.get.return_value = '3'
-        r = asyncio.run(share_verify_password(request=self._req(link='lk3', password='right'), db=env["db"], redis_client=redis))
+        r = asyncio.run(share_verify_password(request=self._http(), body=self._req(link='lk3', password='right'), db=env["db"], redis_client=redis))
         assert 'ticket' in r
-        redis.delete.assert_called_once_with('sharePwFail:lk3')
+        redis.delete.assert_called_once_with('sharePwFail:lk3:9.9.9.9')
 
 
 class TestItemsZipName:

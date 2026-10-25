@@ -84,9 +84,15 @@ async def create_share_link(
         logger.info(f"Create share link result: {result}")
         
         if result and 'error' in result:
-            logger.error(f"Create share link error {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
-        
+
+        # password (re)set or cleared -> reset failure lockouts for this link
+        try:
+            from app.services.security_engine import clear_pw_failures
+            clear_pw_failures(result['url'])
+        except Exception:
+            pass
+
         logger.info("Share link created successfully")
         # Match Laravel format: return plain URL string
         return result['url']
@@ -172,33 +178,40 @@ async def share_status(
 
 @router.post("/verifyPassword", dependencies=[Depends(rate_limit(5, 300))])
 async def share_verify_password(
-    request: ShareVerifyRequest,
+    request: Request,
+    body: ShareVerifyRequest,
     db: Session = Depends(get_db),
     redis_client = Depends(get_redis)
 ):
     """Public: exchange the share password for a short-lived download ticket.
 
-    Defences: per-IP rate limit (decorator) + per-link failure lockout
-    (10 failures / 15 min) + argon2's inherent verification cost.
+    Defences: per-IP endpoint rate limit (decorator) + per token x IP failure
+    lockout (10/15min, no bystander punishment) + argon2 verification cost.
     """
-    lock_key = f"sharePwFail:{request.link}"
+    from app.services import security_engine
+    client_ip = request.client.host if request.client else ""
+    lock_key = f"sharePwFail:{body.link}:{client_ip}"
     try:
         failures = int(redis_client.get(lock_key) or 0)
     except (ValueError, TypeError):
         failures = 0
     if failures >= 10:
+        security_engine.record_event_async("pw_lock", client_ip, None, body.link[:8],
+                                           "該 IP 對此連結錯密碼已達 10 次，鎖定 15 分鐘")
         raise HTTPException(status_code=429, detail='嘗試次數過多，請 15 分鐘後再試')
 
     share_service = ShareService(db)
-    result = share_service.verify_share_password(request.link, request.password)
+    result = share_service.verify_share_password(body.link, body.password)
     if result and 'error' in result:
         if result.get('stateCode') == HTTPStatus.FORBIDDEN:  # wrong password
             attempts = redis_client.incr(lock_key)
             if attempts == 1:
                 redis_client.expire(lock_key, 900)
+            security_engine.record_event_async("pw_fail", client_ip, None, body.link[:8],
+                                               f"錯密碼（第 {attempts} 次）")
         raise HTTPException(status_code=result['stateCode'], detail=result['error'])
     redis_client.delete(lock_key)
-    logger.info(f"Share password verified, ticket issued for link: {request.link}")
+    logger.info(f"Share password verified, ticket issued for link: {body.link}")
     return {'ticket': result['ticket'], 'expires_in': result['expires_in']}
 
 

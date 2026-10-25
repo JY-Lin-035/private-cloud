@@ -295,8 +295,8 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[5%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
         {retentionDays != null && (
-          <p className="mb-3 text-center text-xs sm:text-sm text-amber-300">
-            垃圾桶中的項目會在 {retentionDays} 天後自動永久清除
+          <p className="mb-3 text-center text-sm sm:text-base lg:text-lg font-semibold text-red-400">
+            ⚠ 垃圾桶中的項目會在 {retentionDays} 天後自動永久清除
           </p>
         )}
         <div className="mb-4 flex justify-between items-center">

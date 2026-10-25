@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Pencil, Trash2, Power, PowerOff } from "lucide-react";
 import { announcementApi, type AnnouncementRow } from "../../api/announcementApi";
+import { invalidateAnnouncements } from "../../store/announcements";
 import { authApi } from "../../api/authApi";
 
 interface Props {
@@ -60,6 +61,7 @@ function AnnouncementManagement({ layoutClass = "" }: Props) {
       await fn();
       setNotice({ text: okMsg, ok: true });
       await load();
+      invalidateAnnouncements();
     } catch (e: any) {
       setNotice({ text: e?.message ?? '操作失敗', ok: false });
     }
@@ -116,7 +118,7 @@ function AnnouncementManagement({ layoutClass = "" }: Props) {
     <div className={`flex flex-col min-h-screen text-white p-4 sm:p-6 ${layoutClass}`}>
       <div className="w-full max-w-7xl mx-auto mt-[1%] flex-1">
         <div className="mb-4 flex flex-col sm:flex-row justify-between items-center gap-2">
-          <h2 className="text-xl font-semibold text-cyan-400 uppercase tracking-wider">Announcement Management</h2>
+          <h2 className="text-xl font-semibold text-cyan-400 uppercase tracking-wider">Announcement</h2>
           {notice && (
             <span className={`px-3 py-1 rounded-full text-xs font-medium ring-1 ${notice.ok ? "bg-green-900/30 text-green-400 ring-green-500/30" : "bg-red-900/30 text-red-400 ring-red-500/30"}`}>
               {notice.text}

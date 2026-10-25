@@ -66,6 +66,20 @@ class Settings(BaseSettings):
     SHARE_TICKET_SECRET: str = ""  # empty = per-process ephemeral key (tickets die on restart)
     SHARE_TICKET_TTL_SECONDS: int = 900  # 15 minutes
 
+    # Security monitoring & auto-throttling
+    SECURITY_ALERT_ENABLED: bool = True
+    SECURITY_ALERT_EMAIL: str = ""              # empty -> send to SMTP_FROM (self)
+    SEC_GLOBAL_HOURLY_LIMIT: int = 5000         # flood guard per IP
+    SEC_SCORE_SLOW_THRESHOLD: int = 20          # violation score/h -> transfer throttle
+    SEC_SCORE_BLOCK_THRESHOLD: int = 15         # auth-probe score/h -> direct site block
+    SEC_UPLOAD_HOURLY_LIMIT: int = 600          # upload starts per user-hour
+    SEC_DOWNLOAD_HOURLY_LIMIT: int = 300        # downloads per user-hour
+    SEC_ANON_DOWNLOAD_HOURLY_LIMIT: int = 150   # anonymous share downloads per IP-hour
+    SEC_DEFAULT_UPLOAD_DELAY_MS: int = 2000
+    SEC_DEFAULT_DOWNLOAD_DELAY_MS: int = 0
+    SEC_DEFAULT_UPLOAD_KBPS: int = 256
+    SEC_DEFAULT_DOWNLOAD_KBPS: int = 512
+
     class Config:
         env_file = ".env"
         case_sensitive = True

@@ -138,6 +138,12 @@ class TestDownloadGate:
         assert _svc(env).download(l2, ticket=t1)["stateCode"] == 428
 
 
+def _req_with_client(ip='9.9.9.9'):
+    r = MagicMock()
+    r.client.host = ip
+    return r
+
+
 class TestRouterHandlers:
     def test_status_handler_shape(self, env):
         from app.api.v1.share import share_status, ShareStatusRequest
@@ -151,7 +157,7 @@ class TestRouterHandlers:
         redis = MagicMock()
         redis.get.return_value = None
         r = asyncio.run(share_verify_password(
-            request=ShareVerifyRequest(link=link, password="abc"), db=env["db"], redis_client=redis))
+            request=_req_with_client(), body=ShareVerifyRequest(link=link, password="abc"), db=env["db"], redis_client=redis))
         assert set(r.keys()) == {"ticket", "expires_in"}
         assert "abc" not in str(r)
         redis.delete.assert_called_once()
@@ -164,6 +170,6 @@ class TestRouterHandlers:
         redis.incr.return_value = 1
         with pytest.raises(HTTPException) as exc:
             asyncio.run(share_verify_password(
-                request=ShareVerifyRequest(link=link, password="bad"), db=env["db"], redis_client=redis))
+                request=_req_with_client(), body=ShareVerifyRequest(link=link, password="bad"), db=env["db"], redis_client=redis))
         assert exc.value.status_code == 403
         redis.incr.assert_called_once()

@@ -52,6 +52,14 @@ def require_admin(request: Request) -> dict:
     if not hasattr(request.state, 'user'):
         raise HTTPException(status_code=401, detail="Unauthorized")
     if request.state.user.get("identity") != Identity.ADMIN:
+        try:
+            from app.services import security_engine
+            ip = request.client.host if request.client else None
+            security_engine.record_event(
+                "admin_probe", ip, str(request.state.user.get("username") or request.state.user.get("id")),
+                request.url.path, "非管理員存取 admin 端點")
+        except Exception:
+            pass
         raise HTTPException(status_code=403, detail="Admin only")
     return request.state.user
 
