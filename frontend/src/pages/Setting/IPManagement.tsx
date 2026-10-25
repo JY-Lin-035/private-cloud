@@ -10,6 +10,17 @@ const fmt = (iso: string | null) => iso
   ? new Date(iso.endsWith('Z') ? iso : iso + 'Z').toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
   : '';
 
+function localToIso(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return null;
+  const off = -d.getTimezoneOffset();
+  const sign = off >= 0 ? '+' : '-';
+  const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, '0');
+  const mm = String(Math.abs(off) % 60).padStart(2, '0');
+  return `${v}:00`.slice(0, 19) + `${sign}${hh}:${mm}`;
+}
+
 function subjectLabel(r: ControlRule): string {
   if (r.subject_type === 'user') return `帳號 ${r.username ?? '?'}`;
   if (r.subject_type === 'ip_token') return `${r.ip_masked} → 連結 #${r.token_prefix}`;
@@ -37,6 +48,7 @@ function IPManagement({ layoutClass = "" }: Props) {
   const [fUpK, setFUpK] = useState('256');
   const [fDnK, setFDnK] = useState('512');
   const [fHours, setFHours] = useState('1');
+  const [fCustomAt, setFCustomAt] = useState('');
   const [fReason, setFReason] = useState('');
 
   const [editId, setEditId] = useState<number | null>(null);
@@ -47,6 +59,7 @@ function IPManagement({ layoutClass = "" }: Props) {
   const [eUpK, setEUpK] = useState('');
   const [eDnK, setEDnK] = useState('');
   const [eHours, setEHours] = useState('1');
+  const [eCustomAt, setECustomAt] = useState('');
   const [eReason, setEReason] = useState('');
 
   useEffect(() => {
@@ -75,6 +88,7 @@ function IPManagement({ layoutClass = "" }: Props) {
   }
 
   function create() {
+    if (fHours === 'custom' && !fCustomAt) { setNotice({ text: '請選擇自定義到期時間', ok: false }); return; }
     run(async () => {
       await ipControlApi.create({
         subject_type: fType,
@@ -85,10 +99,11 @@ function IPManagement({ layoutClass = "" }: Props) {
         delay_ms: Number(fDelay) || 0,
         upload_kbps: (fDir !== 'down' && fUpK) ? Number(fUpK) : null,
         download_kbps: (fDir !== 'up' && fDnK) ? Number(fDnK) : null,
-        expires_in_hours: fHours ? Number(fHours) : null,
+        expires_in_hours: (fHours && fHours !== 'custom') ? Number(fHours) : null,
+        expires_at: fHours === 'custom' ? localToIso(fCustomAt) : null,
         reason: fReason.trim() || '手動設定',
       });
-      setFIp(''); setFToken(''); setFUser(''); setFReason('');
+      setFIp(''); setFToken(''); setFUser(''); setFReason(''); setFCustomAt('');
     }, '管控已新增');
   }
 
@@ -103,13 +118,15 @@ function IPManagement({ layoutClass = "" }: Props) {
 
   function saveEdit() {
     if (editId == null) return;
+    if (eHours === 'custom' && !eCustomAt) { setNotice({ text: '請選擇自定義到期時間', ok: false }); return; }
     run(async () => {
       await ipControlApi.update(editId, {
         action: eAction, scope: eScope, direction: eDir,
         delay_ms: Number(eDelay) || 0,
         upload_kbps: (eDir !== 'down' && eUpK) ? Number(eUpK) : null,
         download_kbps: (eDir !== 'up' && eDnK) ? Number(eDnK) : null,
-        expires_in_hours: eHours ? Number(eHours) : null,
+        expires_in_hours: (eHours && eHours !== 'custom') ? Number(eHours) : null,
+        expires_at: eHours === 'custom' ? localToIso(eCustomAt) : null,
         reason: eReason.trim() || undefined,
       });
       setEditId(null);
@@ -189,17 +206,29 @@ function IPManagement({ layoutClass = "" }: Props) {
             <option value="up">方向：上傳</option>
             <option value="down">方向：下載</option>
           </select>
-          <input placeholder="延遲 ms" type="number" min="0" value={fDelay} onChange={e => setFDelay(e.target.value)} className={inputCls} />
-          <div className="flex gap-2">
-            <input placeholder="上傳KB/s" type="number" min="16" value={fUpK} onChange={e => setFUpK(e.target.value)} className={inputCls + ' flex-1 min-w-0'} />
-            <input placeholder="下載KB/s" type="number" min="16" value={fDnK} onChange={e => setFDnK(e.target.value)} className={inputCls + ' flex-1 min-w-0'} />
-          </div>
-          <select value={fHours} onChange={e => setFHours(e.target.value)} className={inputCls}>
-            <option value="1">期限：1 小時</option>
-            <option value="6">期限：6 小時</option>
-            <option value="24">期限：24 小時</option>
-            <option value="">無限期</option>
-          </select>
+          <label className="flex flex-col gap-1 text-xs text-gray-400">請求延遲（毫秒）
+            <input type="number" min="0" value={fDelay} onChange={e => setFDelay(e.target.value)} className={inputCls} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-400">頻寬上限（KB/秒）
+            <span className="flex gap-2">
+              <input aria-label="上傳頻寬" type="number" min="16" value={fUpK} onChange={e => setFUpK(e.target.value)} className={inputCls + ' flex-1 min-w-0'} placeholder="上" />
+              <input aria-label="下載頻寬" type="number" min="16" value={fDnK} onChange={e => setFDnK(e.target.value)} className={inputCls + ' flex-1 min-w-0'} placeholder="下" />
+            </span>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-gray-400">期限
+            <select value={fHours} onChange={e => setFHours(e.target.value)} className={inputCls}>
+              <option value="1">1 小時</option>
+              <option value="6">6 小時</option>
+              <option value="24">24 小時</option>
+              <option value="custom">自定義…</option>
+              <option value="">無限期</option>
+            </select>
+          </label>
+          {fHours === 'custom' && (
+            <label className="flex flex-col gap-1 text-xs text-gray-400">自定義到期（精準到秒）
+              <input type="datetime-local" step="1" value={fCustomAt} onChange={e => setFCustomAt(e.target.value)} className={inputCls} />
+            </label>
+          )}
           <input placeholder="原因" value={fReason} onChange={e => setFReason(e.target.value)} className={inputCls} />
           <button onClick={create} disabled={busy}
             className="cursor-pointer px-4 py-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors">
@@ -251,13 +280,27 @@ function IPManagement({ layoutClass = "" }: Props) {
                             <option value="down">下</option>
                           </select>
                         </div>
-                        <div className="flex gap-2 flex-wrap">
-                          <input value={eDelay} onChange={e => setEDelay(e.target.value)} placeholder="延遲ms" type="number" className={inputCls + ' w-24'} />
-                          <input value={eUpK} onChange={e => setEUpK(e.target.value)} placeholder="上KB/s" type="number" className={inputCls + ' w-24'} />
-                          <input value={eDnK} onChange={e => setEDnK(e.target.value)} placeholder="下KB/s" type="number" className={inputCls + ' w-24'} />
-                          <select value={eHours} onChange={e => setEHours(e.target.value)} className={inputCls}>
-                            <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option><option value="">∞</option>
-                          </select>
+                        <div className="flex gap-2 flex-wrap items-end">
+                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">延遲(ms)
+                            <input value={eDelay} onChange={e => setEDelay(e.target.value)} type="number" min="0" className={inputCls + ' w-24'} />
+                          </label>
+                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">上傳(KB/s)
+                            <input value={eUpK} onChange={e => setEUpK(e.target.value)} type="number" min="16" className={inputCls + ' w-24'} />
+                          </label>
+                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">下載(KB/s)
+                            <input value={eDnK} onChange={e => setEDnK(e.target.value)} type="number" min="16" className={inputCls + ' w-24'} />
+                          </label>
+                          <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">期限
+                            <select value={eHours} onChange={e => setEHours(e.target.value)} className={inputCls}>
+                              <option value="1">1h</option><option value="6">6h</option><option value="24">24h</option>
+                              <option value="custom">自定義…</option><option value="">∞</option>
+                            </select>
+                          </label>
+                          {eHours === 'custom' && (
+                            <label className="flex flex-col gap-0.5 text-[11px] text-gray-400">到期時間（到秒）
+                              <input type="datetime-local" step="1" value={eCustomAt} onChange={e => setECustomAt(e.target.value)} className={inputCls} />
+                            </label>
+                          )}
                         </div>
                         <input value={eReason} onChange={e => setEReason(e.target.value)} placeholder="原因" className={inputCls} />
                         <span className="flex gap-2">
@@ -307,7 +350,7 @@ function IPManagement({ layoutClass = "" }: Props) {
           </table>
         </div>
         <p className="mt-4 text-xs text-gray-500">
-          處置台階：傳輸慢速 → 全站限速 → 全站 429 → 停用帳號。所有完整 IP 與明細僅記錄於伺服器 security.log，介面上一律中段遮罩顯示。
+          處置台階：傳輸慢速 → 全站限速 → 全站 429 → 停用帳號。介面顯示的 IP 一律中段遮罩。
         </p>
       </div>
     </div>

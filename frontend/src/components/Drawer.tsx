@@ -63,7 +63,7 @@ function Drawer() {
           </div>
 
           <div className="flex flex-col h-[100vh] px-4">
-            <div className="flex-grow overflow-y-auto">
+            <div className="flex-grow overflow-y-auto scrollbar-hide">
               <ul className="space-y-2">
                 <li>
                   {/* Cloud */}

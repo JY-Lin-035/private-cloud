@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { subscribeAnnouncements } from '../store/announcements';
 
-const SLIDE_MS = 2000;
+const SLIDE_MS = 3500;
 const HOLD_MS = 1500;
 const HOLD_SOLO_MS = 4000;
 const JUMP_MS = 60;
@@ -22,8 +22,13 @@ function AnnouncementTicker({ visible }: { visible: boolean }) {
     }
     return subscribeAnnouncements(list => {
       setItems(list);
-      setIdx(i => (list.length ? i % list.length : 0));
-      setPhase(p => (p === 'idle' && list.length ? 'slideIn' : p));
+      setPhase(p => {
+        if (p === 'idle' && list.length) {
+          setIdx(-1);  // reset phase will advance to 0
+          return 'reset';
+        }
+        return p;
+      });
     });
   }, [visible]);
 
@@ -60,11 +65,11 @@ function AnnouncementTicker({ visible }: { visible: boolean }) {
 
   if (!items.length) return null;
 
-  // reset: jump back to the right edge without transition, then next item slides in (right -> left, continuously)
+  // reset: jump back to the left edge without transition, then the next item glides in (left -> right, continuously)
   const offset =
     phase === 'slideIn' || phase === 'hold' ? '0%'
-    : phase === 'slideOut' ? '-100%'
-    : '100%';
+    : phase === 'slideOut' ? '100%'
+    : '-100%';
   const transition =
     phase === 'slideIn' || phase === 'slideOut'
       ? `transform ${SLIDE_MS}ms ease-in-out`
