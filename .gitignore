@@ -27,3 +27,8 @@ celerybeat*.db
 
 /logs/
 deploy/.credentials
+
+plans/
+新增 WinRAR 壓縮檔.rar
+roo_task_*.md
+merge_filelist.py
