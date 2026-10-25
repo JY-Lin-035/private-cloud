@@ -1,8 +1,10 @@
 from urllib.parse import quote
+import base64
 import secrets
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File, Form, Query
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from redis import Redis
 from app.schemas.file import (
@@ -10,12 +12,220 @@ from app.schemas.file import (
     FileListResponse, StorageInfoResponse, FileUploadResponse, FileDeleteResponse, FileRestoreResponse
 )
 from app.services.file_service import FileService
+from app.services.folder_service import FolderService
+from app.services import zip_service
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
+from app.api.rate_limit import rate_limit
 from app.config import settings
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = log.get_logger("files_api.log")
+
+
+def _decode_tus_metadata(metadata_header: Optional[str]) -> dict:
+    """Decode the Upload-Metadata tus header into a dict."""
+    metadata = {}
+    if not metadata_header:
+        return metadata
+
+    parts = metadata_header.split()
+    for idx in range(0, len(parts), 2):
+        key = parts[idx]
+        value = parts[idx + 1] if idx + 1 < len(parts) else ''
+        try:
+            metadata[key] = base64.b64decode(value).decode('utf-8')
+        except Exception:
+            metadata[key] = value
+
+    return metadata
+
+
+@router.options("/tus")
+async def tus_options():
+    """Return tus handshake headers for browser clients."""
+    return Response(
+        status_code=204,
+        headers={
+            'Tus-Resumable': '1.0.0',
+            'Tus-Version': '1.0.0,1.0.2,1.0.3',
+        },
+    )
+
+
+@router.post("/tus")
+async def tus_create_upload(
+    request: Request,
+    upload_metadata: str = Header(None, alias='Upload-Metadata'),
+    upload_length: str = Header(None, alias='Upload-Length'),
+    tus_resumable: str = Header(None, alias='Tus-Resumable'),
+    x_parent_folder_uuid: str = Header(None, alias='X-Parent-Folder-Uuid'),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Create a new tus upload session and respond with the initial offset."""
+    try:
+        if not tus_resumable:
+            raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
+
+        metadata = _decode_tus_metadata(upload_metadata)
+        filename = metadata.get('filename') or metadata.get('name')
+        if not filename:
+            filename = request.headers.get('X-File-Name')
+        if not filename:
+            raise HTTPException(status_code=400, detail='Missing filename metadata')
+
+        file_size = int(upload_length or 0)
+        if file_size < 0:
+            raise HTTPException(status_code=400, detail='Invalid Upload-Length')
+
+        parent_uuid = x_parent_folder_uuid or None
+        relative_path = metadata.get('relative_path')
+        if relative_path and '/' in relative_path:
+            folder_service = FolderService(db)
+            resolved = folder_service.resolve_or_create_path(user_id, parent_uuid, relative_path.rsplit('/', 1)[0])
+            if 'error' in resolved:
+                raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+            parent_uuid = resolved['uuid'] or parent_uuid
+
+        file_service = FileService(db)
+        result = file_service.create_tus_upload(user_id, parent_uuid, filename, file_size)
+        if result and 'error' in result:
+            raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+
+        upload_id = result['upload_id']
+        location = str(request.url_for('tus_patch_upload', upload_id=upload_id))
+        body = await request.body()
+        if body:
+            offset_result = file_service.append_tus_chunk(upload_id, 0, body)
+            if offset_result and 'error' in offset_result:
+                raise HTTPException(status_code=offset_result['stateCode'], detail=offset_result['error'])
+        elif file_size == 0:
+            finalize_result = file_service.finalize_tus_upload(upload_id)
+            if finalize_result and 'error' in finalize_result:
+                raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
+
+        return JSONResponse(
+            status_code=201,
+            headers={
+                'Tus-Resumable': '1.0.0',
+                'Upload-Offset': str(len(body) if body else 0),
+                'Location': location,
+            },
+            content={
+                'upload_id': upload_id,
+                'offset': len(body) if body else 0,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Tus create upload endpoint error: {e}")
+        raise
+
+
+@router.patch("/tus/{upload_id}")
+async def tus_patch_upload(
+    upload_id: str,
+    request: Request,
+    upload_offset: str = Header(None, alias='Upload-Offset'),
+    tus_resumable: str = Header(None, alias='Tus-Resumable'),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Append a chunk to an existing tus upload and update the offset."""
+    try:
+        if not tus_resumable:
+            raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
+
+        body = await request.body()
+
+        if not upload_offset:
+            raise HTTPException(status_code=400, detail='Missing Upload-Offset header')
+
+        file_service = FileService(db)
+        result = file_service.append_tus_chunk(upload_id, int(upload_offset), body)
+        if result and 'error' in result:
+            raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+
+        response_headers = {
+            'Tus-Resumable': '1.0.0',
+            'Upload-Offset': str(result['offset']),
+            'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
+        }
+        if result.get('completed'):
+            finalize_result = file_service.finalize_tus_upload(upload_id)
+            if finalize_result and 'error' in finalize_result:
+                raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
+            response_headers['Upload-Complete'] = 'true'
+
+        return Response(
+            status_code=204,
+            headers=response_headers,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Tus patch upload endpoint error: {e}")
+        raise
+
+
+@router.head("/tus/{upload_id}")
+async def tus_head_upload(
+    request: Request,
+    upload_id: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Return the current tus offset for a resumable upload."""
+    try:
+        file_service = FileService(db)
+        result = file_service.get_tus_upload(upload_id)
+        if result and 'error' in result:
+            raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+
+        return JSONResponse(
+            status_code=200,
+            headers={
+                'Tus-Resumable': '1.0.0',
+                'Upload-Offset': str(result['offset']),
+                'Upload-Length': str(result['file_size']),
+                'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
+            },
+            content=None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Tus head upload endpoint error: {e}")
+        raise
+
+
+@router.post("/tus/{upload_id}/finish")
+async def tus_finish_upload(
+    upload_id: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Finalize a tus upload session and persist the final file."""
+    try:
+        file_service = FileService(db)
+        result = file_service.finalize_tus_upload(upload_id)
+        if result and 'error' in result:
+            raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+
+        return JSONResponse(
+            status_code=200,
+            headers={
+                'Tus-Resumable': '1.0.0',
+            },
+            content=result,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Tus finish upload endpoint error: {e}")
+        raise
 
 
 @router.get("/storage")
@@ -67,16 +277,24 @@ async def get_file_list(
         raise
 
 
-@router.post("/uploadFile")
+@router.post("/uploadFile", dependencies=[Depends(rate_limit(30, 300))])
 async def upload_file(
     file: UploadFile = File(...),
     parent_folder_uuid: str = Form(None),
+    relative_path: str = Form(None),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
     """Upload a file."""
     try:
-        logger.info(f"Upload file request received, user_id: {user_id}, parent_folder_uuid: {parent_folder_uuid}, filename: {file.filename}")
+        logger.info(f"Upload file request received, user_id: {user_id}, parent_folder_uuid: {parent_folder_uuid}, relative_path: {relative_path}, filename: {file.filename}")
+        
+        if relative_path and '/' in relative_path:
+            folder_service = FolderService(db)
+            resolved = folder_service.resolve_or_create_path(user_id, parent_folder_uuid, relative_path.rsplit('/', 1)[0])
+            if 'error' in resolved:
+                raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+            parent_folder_uuid = resolved['uuid'] or parent_folder_uuid
         
         file_service = FileService(db)
         
@@ -257,9 +475,9 @@ async def list_trash(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         logger.info("Trash files listed successfully")
-        return result
+        return {**result, 'retention_days': settings.TRASH_RETENTION_DAYS}
     except Exception as e:
-        logger.error(f"List trash files endpoint error: {e}")
+        logger.error("List trash files endpoint error", e)
         raise
 
 
@@ -286,3 +504,54 @@ async def recalculate_storage(
     except Exception as e:
         logger.error(f"Recalculate storage endpoint error: {e}")
         raise
+
+
+class FileMoveRequest(BaseModel):
+    file_uuids: list[str]
+    target_folder_uuid: Optional[str] = None
+    target_path: Optional[str] = None
+
+
+class BulkDownloadRequest(BaseModel):
+    file_uuids: list[str] = []
+    folder_uuids: list[str] = []
+
+
+@router.post("/move")
+async def move_files(
+    request: FileMoveRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Move files to an existing folder or a (auto-created) nested path."""
+    target = request.target_folder_uuid
+    if not target and request.target_path:
+        resolved = FolderService(db).resolve_or_create_path(user_id, None, request.target_path)
+        if 'error' in resolved:
+            raise HTTPException(status_code=resolved['stateCode'], detail=resolved['error'])
+        target = resolved['uuid']
+    if not target:
+        raise HTTPException(status_code=400, detail='需要提供目標資料夾或路徑')
+
+    result = FileService(db).move_files(user_id, request.file_uuids, target)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    logger.info(f"Moved {len(result['moved'])} files for user {user_id} -> {target}; renamed={result['renamed']}")
+    return result
+
+
+@router.post("/downloadBulk")
+async def download_bulk(
+    request: BulkDownloadRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Stream multiple selected files/folders as one zip archive."""
+    if not request.file_uuids and not request.folder_uuids:
+        raise HTTPException(status_code=400, detail='沒有選擇任何項目')
+
+    items, kept_files, kept_folders = zip_service.collect_zip_items(
+        db, user_id, request.file_uuids[:1000], request.folder_uuids[:200]
+    )
+    logger.info(f"Bulk zip for user {user_id}: {kept_files} files, {kept_folders} folders, {len(items)} entries")
+    return zip_service.build_zip_response(items, 'meowcloud-download')

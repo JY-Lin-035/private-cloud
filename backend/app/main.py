@@ -17,9 +17,12 @@ from app.utils import logger as log
 
 from app.api.dependencies import get_redis
 from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws
+from app.api.v1 import settings as settings_api
+from app.api.v1 import announcements
+from app.api.v1 import ipcontrol
 
 from app.middleware.session_middleware import SessionMiddleware
-from app.middleware.rate_limit_middleware import RateLimitMiddleware
+from app.middleware.throttle import ThrottleMiddleware
 from app.services.snapshot_service import auto_save_to_disk, save_snapshot
 
 # Create FastAPI app
@@ -32,12 +35,25 @@ logger = log.get_logger("main.log")
 # Add CORS middleware - must use explicit origins when credentials=True
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        # Backend
+        "https://meowcloud-api.jun.org.uk",
+        # Frontend
+        "https://meowcloud.jun.org.uk",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "Location",
+        "Upload-Offset",
+        "Upload-Length",
+        "Tus-Resumable",
+        "Upload-Complete",
+    ],
 )
 
+# (engine and SessionLocal imported from app.database above)
 # Redis client
 redis_client = Redis.from_url(
     settings.REDIS_URL,
@@ -49,7 +65,7 @@ redis_client = Redis.from_url(
 
 # Add middleware
 app.add_middleware(SessionMiddleware, redis_client=redis_client)
-rate_limit_middleware = RateLimitMiddleware(redis_client)
+app.add_middleware(ThrottleMiddleware)
 
 
 # Background scheduler for auto-save and snapshots
@@ -76,11 +92,11 @@ threading.Thread(target=_scheduler, daemon=True).start()
 # Global exception handler for debugging
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"ERROR: {exc}")
-    print(f"TRACEBACK:\n{tb.format_exc()}")
+    logger.error(f"Unhandled error on {request.method} {request.url.path}: {exc}")
+    logger.error(f"TRACEBACK:\n{tb.format_exc()}")
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc), "traceback": tb.format_exc()}
+        content={"detail": "Internal server error"}
     )
 
 # Include routers
@@ -90,6 +106,9 @@ app.include_router(folders.router)
 app.include_router(share.router)
 app.include_router(collaboration.router)
 app.include_router(collab_ws.router)
+app.include_router(settings_api.router)
+app.include_router(announcements.router)
+app.include_router(ipcontrol.router)
 
 
 @app.get("/api/email/verify/{user_id}/{hash}")

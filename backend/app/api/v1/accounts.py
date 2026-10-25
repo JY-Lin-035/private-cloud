@@ -30,6 +30,11 @@ async def register(
     email_service: EmailService = Depends(get_email_service)
 ):
     """Register a new account."""
+    from app.services.feature_flag_service import is_feature_enabled
+    if not is_feature_enabled("allow_registration"):
+        raise HTTPException(status_code=403, detail="註冊功能暫時關閉，如有需要請聯絡管理員。")
+    if not is_feature_enabled("enable_verification_email"):
+        raise HTTPException(status_code=403, detail="郵件驗證服務暫時無法使用，目前無法註冊。請稍後再試或聯絡管理員。")
     try:
         logger.info(f"Register request received, username: {request.username}, email: {request.email}")
         
@@ -59,6 +64,7 @@ async def register(
 
 @router.post("/login", dependencies=[Depends(rate_limit(5, 30))])
 async def login(
+    http_request: Request,
     request: LoginRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -75,6 +81,14 @@ async def login(
         
         if result and 'error' in result:
             logger.error(f"Login error: {result['error']}, stateCode: {result['stateCode']}")
+            try:
+                from app.services import security_engine
+                if result.get('stateCode') == 401:
+                    security_engine.record_event_async(
+                        "login_fail", http_request.client.host if http_request.client else None,
+                        request.username, None, str(result.get('error', '')))
+            except Exception:
+                pass
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         response = Response(
@@ -136,6 +150,9 @@ async def get_code(
     redis_client: Redis = Depends(get_redis)
 ):
     """Get verification code."""
+    from app.services.feature_flag_service import is_feature_enabled
+    if not is_feature_enabled("enable_auth_code_email"):
+        raise HTTPException(status_code=403, detail="驗證碼郵件服務暫時關閉，密碼重設／信箱變更暫時不可用。請稍後再試或聯絡管理員。")
     try:
         logger.info(f"Get code request received, email: {request.email}, mode: {request.mode}")
         
@@ -250,7 +267,7 @@ async def reset_password(
 
 
 @router.get("/checkSession")
-async def check_session(request: Request):
+async def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
     """Check if user session is valid and return user data. Returns anonymous if not logged in."""
     try:
         session_token = request.cookies.get('session')
@@ -268,37 +285,33 @@ async def check_session(request: Request):
             return {"authenticated": False}
         
         # Check Redis
-        redis_client = Redis.from_url(settings.REDIS_URL)
-        try:
-            stored_token = redis_client.get(f"session:{user_id}")
-            if not stored_token:
-                return {"authenticated": False}
-            if isinstance(stored_token, bytes):
-                stored_token = stored_token.decode()
-            if stored_token != session_token:
-                return {"authenticated": False}
-                
-            user_data = redis_client.get(f"session_data:{user_id}")
-            if not user_data:
-                return {"authenticated": False}
-            if isinstance(user_data, bytes):
-                user_data = user_data.decode()
-            user_dict = json.loads(user_data)
-            
-            # Extend session
-            redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-            redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-            
-            logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
-            return {
-                "authenticated": True,
-                "id": user_dict.get("user_id"),
-                "username": user_dict.get("username"),
-                "email": user_dict.get("email"),
-                "identity": user_dict.get("identity")
-            }
-        finally:
-            redis_client.close()
+        stored_token = redis_client.get(f"session:{user_id}")
+        if not stored_token:
+            return {"authenticated": False}
+        if isinstance(stored_token, bytes):
+            stored_token = stored_token.decode()
+        if stored_token != session_token:
+            return {"authenticated": False}
+
+        user_data = redis_client.get(f"session_data:{user_id}")
+        if not user_data:
+            return {"authenticated": False}
+        if isinstance(user_data, bytes):
+            user_data = user_data.decode()
+        user_dict = json.loads(user_data)
+
+        # Extend session
+        redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+        redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+
+        logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
+        return {
+            "authenticated": True,
+            "id": user_dict.get("user_id"),
+            "username": user_dict.get("username"),
+            "email": user_dict.get("email"),
+            "identity": user_dict.get("identity")
+        }
     except Exception as e:
         logger.error(f"Check session endpoint error: {e}")
         return {"authenticated": False}
@@ -445,10 +458,15 @@ async def admin_update_quota(
     account = db.query(Account).filter(Account.id == user_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="User not found")
-    if account.identity == Identity.ADMIN:
-        raise HTTPException(status_code=403, detail="Cannot modify admin account")
+    if account.identity == Identity.ADMIN and account.id != getattr(request.state, 'user_id', None):
+        raise HTTPException(status_code=403, detail="Cannot modify another admin account")
+    used = account.used_size or 0
+    if total_storage < used:
+        raise HTTPException(status_code=400, detail=f"無法設定低於目前已使用容量的上限（已使用 {used} bytes）")
     account.total_file_size = total_storage
     db.commit()
+    from app.utils.security_log import write_event
+    write_event("quota_change", None, str(request.state.user_id), f"user#{user_id}", f"quota={total_storage}")
     return {"message": "success", "total_storage": total_storage}
 
 
@@ -485,4 +503,33 @@ async def admin_toggle_enable(
         raise HTTPException(status_code=403, detail="Cannot disable admin user")
     account.enable = not account.enable
     db.commit()
+    if not account.enable:
+        redis_client.delete(f"session:{user_id}")
+        redis_client.delete(f"session_data:{user_id}")
+        from app.utils.security_log import write_event
+        write_event("account_suspend", request.client.host if request.client else None,
+                    str(getattr(request.state, "user_id", "?")), account.name, "admin 開關停用，session 已失效")
     return {"enabled": account.enable}
+
+
+@router.put("/quota/self")
+async def update_own_quota(
+    request: Request,
+    total_storage: int = Query(..., ge=0),
+    db: Session = Depends(get_db),
+):
+    """Update the signed-in admin's own storage quota."""
+    _admin_required(request)
+    user_id = getattr(request.state, 'user_id', None)
+    account = db.query(Account).filter(Account.id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="User not found")
+    used = account.used_size or 0
+    if total_storage < used:
+        raise HTTPException(status_code=400, detail=f"無法設定低於目前已使用容量的上限（已使用 {used} bytes）")
+    account.total_file_size = total_storage
+    db.commit()
+    from app.utils.security_log import write_event
+    write_event("quota_change", None, str(user_id), "self", f"quota={total_storage}")
+    logger.info(f"[Admin] self quota updated user_id={user_id} total_storage={total_storage}")
+    return {"message": "success", "total_storage": total_storage}

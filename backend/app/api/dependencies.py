@@ -19,13 +19,15 @@ def get_db():
         db.close()
 
 
+_shared_redis = None
+
+
 def get_redis():
-    """Get Redis client."""
-    redis_client = Redis.from_url(settings.REDIS_URL)
-    try:
-        yield redis_client
-    finally:
-        redis_client.close()
+    """Get shared Redis client (connection pool reused across requests)."""
+    global _shared_redis
+    if _shared_redis is None:
+        _shared_redis = Redis.from_url(settings.REDIS_URL)
+    yield _shared_redis
 
 
 def get_email_service(redis_client: Redis = Depends(get_redis)):
@@ -41,6 +43,24 @@ def get_current_user(request: Request):
     """Get current authenticated user from request state."""
     if not hasattr(request.state, 'user'):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return request.state.user
+
+
+def require_admin(request: Request) -> dict:
+    """Ensure the authenticated user is an admin; returns the user dict."""
+    from app.constants import Identity
+    if not hasattr(request.state, 'user'):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if request.state.user.get("identity") != Identity.ADMIN:
+        try:
+            from app.services import security_engine
+            ip = request.client.host if request.client else None
+            security_engine.record_event(
+                "admin_probe", ip, str(request.state.user.get("username") or request.state.user.get("id")),
+                request.url.path, "非管理員存取 admin 端點")
+        except Exception:
+            pass
+        raise HTTPException(status_code=403, detail="Admin only")
     return request.state.user
 
 

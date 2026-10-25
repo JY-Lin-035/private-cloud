@@ -1,6 +1,17 @@
 import { api } from './api';
 import { API_BASE_URL } from '../config/api';
 
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const fileApi = {
   // Get file list
   list: async (parent_folder_uuid?: string) => {
@@ -17,24 +28,52 @@ export const fileApi = {
   },
 
   // Download file
-    download: async (file_uuid: string) => {
-      const response = await api.get('/api/files/downloadToken', {
-        params: { file_uuid },
-      });
-      const data = response.data;
-      const url = `${API_BASE_URL}/api/files/download?file_uuid=${file_uuid}&token=${data.token}`;
-      const tempLink = document.createElement('a');
-      tempLink.href = url;
-      tempLink.download = 'download';
-      document.body.appendChild(tempLink);
-      tempLink.click();
-      document.body.removeChild(tempLink);
-    },
+  download: async (file_uuid: string) => {
+    const response = await api.get('/api/files/downloadToken', {
+      params: { file_uuid },
+    });
+    const data = response.data;
+    const url = `${API_BASE_URL}/api/files/download?file_uuid=${file_uuid}&token=${data.token}`;
+    const tempLink = document.createElement('a');
+    tempLink.href = url;
+    tempLink.download = 'download';
+    document.body.appendChild(tempLink);
+    tempLink.click();
+    document.body.removeChild(tempLink);
+  },
+
 
   // Delete file (soft or hard)
   delete: async (data: { file_uuid: string; permanent: boolean }) => {
     const response = await api.delete('/api/files/delete', { data });
     return response.data;
+  },
+
+  // Move files to an existing folder uuid or a (auto-created) nested path
+  moveFiles: async (data: { file_uuids: string[]; target_folder_uuid?: string; target_path?: string }) => {
+    const response = await api.post('/api/files/move', data);
+    return response.data;
+  },
+
+  // Move folders
+  moveFolders: async (data: { folder_uuids: string[]; target_folder_uuid?: string; target_path?: string }) => {
+    const response = await api.post('/api/folders/move', data);
+    return response.data;
+  },
+
+  // Download a folder as a streamed zip
+  downloadFolderZip: async (folderUuid: string, folderName: string) => {
+    const response = await api.get('/api/folders/download', {
+      params: { folder_uuid: folderUuid },
+      responseType: 'blob',
+    });
+    saveBlob(response.data as Blob, `${folderName}.zip`);
+  },
+
+  // Download multiple selected items as one zip
+  downloadBulk: async (file_uuids: string[], folder_uuids: string[]) => {
+    const response = await api.post('/api/files/downloadBulk', { file_uuids, folder_uuids }, { responseType: 'blob' });
+    saveBlob(response.data as Blob, 'meowcloud-download.zip');
   },
 
   // Restore file

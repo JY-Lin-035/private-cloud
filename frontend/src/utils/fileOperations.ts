@@ -38,14 +38,17 @@ export async function deleteFile(item_uuid: string, deleteItem: any, fileList: a
 }
 
 // 檔案分享
-export async function getShareFileLink(item_uuid: string, item_type: string, limited_date?: string | null): Promise<[string | string[], string, boolean, string, boolean, string | null]> {
+export async function getShareFileLink(item_uuid: string, item_type: string, limited_date?: string | null, password?: string): Promise<[string | string[], string, boolean, string, boolean, string | null]> {
   try {
-    const data: { item_uuid: string; item_type: string; limited_date?: string | null } = {
+    const data: { item_uuid: string; item_type: string; limited_date?: string | null; password?: string } = {
       item_uuid: item_uuid,
       item_type: item_type,
     };
     if (limited_date) {
       data.limited_date = limited_date;
+    }
+    if (password !== undefined) {
+      data.password = password;
     }
     const r = await shareApi.getLink(data);
 

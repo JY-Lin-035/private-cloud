@@ -1,11 +1,14 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+export const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL || '';
 
-function toWebSocketBaseUrl(url: string): string {
-  if (!url) {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}`;
+export function buildWebSocketUrl(path: string): string {
+  const baseUrl = WS_BASE_URL || API_BASE_URL || window.location.origin;
+  const base = new URL(baseUrl, window.location.origin);
+  if (base.protocol === 'https:') {
+    base.protocol = 'wss:';
+  } else if (base.protocol === 'http:') {
+    base.protocol = 'ws:';
   }
-  return url.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+  const basePath = base.pathname.replace(/\/$/, '');
+  return new URL(`${basePath}/${path.replace(/^\//, '')}`, base).toString();
 }
-
-export const WS_BASE_URL = (import.meta.env.VITE_WS_BASE_URL || toWebSocketBaseUrl(API_BASE_URL)).replace(/\/$/, '');

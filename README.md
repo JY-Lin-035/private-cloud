@@ -1,240 +1,207 @@
 <div align="center">
-  <img src="frontend/src/assets/meow-cloud-mark.png" alt="Meow Cloud" width="140" />
-  <h1>Meow Cloud</h1>
-  <p>自架式個人雲端儲存服務，讓檔案、權限與儲存環境由自己管理。</p>
-  <p>
-    <a href="README.en.md">English</a>
-  </p>
+
+# 🐈 MeowCloud
+
+**你的檔案，住在你的機器上。**
+*Your files, on your own hardware.*
+
+繁體中文 · [English](#english)
+
 </div>
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+" />
-  <img src="https://img.shields.io/badge/FastAPI-0.136%2B-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
-  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=20232A" alt="React 19" />
-  <img src="https://img.shields.io/badge/MySQL-8.0-4479A1?logo=mysql&logoColor=white" alt="MySQL 8" />
-  <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7" />
-</p>
+---
 
-## 特色
+# 繁體中文
 
-Meow Cloud 是一個以自架與資料自主為核心的個人雲端儲存服務，將帳戶驗證、檔案與資料夾管理、分享連結及儲存空間管理整合在同一個介面。後端採用 FastAPI 處理 API 與權限，前端以 React 提供操作介面，並使用 MySQL、Redis 與 Celery 支援資料、Session 與背景任務。
+## 它是什麼
 
-## 預設設定
+MeowCloud 是一套**自架個人雲端**：檔案存放、資料夾樹、斷點續傳上傳、垃圾桶、分享連結（含密碼保護）、資料夾整包下載、多人即時協作編輯、管理後台與一整套自動化資安防護——全部跑在你自己的一台機器上，不需要任何第三方雲服務。
 
-預設限制：單一檔案 `500 MiB`、每位使用者 `10 GiB`、Session `30 分鐘`、下載 Token `30 秒`。容量限制可由管理員調整。
+## 功能總覽
 
-註冊密碼須為 12 至 100 個字元，且至少包含大寫字母、小寫字母、數字與三種不同符號。
+| 面向 | 能力 |
+|---|---|
+| 📁 檔案管理 | 巢狀資料夾、搜尋、排序（時間／名稱／大小）、批次多選（移動／刪除／下載）、批次拖曳或按鈕上傳**整棵資料夾樹** |
+| ⬆️ 上傳 | TUS 斷點續傳（大檔中斷可續）、0 字節檔案、即時進度；上傳即時扣額度 |
+| ⬇️ 下載 | 單檔安全連結下載；資料夾／多選項目以**串流 ZIP** 即時打包（零壓縮、不落地、記憶體恆定） |
+| 🔗 分享 | 四種模式自由組合：不限時／限時／**密碼保護**／限時＋密碼；資料夾分享支援線上瀏覽與逐項選取下載；密碼採 argon2 雜湊＋短效簽名通行券 |
+| ✍️ 協作 | 多人即時編輯（Yjs + Monaco），自動存檔與歷史快照 |
+| 🗑️ 垃圾桶 | 軟刪除／還原／永久刪除，批次操作，超過保留期（預設 30 天）自動清場，頁面即時顯示倒數政策 |
+| 🛡️ 管理後台 | 使用者管理（配額／小黑屋／踢出）、功能開關（註冊、驗證信）、公告系統（導覽列跑馬燈）、IP 管控台 |
+| 🚨 自動防禦 | 違規積分引擎：囓端點限流、試密碼、探測 admin → 自動「慢速通道 → 全站 429 冷卻」階梯處置；每檔分享連結×IP 錯密碼鎖；即時踢出被停用帳號；資安事件郵件警報（10 分鐘節流防轟炸） |
+| 🔍 稽核 | 安全事件專用日誌；管理介面 IP 一律中段遮罩，完整資料僅存伺服器端 |
 
-## 技術堆疊
+## 快速開始（一鍵部署）
 
-| 區域 | 技術 |
-| --- | --- |
-| 前端 | React 19、TypeScript、Vite、React Router、Axios、Zustand、Ant Design、Tailwind CSS |
-| 上傳與視覺化 | Uppy、ApexCharts、Recharts、Lucide React |
-| 後端 | Python 3.12+、FastAPI、SQLAlchemy、Pydantic |
-| 資料庫與快取 | MySQL 8、Redis 7 |
-| 背景任務 | Celery |
-| 資料庫遷移 | Alembic |
-| 密碼雜湊 | Argon2id |
-
-## 系統架構
-
-```text
-┌──────────────────────────────┐
-│ React + TypeScript + Vite    │
-└──────────────┬───────────────┘
-               │ HTTP API / Cookie Session
-               ▼
-┌──────────────────────────────┐
-│ FastAPI + SQLAlchemy         │
-│ Account / File / Folder /    │
-│ Share / Admin Services       │
-└───────┬──────────────┬───────┘
-        │              │
-        ▼              ▼
-   ┌─────────┐    ┌─────────┐
-   │ MySQL   │    │ Redis   │
-   └─────────┘    └────┬────┘
-                       ▼
-                 Celery Worker ── SMTP
-```
-
-- `frontend`：使用者介面、路由、檔案操作與儲存空間顯示。
-- `backend`：FastAPI API、驗證、檔案服務、資料夾服務、分享服務與管理員 API。
-- `db`：Docker Compose 設定，負責啟動 MySQL 8 與 Redis 7。
-- 檔案內容預設儲存在 `backend/storage/app/private/files`；MySQL 儲存檔案索引與 metadata。
-
-## 專案結構
-
-```text
-.
-├── backend/
-│   ├── app/
-│   │   ├── api/v1/       # API routers
-│   │   ├── models/       # SQLAlchemy models
-│   │   ├── repositories/ # Data access layer
-│   │   ├── schemas/      # Pydantic schemas
-│   │   ├── services/     # Business logic
-│   │   ├── tasks/        # Celery tasks
-│   │   └── utils/        # Security and utility functions
-│   ├── alembic/          # Database migrations
-│   ├── storage/          # Private file storage
-│   ├── tests/            # Backend tests
-│   ├── main.py
-│   ├── pyproject.toml
-│   └── .env.example
-├── frontend/
-│   ├── src/
-│   │   ├── api/          # API clients
-│   │   ├── components/   # Shared components
-│   │   ├── pages/        # Application pages
-│   │   └── router/       # Client-side routes
-│   ├── package.json
-│   └── .env.example
-├── db/
-│   └── docker-compose.yaml
-├── README.md             # 繁體中文
-└── README.en.md          # English
-```
-
-## 快速開始
-
-### 環境需求
-
-- Python 3.12 或以上
-- [uv](https://docs.astral.sh/uv/)
-- Node.js LTS
-- [pnpm](https://pnpm.io/)
-- Docker Desktop 或相容的 Docker Compose 環境
-- SMTP 服務；若要啟用信箱驗證與密碼重設，必須設定 SMTP
-
-### 1. 啟動基礎服務
+需求：一台 Linux（x86_64 / ARM64）、`docker`、`git`、`nginx`、`curl`，以及 Node.js 22 與 `uv`（腳本會指引）。
 
 ```bash
-docker compose -f db/docker-compose.yaml up -d
+git clone https://github.com/JY-Lin-035/private-cloud.git meowcloud
+cd meowcloud
+bash deploy/deploy.sh            # 互動選單（可自訂帳密、Port、是否自啟動）
+bash deploy/deploy.sh --defaults # 或：全預設一鍵到底
 ```
 
-預設連線資訊：
+腳本會依序完成：產生高強度隨機密碼寫入各 `.env` → 起 MySQL 8.4 ＋ Redis 7.4 容器 → 資料庫遷移 → 建立管理員帳號 → 建置前端並原子發佈 → 佈署 nginx 靜態站（含安全標頭/快取/反代）→ 安裝 systemd 使用者服務與開機自啟。
 
-| 服務 | 位址 | 設定 |
-| --- | --- | --- |
-| MySQL | `127.0.0.1:3306` | Database `my_database`、User `mysql`、Password `mysql` |
-| Redis | `127.0.0.1:6379` | Database `0` |
+完成後管理員帳密印在 `deploy/.credentials`（600 權限，**請立即轉移並刪除**），開啟 `http://127.0.0.1:5173` 即可登入。要從外部存取，請自行掛反向代理或隧道（如 Cloudflare Tunnel）指向本機 5173（靜態）與 8000（API/WS）。
 
-Redis 的 `0` 是邏輯資料庫編號，代表使用 Redis 預設的第 0 個資料庫，與 Redis 的 `6379` 連接埠不同。
-
-### 2. 設定並啟動後端
+## 開發環境（手動）
 
 ```bash
+# 1. 資料庫
+cd db && docker compose up -d && cd ..
+
+# 2. 後端（Python 3.12+，使用 uv）
 cd backend
+cp .env.example .env        # 依 db/.env 的密碼調整 DB_* / REDIS_PASSWORD
 uv sync
-cp .env.example .env
 uv run alembic upgrade head
-uv run main.py
-```
+uv run python -m app.cli.create_admin --username admin --email me@local --generate
+uv run main.py              # FastAPI @ :8000
 
-Windows PowerShell：
-
-```powershell
-Copy-Item .env.example .env
-```
-
-請在 `backend/.env` 確認資料庫、Redis、SMTP 與儲存路徑設定。後端預設執行於 `http://127.0.0.1:8000`。
-
-### 3. 啟動背景任務服務
-
-寄送驗證信與驗證碼需要另外啟動 Celery 背景任務服務：
-
-```bash
-cd backend
-uv run celery -A app.tasks.email_tasks worker --loglevel=info
-```
-
-若要啟用定期清理與儲存空間重新計算：
-
-```bash
-cd backend
-uv run celery -A app.tasks.cleanup_tasks worker --beat --loglevel=info
-```
-
-### 4. 設定並啟動前端
-
-```bash
-cd frontend
+# 3. 前端
+cd ../frontend
 pnpm install
-cp .env.example .env
-pnpm dev
+pnpm dev --port 5174        # 開發伺服器（生產 nginx 佔 5173）
 ```
 
-Windows PowerShell：
+測試：`cd backend && uv run pytest`（170+ 案例）。
 
-```powershell
-Copy-Item .env.example .env
+## 設定參考（`backend/.env`）
+
+| 變數 | 預設 | 說明 |
+|---|---|---|
+| `DB_* / REDIS_*` | localhost | 資料庫與 Redis 連線（含密碼） |
+| `TOKEN_EXPIRE_TIME` | 30 | Session 有效分鐘數（每次活動自動續期） |
+| `TRASH_RETENTION_DAYS` | 30 | 垃圾桶保留天數 |
+| `TRASH_CLEANUP_INTERVAL_SECONDS` | 604800 | 自動清場排程間隔 |
+| `SHARE_TICKET_TTL_SECONDS` | 900 | 分享密碼通行券效期 |
+| `SEC_GLOBAL_HOURLY_LIMIT` | 5000 | 每 IP 全域請求水位 |
+| `SEC_SCORE_SLOW_THRESHOLD` / `SEC_SCORE_BLOCK_THRESHOLD` | 20 / 15 | 積分觸發慢速／直接封鎖 |
+| `SEC_UPLOAD_HOURLY_LIMIT` 等 | 600/300/150 | 上傳、下載、匿名分享下載之每小時量閾值 |
+| `SECURITY_ALERT_ENABLED` / `SECURITY_ALERT_EMAIL` | on / SMTP 帳號 | 資安警報郵件 |
+| `SMTP_*` | — | 驗證信/警報信寄送 |
+
+## 架構
+
+```
+瀏覽器
+ ├─ 靜態站      → nginx :5173  → /srv/meowcloud/current（Vite 產物，符號鏈接原子切換）
+ ├─ API / WebSocket → FastAPI :8000（uvicorn）
+ │                ├─ MySQL 8.4（Docker 卷）
+ │                ├─ Redis 7.4（session · 限流計分 · Celery broker）
+ │                └─ 本機儲存目錄（檔案以 UUID 命名，與資料庫記錄分離）
+ └─（選）對外：Cloudflare Tunnel / 自建反代 → 上述兩個 port
+
+背景行程
+ ├─ celery worker       —— 驗證信、驗證碼信、資安警報信
+ └─ celery worker -B    —— 排程：垃圾桶清場、用量重算（獨立佇列，與寄信互不干擾）
 ```
 
-`frontend/.env`：
+## 安全設計
 
-```dotenv
-VITE_API_BASE_URL=http://localhost:8000
-```
+- **密碼**：帳號與分享密碼一律 argon2 雜湊；比對由常量時間庫函式執行
+- **Session**：Redis 伺服端儲存 + HttpOnly/Secure Cookie；停用帳號**即時**失效
+- **分享通行券**：驗證密碼後發放 HMAC 簽名、綁定連結、15 分鐘過期的短效票，伺服器零狀態
+- **限流與自動處置**：端點級 IP 限流 → 連結×IP 錯密碼鎖 → 積分制「慢速通道（真頻寬壓制）→ 全站 429（偽裝限流）」階梯，冷卻次數遞增（6h→24h→72h）
+- **隔離**：所有查詢以擁有者為主鍵過濾；路徑參數一律清洗並限深度，杜絕穿越
+- **頭部防護**：CSP／nosniff／frame-ancestors 等安全標頭；靜態檔與 API 分離部署
+- **稽核**：安全事件獨立日誌；管理介面與通知郵件中 IP 一律遮罩
 
-## 環境變數
+## 疑難排解
 
-後端設定位於 `backend/.env`，範例檔案為 `backend/.env.example`。
+| 狀況 | 檢查 |
+|---|---|
+| 靜態站 502/404 | `readlink /srv/meowcloud/current` 是否指向有效 release |
+| 一直收到 429 | 你被自己的防線鎖了：到 IP Management 解除，或等冷卻 |
+| 驗證信沒送出 | `SMTP_*` 設定與 `logs/celery.log` |
+| 註冊按鈕消失 | Function Control 的「開放註冊／驗證信」開關 |
+| 資料庫連線失敗 | `db/.env` 密碼與容器內環境是否一致（改過要 `docker compose up -d --force-recreate db`） |
 
-| 變數 | 用途 |
-| --- | --- |
-| `APP_URL` | 後端與信箱驗證連結使用的應用程式網址 |
-| `DB_HOST`、`DB_PORT`、`DB_NAME`、`DB_USER`、`DB_PASSWORD` | MySQL 連線設定 |
-| `REDIS_HOST`、`REDIS_PORT`、`REDIS_DB` | Redis 連線設定 |
-| `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASSWORD`、`SMTP_FROM` | SMTP 寄信設定 |
-| `STORAGE_BASE_PATH` | 私有檔案儲存路徑 |
-| `TOKEN_EXPIRE_TIME` | Session 有效時間，單位為分鐘 |
-| `DOWNLOAD_TOKEN_EXPIRE_SECONDS` | 檔案下載 Token 有效時間 |
+---
 
-前端設定位於 `frontend/.env`：
+# English
 
-| 變數 | 用途 |
-| --- | --- |
-| `VITE_API_BASE_URL` | FastAPI API 基底網址 |
+## What is it
 
-## API 文件
+MeowCloud is a **self-hosted personal cloud**: file & folder management, resumable uploads, a trash bin, password-protected share links, streaming ZIP downloads, real-time collaborative editing, a full admin console, and a built-in automated security layer — all running on hardware you own.
 
-後端啟動後可使用 FastAPI 自動產生的文件：
+## Feature highlights
 
-- Swagger UI：[`/docs`](http://127.0.0.1:8000/docs)
-- ReDoc：[`/redoc`](http://127.0.0.1:8000/redoc)
-- Health check：[`/health`](http://127.0.0.1:8000/health)
+| Area | Capability |
+|---|---|
+| 📁 Files | Nested folders, search, sortable list, multi-select batch actions (move / delete / download), drag-and-drop of entire folder trees |
+| ⬆️ Upload | TUS resumable protocol (survives disconnects, zero-byte files supported), live progress, quota-enforced |
+| ⬇️ Download | Signed one-click links; folders and multi-selections streamed as ZIP (store-mode, no temp files, constant memory) |
+| 🔗 Sharing | Four combinable modes: permanent / expiring / **password-protected** / expiring + password; shared folders get online browsing with per-file selection; passwords stored as argon2 hashes behind short-lived HMAC tickets |
+| ✍️ Collaboration | Multi-user editing (Yjs + Monaco) with autosave and history snapshots |
+| 🗑️ Trash | Soft delete, restore, batch purge, automatic cleanup past retention (30 days by default, env-driven) |
+| 🛡️ Admin | User management (quota / disable / force logout), feature flags, announcement ticker, IP control panel |
+| 🚨 Auto-defense | Violation scoring: endpoint abuse, password guessing, admin probing → automatic *slow-lane* (real bandwidth throttling) escalating to staged site-wide 429 cooldowns; per link×IP lockouts; instant session revocation; email security alerts with a 10-minute anti-spam cooldown |
+| 🔍 Audit | Dedicated security event log; IPs are masked in every UI surface and notification |
 
-主要路由：
+## Quick start (one command)
 
-| 路由前綴 | 用途 |
-| --- | --- |
-| `/api/accounts` | 註冊、登入、信箱與密碼、Session、管理員功能 |
-| `/api/files` | 檔案列表、上傳、下載、刪除、還原與儲存空間 |
-| `/api/folders` | 資料夾建立、重新命名、刪除、還原與路徑 |
-| `/api/share` | 分享連結建立、查詢、刪除與公開下載 |
-| `/api/email/verify` | 電子信箱驗證連結 |
-
-## 常用指令
+Requirements: Linux (x86_64 / ARM64), `docker`, `git`, `nginx`, `curl`, plus Node.js 22 and `uv`.
 
 ```bash
-# Backend tests
-cd backend
-uv run pytest tests/ -v
-
-# Frontend checks
-cd frontend
-pnpm lint
-pnpm build
-pnpm preview
+git clone https://github.com/JY-Lin-035/private-cloud.git meowcloud
+cd meowcloud
+bash deploy/deploy.sh            # interactive: custom secrets, ports, autostart
+bash deploy/deploy.sh --defaults # or: fully automatic
 ```
 
-## 部署注意事項
+The script generates strong credentials, boots MySQL 8.4 + Redis 7.4, runs migrations, creates an admin account, builds and atomically publishes the frontend, installs a hardened nginx site, and (optionally) a systemd user service with login linger. Admin credentials land in `deploy/.credentials` (0600) — move and delete it right away. Browse to `http://127.0.0.1:5173`. Expose externally with a reverse proxy or tunnel of your choice.
 
-- 正式環境請將 CORS origins 改為明確的前端網域。
-- Session Cookie 使用 `Secure` 與 `SameSite=None`，跨來源部署必須使用 HTTPS。
-- 不要將 `backend/storage/app/private/files` 暴露為公開靜態目錄。
-- MySQL 與 Redis 的預設密碼僅適用於本機開發，正式環境必須更換。
-- SMTP 請使用應用程式密碼或專用憑證，並避免將秘密提交至版本控制。
-- 正式環境應另行規劃檔案備份、反向代理、HTTPS 憑證、日誌保存與 Celery worker 監控。
+## Development setup
+
+```bash
+cd db && docker compose up -d && cd ..
+cd backend && cp .env.example .env && uv sync \
+  && uv run alembic upgrade head \
+  && uv run python -m app.cli.create_admin --username admin --email me@local --generate \
+  && uv run main.py                       # API on :8000
+cd ../frontend && pnpm install && pnpm dev --port 5174
+```
+
+Tests: `cd backend && uv run pytest` (170+ cases).
+
+## Architecture
+
+```
+Browser
+ ├─ Static site        → nginx :5173 → /srv/meowcloud/current (atomic symlink swap per release)
+ ├─ API / WebSocket    → FastAPI :8000 (uvicorn)
+ │                         ├─ MySQL 8.4        ├─ Redis 7.4 (sessions · counters · broker)
+ │                         └─ local blob store (UUID filenames, DB-referenced)
+ └─ (optional) edge: Cloudflare Tunnel / your own reverse proxy
+
+Background
+ ├─ celery worker     — verification & alert emails
+ └─ celery worker -B  — scheduled trash purge & storage recalculation (isolated queue)
+```
+
+## Security design
+
+- argon2 password hashing (accounts **and** share links); constant-time verification
+- server-side sessions in Redis (HttpOnly/Secure cookies); disabling an account revokes it instantly
+- password-protected shares issue HMAC-signed, link-bound, expiring tickets — zero server state
+- layered auto-defense: per-endpoint IP limits → per link×IP lockout → violation-score slow lane (genuine ASGI bandwidth pacing) → staged site-wide 429 cooldowns (6h/24h/72h)
+- ownership-scoped queries and sanitized path resolution everywhere (no traversal)
+- hardened response headers (CSP, nosniff, frame-ancestors…); static and API planes deployed separately
+- dedicated security event log; masked IPs in UI and email
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Static site 502/404 | `readlink /srv/meowcloud/current` points at a valid release |
+| You keep getting 429 | your IP hit its own defense ladder — release it in IP Management or wait out cooldown |
+| No verification emails | `SMTP_*` settings and `logs/celery.log` |
+| Register button missing | Feature flags: *allow registration* / *verification email* |
+| DB connection failed | `db/.env` passwords vs. running containers (`docker compose up -d --force-recreate`) |
+
+## License
+
+No license file has been declared yet — add a `LICENSE` to define reuse terms before publishing.

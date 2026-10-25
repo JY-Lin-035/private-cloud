@@ -1,12 +1,21 @@
 import { useEffect, useRef } from 'react';
 import Uppy from '@uppy/core';
 import Dashboard from '@uppy/dashboard';
-import XHRUpload from '@uppy/xhr-upload';
+import Tus from '@uppy/tus';
 import '@uppy/core/css/style.css';
 import '@uppy/dashboard/css/style.css';
 
 import { useStorage } from '../../store/storage';
 import { API_BASE_URL } from '../../config/api';
+
+const encodeTusMetadata = (value: string) => {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+};
 
 
 
@@ -21,6 +30,8 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
   const storage = useStorage();
   const uppyContainer = useRef<HTMLDivElement>(null);
   const uppyInstance = useRef<Uppy | null>(null);
+  // Safari 系不實作 webkitdirectory：隱藏資料夾按鈕並顯示指引，避免拖入資料夾變成 0B 垃圾檔
+  const supportsFolderUpload = typeof window !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
 
   useEffect(() => {
     if (!uppyContainer.current) return;
@@ -29,7 +40,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       restrictions: {
         maxFileSize: storage.signalStorage,
         allowedFileTypes: null,
-        maxNumberOfFiles: 3,
+        maxNumberOfFiles: 1000,
       },
       autoProceed: false,
     });
@@ -38,24 +49,45 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       inline: true,
       target: uppyContainer.current,
       proudlyDisplayPoweredByUppy: false,
+      fileManagerSelectionType: supportsFolderUpload ? 'both' : 'files',
       locale: {
         strings: {
           dropPasteFiles: '請將檔案拖曳到這裡或 %{browseFiles}',
           browseFiles: '選擇檔案',
+          browseFolders: '選擇資料夾',
         },
       },
     });
 
-    uppy.use(XHRUpload, {
-      endpoint: `${API_BASE_URL}/api/files/uploadFile`,
-      formData: true,
-      fieldName: 'file',
-      bundle: false,
+    uppy.use(Tus, {
+      endpoint: `${API_BASE_URL}/api/files/tus`,
+      chunkSize: 1024 * 1024 * 50,
+      retryDelays: [0, 1000, 3000, 5000],
       withCredentials: true,
+      allowedMetaFields: ['name', 'type'],
+      headers: (file) => {
+        // 按鈕選資料夾時路徑在 data.webkitRelativePath；拖曳資料夾時 Uppy 放在 meta.relativePath
+        const relativePath = (file.meta as any)?.relativePath
+          || (file.data as File)?.webkitRelativePath
+          || '';
+        const metadata = [
+          `filename ${encodeTusMetadata(file.name || 'unknown')}`,
+          `filetype ${encodeTusMetadata(file.type || 'application/octet-stream')}`,
+          ...(relativePath ? [`relative_path ${encodeTusMetadata(relativePath)}`] : []),
+        ].join(' ');
+
+        return {
+          'X-Parent-Folder-Uuid': parentFolderUuid ?? '',
+          'Upload-Metadata': metadata,
+        };
+      },
+      removeFingerprintOnSuccess: true,
     });
 
     uppy.on('file-added', (file) => {
       uppy.setFileMeta(file.id, {
+        name: file.name,
+        type: file.type || 'application/octet-stream',
         parent_folder_uuid: parentFolderUuid,
       });
     });
@@ -96,7 +128,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
         uppyInstance.current = null;
       }
     };
-  }, [parentFolderUuid, storage, onRefresh, onComplete]);
+  }, [parentFolderUuid, storage, onRefresh, onComplete, supportsFolderUpload]);
 
   return (
     <div className="fixed inset-0 z-20 flex items-center justify-center">
@@ -107,6 +139,11 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
 
       <div className="relative z-10 max-w-[95vw] sm:max-w-[750px]">
         <div ref={uppyContainer}></div>
+        {!supportsFolderUpload && (
+          <p className="text-amber-200 text-xs mt-2 text-center">
+            此瀏覽器不支援資料夾上傳：請改用 Chrome / Firefox，或先將資料夾壓縮成 zip 後以單一檔案上傳。
+          </p>
+        )}
       </div>
     </div>
   );

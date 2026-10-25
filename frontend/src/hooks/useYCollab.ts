@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Y from 'yjs';
-import { WS_BASE_URL } from '../config/api';
+import { buildWebSocketUrl } from '../config/api';
 
 interface Snapshot {
   id: string | number;
@@ -64,7 +64,7 @@ export function useYCollab(
   useEffect(() => {
     if (!fileUuid || !user.id) return;
 
-    const wsUrl = `${WS_BASE_URL}/ws/collab/${fileUuid}?user_id=${user.id}`;
+    const wsUrl = buildWebSocketUrl(`/ws/collab/${fileUuid}?user_id=${user.id}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     initializedRef.current = false;

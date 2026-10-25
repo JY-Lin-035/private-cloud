@@ -1,27 +1,33 @@
 services:
   # MySQL 資料庫服務
   db:
-    image: mysql:8.0
+    image: mysql:8.4
     container_name: mysql_service
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in db/.env}
       MYSQL_DATABASE: my_database
       MYSQL_USER: mysql
-      MYSQL_PASSWORD: mysql
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set in db/.env}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - mysql_data_v84:/var/lib/mysql
 
   # Redis 快取服務
   redis:
-    image: redis:7.0-alpine
+    image: redis:7.4-alpine
     container_name: redis_service
     restart: always
+    user: "1002:1002"
     ports:
-      - "6379:6379"
-    command: redis-server --save 60 1 --loglevel warning
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+      - ${REDIS_CONF:?set REDIS_CONF in db/.env}:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
 
 volumes:
+  mysql_data_v84:
   mysql_data:
+  redis_data:

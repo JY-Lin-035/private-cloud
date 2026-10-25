@@ -130,3 +130,20 @@ def assert_error(resp: dict, code: int) -> None:
     """Helper: assert error response has expected status code"""
     assert "error" in resp
     assert resp["stateCode"] == code, f"{code} != {resp['stateCode']}"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_security_engine(monkeypatch):
+    """Keep unit tests from touching real Redis / SMTP / security.log."""
+    from app.services import security_engine
+
+    def _noop(*args, **kwargs):
+        return None
+
+    async def _noop_async(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(security_engine, "record_event", _noop)
+    monkeypatch.setattr(security_engine, "record_event_async", _noop_async)
+    monkeypatch.setattr(security_engine, "_send_alert", _noop)
+    monkeypatch.setattr(security_engine, "flood_exceeded", lambda ip: False)

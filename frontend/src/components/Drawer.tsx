@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree, Users } from 'lucide-react';
+import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree, Users, Sliders, Megaphone, Shield } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
 import { authApi } from '../api/authApi';
 
@@ -63,7 +63,7 @@ function Drawer() {
           </div>
 
           <div className="flex flex-col h-[100vh] px-4">
-            <div className="flex-grow overflow-y-auto">
+            <div className="flex-grow overflow-y-auto scrollbar-hide">
               <ul className="space-y-2">
                 <li>
                   {/* Cloud */}
@@ -176,6 +176,39 @@ function Drawer() {
                         >
                           <User className="w-6 h-6 mr-2 text-white" />
                           <span>User Management</span>
+                        </button>
+                      </li>
+                      )}
+                      {isAdmin && (
+                      <li>
+                        <button
+                          onClick={() => { navigate('/setting/function-control'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 margin:bg-gray-700 cursor-pointer"
+                        >
+                          <Sliders className="w-6 h-6 mr-2 text-white" />
+                          <span>Function Control</span>
+                        </button>
+                      </li>
+                    )}
+                      {isAdmin && (
+                      <li>
+                        <button
+                          onClick={() => { navigate('/setting/announcements'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 margin:bg-gray-700 cursor-pointer"
+                        >
+                          <Megaphone className="w-6 h-6 mr-2 text-white" />
+                          <span>Announcement</span>
+                        </button>
+                      </li>
+                    )}
+                      {isAdmin && (
+                      <li>
+                        <button
+                          onClick={() => { navigate('/setting/ip-management'); setIsOpen(false); }}
+                          className="flex items-center w-full p-2 text-white transition duration-75 rounded-lg pl-11 margin:bg-gray-700 cursor-pointer"
+                        >
+                          <Shield className="w-6 h-6 mr-2 text-white" />
+                          <span>IP Management</span>
                         </button>
                       </li>
                     )}

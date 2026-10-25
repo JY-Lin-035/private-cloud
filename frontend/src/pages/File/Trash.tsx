@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Notices from '../../components/Notices';
-import { FileText, FolderOpen, ChevronLeft, ChevronRight, RotateCcw, Trash2 } from 'lucide-react';
+import { FileText, FolderOpen, ChevronLeft, ChevronRight, RotateCcw, Trash2, ListChecks } from 'lucide-react';
 import { folderApi } from '../../api/folderApi';
 import { fileApi } from '../../api/fileApi';
 import { useStorage } from '../../store/storage';
@@ -29,6 +29,10 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
   const [className, setClassName] = useState('');
   const [response, setResponse] = useState<string | string[]>([]);
   const [IN, setIN] = useState(false);
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
   const storage = useStorage();
 
   async function getTrashList() {
@@ -38,8 +42,9 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
         fileApi.trash()
       ]);
 
-      const folders = foldersRes.folders?.map((f: any) => ({
-        uuid: f.uuid,
+      setRetentionDays(filesRes?.retention_days ?? null);
+
+      const folders = foldersRes.folders?.map((f: any) => ({        uuid: f.uuid,
         name: f.name,
         size: f.size,
         type: 'folder' as const,
@@ -184,6 +189,77 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
     }
   }
 
+  const selectedItems = trashList.filter(i => selected.includes(`${i.type}:${i.uuid}`));
+
+  function toggleSelectionMode() {
+    setSelectionMode(v => !v);
+    setSelected([]);
+  }
+
+  function toggleItem(item: TrashItem) {
+    const key = `${item.type}:${item.uuid}`;
+    setSelected(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  }
+
+  const allSelected = filterTrashList.length > 0 && filterTrashList.every(i => selected.includes(`${i.type}:${i.uuid}`));
+
+  function toggleSelectAll() {
+    setSelected(allSelected
+      ? []
+      : filterTrashList.map(i => `${i.type}:${i.uuid}`));
+  }
+
+  async function batchRestore() {
+    if (!selectedItems.length || busy) return;
+    setBusy(true);
+    let ok = 0;
+    const errs: string[] = [];
+    for (const item of selectedItems) {
+      try {
+        if (item.type === 'folder') await folderApi.restore({ folder_uuid: item.uuid });
+        else await fileApi.restore({ file_uuid: item.uuid });
+        ok++;
+      } catch (e: any) {
+        errs.push(`${item.name}（${e?.message ?? '失敗'}）`);
+      }
+    }
+    await getTrashList();
+    setSelected([]);
+    setSelectionMode(false);
+    setResponse([`已還原 ${ok} 項`, ...(errs.length ? [`失敗 ${errs.length} 項：`, ...errs] : [])]);
+    setClassName(errs.length ? 'text-red-500' : 'text-green-500');
+    setShowMode(true);
+    setBusy(false);
+  }
+
+  async function batchPermanentDelete() {
+    if (!selectedItems.length || busy) return;
+    if (!window.confirm(`確定要永久刪除選取的 ${selectedItems.length} 個項目？此操作無法還原。`)) return;
+    setBusy(true);
+    let ok = 0;
+    let freed = 0;
+    const errs: string[] = [];
+    for (const item of selectedItems) {
+      try {
+        if (item.type === 'folder') await folderApi.delete({ folder_uuid: item.uuid, permanent: true });
+        else await fileApi.delete({ file_uuid: item.uuid, permanent: true });
+        ok++;
+        freed += item.size || 0;
+      } catch (e: any) {
+        errs.push(`${item.name}（${e?.message ?? '失敗'}）`);
+      }
+    }
+    storage.addUsedStorage(-freed);
+    storage.getFromAPI();
+    await getTrashList();
+    setSelected([]);
+    setSelectionMode(false);
+    setResponse([`已永久刪除 ${ok} 項`, ...(errs.length ? [`失敗 ${errs.length} 項：`, ...errs] : [])]);
+    setClassName(errs.length ? 'text-red-500' : 'text-green-500');
+    setShowMode(true);
+    setBusy(false);
+  }
+
   function formatSize(size: number): string {
     if (size === 0) return '0 B';
     const k = 1024;
@@ -218,6 +294,11 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
       <div
         className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[5%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
+        {retentionDays != null && (
+          <p className="mb-3 text-center text-sm sm:text-base lg:text-lg font-semibold text-red-400">
+            ⚠ 垃圾桶中的項目會在 {retentionDays} 天後自動永久清除
+          </p>
+        )}
         <div className="mb-4 flex justify-between items-center">
           <span>
             <input
@@ -226,6 +307,11 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
               type="text"
               placeholder="搜尋"
               className="border border-white rounded px-3 py-1 w-full sm:w-64"
+            />
+
+            <ListChecks
+              className={`w-9 h-9 ml-4 inline cursor-pointer ${selectionMode ? 'text-blue-400' : 'text-gray-100'}`}
+              onClick={toggleSelectionMode}
             />
           </span>
 
@@ -252,6 +338,11 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
           <table className="w-full table-fixed text-left border border-white border-collapse rounded-[2rem]">
             <thead>
               <tr className="bg-blue-200 text-xs sm:text-sm md:text-base lg:text-lg xl:text-xl text-center">
+                {selectionMode && (
+                  <th className="p-2 w-[5%] border border-white">
+                    <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="w-5 h-5 cursor-pointer" />
+                  </th>
+                )}
                 <th
                   onClick={() => changeSortType('deleted_at')}
                   className="cursor-pointer p-2 w-[12%] border border-white hidden sm:table-cell"
@@ -337,6 +428,14 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
                   key={item.uuid}
                   className="bg-gray-300 hover:bg-blue-200"
                 >
+                  {selectionMode && (
+                    <td
+                      className="p-2 text-center border border-white"
+                      onClick={(e) => { e.stopPropagation(); toggleItem(item); }}
+                    >
+                      <input type="checkbox" checked={selected.includes(`${item.type}:${item.uuid}`)} readOnly className="w-5 h-5 pointer-events-none" />
+                    </td>
+                  )}
                   <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal hidden sm:table-cell">
                     {formatDate(item.deleted_at)}
                   </td>
@@ -390,6 +489,40 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
           <ChevronRight className="w-5 h-5 rtl:rotate-180" />
         </button>
       </div>
+
+      {selectionMode && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-3 rounded-xl bg-gray-800 text-white shadow-2xl border border-gray-600 w-[92vw] max-w-[520px] justify-between">
+          <span className="text-sm whitespace-nowrap">已選 {selected.length} 項</span>
+          <span className="flex gap-2">
+            <button
+              onClick={toggleSelectAll}
+              className="px-3 py-1.5 rounded text-sm bg-gray-600 hover:bg-gray-500 cursor-pointer"
+            >
+              {allSelected ? '取消全選' : '一鍵全選'}
+            </button>
+            <button
+              onClick={batchRestore}
+              disabled={!selected.length || busy}
+              className="px-3 py-1.5 rounded text-sm bg-green-600 hover:bg-green-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              還原
+            </button>
+            <button
+              onClick={batchPermanentDelete}
+              disabled={!selected.length || busy}
+              className="px-3 py-1.5 rounded text-sm bg-red-600 hover:bg-red-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+            >
+              永久刪除
+            </button>
+            <button
+              onClick={toggleSelectionMode}
+              className="px-3 py-1.5 rounded text-sm bg-gray-600 hover:bg-gray-500 cursor-pointer"
+            >
+              離開
+            </button>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

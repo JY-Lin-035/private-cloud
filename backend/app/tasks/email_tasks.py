@@ -104,3 +104,22 @@ def send_code_email_task(self, email: str, code: str, subject: str):
     except Exception as e:
         logger.error(f"發送驗證碼失敗: {str(e)}")
         return {"status": "error", "error": str(e)}
+
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=60)
+def send_security_alert_task(self, subject: str, body: str):
+    """Send an admin security alert email (masked data only)."""
+    try:
+        to = settings.SECURITY_ALERT_EMAIL or settings.SMTP_USER or settings.SMTP_FROM
+        if not to:
+            logger.warning("SECURITY_ALERT: no recipient configured, skip")
+            return {"status": "skipped"}
+        message = EmailMessage()
+        message["From"] = settings.SMTP_FROM
+        message["To"] = to
+        message["Subject"] = subject
+        message.set_content(body)
+        _send_email(message)
+        return {"status": "success", "to": to}
+    except Exception as e:
+        logger.error(f"security alert email failed: {e}")
+        return {"status": "error", "error": str(e)}

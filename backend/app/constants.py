@@ -12,6 +12,8 @@ class StorageLimits:
     """Storage size limits in bytes."""
     DEFAULT_SIGNAL_FILE_SIZE = 524288000  # 500MB
     DEFAULT_TOTAL_FILE_SIZE = 10737418240  # 10GB
+    TUS_CHUNK_SIZE = 1024 * 1024  # 1MB
+    TUS_TEMP_DIR_NAME = "tus_uploads"
 
 
 class Identity(IntEnum):

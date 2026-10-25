@@ -4,6 +4,7 @@ import Login from './Login';
 import Register from './Register';
 import Notices from '../../components/Notices';
 import { authApi } from '../../api/authApi';
+import { fetchPublicFlags, type PublicFlags } from '../../api/publicFlags';
 
 function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
   const navigate = useNavigate();
@@ -12,6 +13,13 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
   const [response, setResponse] = useState<string | string[]>('');
   const [className, setClassName] = useState('');
   const [IN, setIN] = useState(false);
+  const [publicFlags, setPublicFlags] = useState<PublicFlags | null>(null);
+
+  useEffect(() => {
+    fetchPublicFlags()
+      .then(setPublicFlags)
+      .catch(() => { /* fail-close: 保持隱藏，後端仍會硬擋 */ });
+  }, []);
 
   const checkSession = async () => {
       try {
@@ -69,11 +77,13 @@ function LoginRegisterPage({ layoutClass = "" }: { layoutClass?: string }) {
           <Login
             onFlip={() => setFlipped(true)}
             onNotice={handleNotice}
+            allowRegistration={publicFlags?.allow_registration ?? false}
           />
 
           <Register
             onFlip={() => setFlipped(false)}
             onNotice={handleNotice}
+            flags={publicFlags}
           />
         </div>
       </div>

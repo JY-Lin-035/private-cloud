@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { WS_BASE_URL } from '../config/api';
+import { buildWebSocketUrl } from '../config/api';
 
 interface CursorPosition {
   lineNumber: number;
@@ -32,7 +32,7 @@ export function useCollab(fileUuid: string, user: { id: number; name: string }):
   useEffect(() => {
     if (!fileUuid || !user.id) return;
 
-    const wsUrl = `${WS_BASE_URL}/ws/collab/${fileUuid}?user_id=${user.id}`;
+    const wsUrl = buildWebSocketUrl(`/ws/collab/${fileUuid}?user_id=${user.id}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

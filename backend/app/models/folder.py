@@ -36,6 +36,7 @@ class Folder(BaseModel):
     is_system = Column(Boolean, default=False, nullable=False)  # System folders cannot be deleted
     limited_date = Column(TIMESTAMP, nullable=True)  # Expiration date for sharing
     available_user = Column(Text, nullable=True)  # JSON array of allowed user IDs
+    share_password = Column(String(255), nullable=True)  # argon2 hash; non-null = password-protected link
 
     # Relationships
     owner = relationship('Account', backref='folders')
