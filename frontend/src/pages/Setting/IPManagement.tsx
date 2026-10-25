@@ -147,6 +147,13 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
         <input className={inputCls} placeholder="例：批量拖檔疑似外洩" value={f.reason} onChange={e => set({ reason: e.target.value })} />
       </label>
       <div aria-hidden className="hidden md:block" />
+      {f.subject_type === 'ip_token' && (
+        <label className={labCls + ' md:col-span-2'}>
+          連結 token（分享網址 /share/ 之後的末段）
+          <input className={inputCls} disabled={subjectFixed} placeholder="例：3c7ee64910881deb532786d989a22b12"
+            value={f.token} onChange={e => set({ token: e.target.value })} />
+        </label>
+      )}
     </div>
   );
 }
@@ -164,6 +171,8 @@ function IPManagement({ layoutClass = "" }: Props) {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [editRule, setEditRule] = useState<ControlRule | null>(null);
   const [editForm, setEditForm] = useState<FormState>(emptyForm);
+  const [hotLinks, setHotLinks] = useState<{ token: string; item: string; type: string; owner: string }[] | null>(null);
+  const [hotLoading, setHotLoading] = useState(false);
 
   const setF = (patch: Partial<FormState>) => setForm(p => ({ ...p, ...patch }));
   const setE = (patch: Partial<FormState>) => setEditForm(p => ({ ...p, ...patch }));
@@ -304,9 +313,39 @@ function IPManagement({ layoutClass = "" }: Props) {
           </div>
         )}
 
-        {/* create form — fixed slots, never reflows */}
         <div className="mb-4 bg-gray-800/50 rounded-lg border border-gray-700 p-4">
           <FormFields f={form} set={setF} />
+          {form.subject_type === 'ip_token' && (
+            <div className="mt-3 border-t border-gray-700 pt-3">
+              <button
+                type="button"
+                disabled={hotLoading || !form.ip.trim()}
+                onClick={async () => {
+                  setHotLoading(true);
+                  try { setHotLinks(await ipControlApi.hotlinks(form.ip.trim())); }
+                  catch { setHotLinks([]); }
+                  setHotLoading(false);
+                }}
+                className="px-3 py-1.5 rounded text-xs bg-gray-700 hover:bg-gray-600 disabled:opacity-40 cursor-pointer text-gray-200">
+                {hotLoading ? '查詢中…' : '查詢該 IP 近期熱刷的連結'}
+              </button>
+              {hotLinks && (
+                hotLinks.length === 0
+                  ? <p className="text-xs text-gray-500 mt-2">近一小時此 IP 無匿名分享下載紀錄。</p>
+                  : (
+                    <div className="mt-2 flex flex-col gap-1">
+                      {hotLinks.map(h => (
+                        <button key={h.token} type="button" onClick={() => setF({ token: h.token })}
+                          className="text-left text-xs px-2 py-1.5 rounded bg-gray-700 hover:bg-cyan-900/40 cursor-pointer text-gray-200">
+                          {h.type === 'folder' ? '📁' : '📄'} {h.item}｜擁有者 {h.owner}｜<span className="text-gray-400 break-all">{h.token}</span>
+                        </button>
+                      ))}
+                      <span className="text-[11px] text-gray-500">點擊即可填入 token</span>
+                    </div>
+                  )
+              )}
+            </div>
+          )}
           <div className="mt-3 flex justify-end">
             <button onClick={create} disabled={busy}
               className="cursor-pointer px-5 py-2 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors">

@@ -216,3 +216,25 @@ class TestBlockGranularity:
         b_dn, *_ = sec.match_rules("7.7.7.7", None, False, True, False)
         b_page, *_ = sec.match_rules("7.7.7.7", None, False, False, False)
         assert b_up is True and b_dn is False and b_page is False
+
+
+class TestHotlinks:
+    def test_anon_count_records_hotlink(self, monkeypatch):
+        r = MagicMock()
+        r.get.return_value = None
+        r.pipeline.return_value.execute.return_value = [1]
+        monkeypatch.setattr(sec, "_client", lambda: r)
+        sec.count_download(None, "5.6.7.8", "aabbccdd" + "1" * 24)
+        r.hset.assert_called_once_with("hotlinks:5.6.7.8", "aabbccdd", "aabbccdd" + "1" * 24)
+        r.expire.assert_any_call("hotlinks:5.6.7.8", 3600)
+
+    def test_hotlinks_endpoint_resolves_owner(self, db, monkeypatch):
+        from app.models.folder import Folder
+        import redis as redis_mod
+        f = Folder(uuid="hl-dir", name="HShare", owner_id=1, parent_id=None, size=0, shared="tok123456789")
+        db.add(f); db.commit()
+        fake = MagicMock()
+        fake.hgetall.return_value = {b"tok12345": b"tok123456789"}
+        monkeypatch.setattr(redis_mod.Redis, "from_url", classmethod(lambda cls, url, **kw: fake))
+        d = asyncio.run(api.admin_hotlinks(request=admin_req(), ip="5.6.7.8", db=db))
+        assert d["links"] == [{"token": "tok123456789", "item": "HShare", "type": "folder", "owner": "boss"}]

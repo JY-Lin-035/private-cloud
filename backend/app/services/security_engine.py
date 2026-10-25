@@ -314,6 +314,12 @@ def count_download(user_id, ip, token=None, username=None):
             n = _incr_ttl(r, f"xfer:dn:a{ip}:{token[:8]}", 1, 3600)
             limit = settings.SEC_ANON_DOWNLOAD_HOURLY_LIMIT
             subject = {"ip": ip, "token": token}
+            try:
+                hk = f"hotlinks:{ip}"
+                r.hset(hk, token[:8], token)
+                r.expire(hk, 3600)
+            except Exception:
+                pass
         else:
             return
         if n == limit + 1 or n == 2 * limit + 1:
