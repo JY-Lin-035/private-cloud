@@ -64,6 +64,7 @@ async def register(
 
 @router.post("/login", dependencies=[Depends(rate_limit(5, 30))])
 async def login(
+    http_request: Request,
     request: LoginRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -80,6 +81,14 @@ async def login(
         
         if result and 'error' in result:
             logger.error(f"Login error: {result['error']}, stateCode: {result['stateCode']}")
+            try:
+                from app.services import security_engine
+                if result.get('stateCode') == 401:
+                    security_engine.record_event_async(
+                        "login_fail", http_request.client.host if http_request.client else None,
+                        request.username, None, str(result.get('error', '')))
+            except Exception:
+                pass
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         response = Response(
@@ -456,6 +465,8 @@ async def admin_update_quota(
         raise HTTPException(status_code=400, detail=f"無法設定低於目前已使用容量的上限（已使用 {used} bytes）")
     account.total_file_size = total_storage
     db.commit()
+    from app.utils.security_log import write_event
+    write_event("quota_change", None, str(request.state.user_id), f"user#{user_id}", f"quota={total_storage}")
     return {"message": "success", "total_storage": total_storage}
 
 
@@ -512,5 +523,7 @@ async def update_own_quota(
         raise HTTPException(status_code=400, detail=f"無法設定低於目前已使用容量的上限（已使用 {used} bytes）")
     account.total_file_size = total_storage
     db.commit()
+    from app.utils.security_log import write_event
+    write_event("quota_change", None, str(user_id), "self", f"quota={total_storage}")
     logger.info(f"[Admin] self quota updated user_id={user_id} total_storage={total_storage}")
     return {"message": "success", "total_storage": total_storage}

@@ -15,6 +15,7 @@ from app.services.file_service import FileService
 from app.services.folder_service import FolderService
 from app.services import zip_service
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
+from app.api.rate_limit import rate_limit
 from app.config import settings
 from app.utils import logger as log
 
@@ -276,7 +277,7 @@ async def get_file_list(
         raise
 
 
-@router.post("/uploadFile")
+@router.post("/uploadFile", dependencies=[Depends(rate_limit(30, 300))])
 async def upload_file(
     file: UploadFile = File(...),
     parent_folder_uuid: str = Form(None),

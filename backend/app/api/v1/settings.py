@@ -52,4 +52,6 @@ async def update_feature_flag(
         f"FeatureFlag changed: admin_user_id={admin.get('id')} "
         f"key={key} enabled={payload.enabled}"
     )
+    from app.utils.security_log import write_event
+    write_event("feature_change", None, admin.get("username"), key, f"enabled={payload.enabled}")
     return {"key": flag.key, "enabled": bool(flag.enabled)}

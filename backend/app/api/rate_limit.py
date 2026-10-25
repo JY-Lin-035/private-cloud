@@ -39,9 +39,16 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         
         # Check if limit exceeded
         if current >= max_requests:
+            try:
+                from app.services import security_engine
+                security_engine.record_event(
+                    "rate_limit", client_ip, None, endpoint,
+                    f"限流 {max_requests}/{window_seconds}s 觸發（第 {current + 1} 次）")
+            except Exception:
+                pass
             raise HTTPException(
                 status_code=429,
-                detail=f"Rate limit exceeded. Maximum {max_requests} requests per {window_seconds} seconds."
+                detail="請求過多，請稍後再試"
             )
         
         # Increment counter with expiration
