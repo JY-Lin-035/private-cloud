@@ -204,7 +204,16 @@ migrate_and_admin() {
 build_and_publish_frontend() {
   echo "=== 建置前端 ==="
   ( cd "$REPO/frontend" && pnpm install --frozen-lockfile && pnpm build )
-  $SUDO install -d -o "$(id -u)" -g http -m 755 /srv/meowcloud/releases
+  local ng_group g
+  ng_group="$(awk '/^[[:space:]]*user[[:space:]]/{gsub(";","",$2); print $2; exit}' /etc/nginx/nginx.conf 2>/dev/null)"
+  if [ -z "$ng_group" ] || ! getent group "$ng_group" >/dev/null 2>&1; then
+    ng_group=""
+    for g in www-data nginx http; do
+      if getent group "$g" >/dev/null 2>&1; then ng_group="$g"; break; fi
+    done
+  fi
+  [ -n "$ng_group" ] || ng_group="$(id -gn)"
+  $SUDO install -d -o "$(id -u)" -g "$ng_group" -m 755 /srv/meowcloud/releases
   local dest="/srv/meowcloud/releases/$(date +%Y%m%d-%H%M%S)-deploy"
   mkdir -p "$dest" && cp -a "$REPO/frontend/dist/." "$dest/"
   ln -sfn "$dest" /srv/meowcloud/.current.tmp && mv -Tf /srv/meowcloud/.current.tmp /srv/meowcloud/current
@@ -214,6 +223,12 @@ build_and_publish_frontend() {
 install_nginx() {
   echo "=== 安裝 nginx 靜態站（port $STATIC_PORT）==="
   $SUDO install -d -m 755 /etc/nginx/snippets
+  $SUDO install -d -m 755 /etc/nginx/api-gw
+  $SUDO tee /etc/nginx/api-gw/00-logformat.conf >'/dev/null' <<'EOF'
+log_format cfip '$remote_addr - $remote_user [$time_local] "$request" '
+                '$status $body_bytes_sent "$http_referer" '
+                '"$http_user_agent" "$http_x_forwarded_for" cf=$http_cf_connecting_ip';
+EOF
   $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null' <<EOF
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
@@ -288,8 +303,11 @@ server {
     }
 }
 EOF
+  if ! grep -q 'include /etc/nginx/api-gw' /etc/nginx/nginx.conf; then
+    $SUDO sed -i '\|^http {|a\    include /etc/nginx/api-gw/*.conf;' /etc/nginx/nginx.conf
+  fi
   if grep -q '^worker_processes  1;' /etc/nginx/nginx.conf; then
-    sudo sed -i 's/^worker_processes  1;/worker_processes auto;/' /etc/nginx/nginx.conf
+    $SUDO sed -i 's/^worker_processes  1;/worker_processes auto;/' /etc/nginx/nginx.conf
   fi
   $SUDO nginx -t
   if [ -d /run/systemd/system ]; then
