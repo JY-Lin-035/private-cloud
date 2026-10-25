@@ -46,4 +46,9 @@ export const ipControlApi = {
     const r = await api.post('/api/ipcontrol/admin/suspend', { username });
     return r.data as { suspended: string };
   },
+
+  hotlinks: async (ip: string): Promise<{ token: string; item: string; type: string; owner: string }[]> => {
+    const r = await api.get('/api/ipcontrol/admin/hotlinks', { params: { ip } });
+    return r.data.links as { token: string; item: string; type: string; owner: string }[];
+  },
 };

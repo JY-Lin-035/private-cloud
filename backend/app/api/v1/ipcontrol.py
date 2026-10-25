@@ -7,7 +7,7 @@ only in security.log.
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, require_admin
 from app.config import settings
 from app.models.account import Account
+from app.models.file import File
+from app.models.folder import Folder
 from app.constants import Identity
 from app.models.ip_control import IpControl
 from app.services import security_engine as sec
@@ -260,3 +262,27 @@ async def admin_suspend_account(payload: SuspendRequest, request: Request, db: S
         pass
     write_event("account_suspend", None, admin.get("username"), account.name, "由 IP Management 停用")
     return {"suspended": account.name}
+
+
+@router.get("/admin/hotlinks")
+async def admin_hotlinks(request: Request, ip: str = Query(..., max_length=45), db: Session = Depends(get_db)):
+    """Recent share links an IP has been hammering (for one-click ip_token rule creation)."""
+    require_admin(request)
+    try:
+        from redis import Redis
+        raw = Redis.from_url(settings.REDIS_URL).hgetall(f"hotlinks:{ip}")
+    except Exception:
+        raw = {}
+    links = []
+    for v in (raw or {}).values():
+        token = v.decode() if isinstance(v, bytes) else str(v)
+        f = db.execute(select(File).where(File.shared == token)).scalars().first()
+        if f:
+            owner = db.get(Account, f.owner_id)
+            links.append({"token": token, "item": f.name, "type": "file", "owner": owner.name if owner else "?"})
+            continue
+        d = db.execute(select(Folder).where(Folder.shared == token)).scalars().first()
+        if d:
+            owner = db.get(Account, d.owner_id)
+            links.append({"token": token, "item": d.name, "type": "folder", "owner": owner.name if owner else "?"})
+    return {"links": links}
