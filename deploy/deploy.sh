@@ -6,6 +6,11 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SUDO=""
+if [ "$(id -u)" != "0" ]; then
+  command -v sudo >/dev/null 2>&1 || { echo "需要 root 或 sudo"; exit 1; }
+  SUDO=sudo
+fi
 MODE=""
 FORCE=0
 while [ $# -gt 0 ]; do
@@ -41,7 +46,7 @@ yesno_or() { case "${1:-Y}" in [Yy]*) return 0 ;; *) return 1 ;; esac; }
 
 check_deps() {
   local missing=0
-  for c in docker git nginx openssl; do
+  for c in git nginx openssl; do
     command -v "$c" >/dev/null || { echo "缺少相依: $c"; missing=1; }
   done
   command -v uv >/dev/null || { echo "缺少相依: uv (https://docs.astral.sh/uv/)"; missing=1; }
@@ -91,6 +96,13 @@ ADMIN_USERNAME=$(ask "管理員帳號" "meowadmin")
 ADMIN_EMAIL=$(ask "管理員 email" "admin@localhost.local")
 ADMIN_PASSWORD=$(ask_secret "管理密碼" "$(randpw | cut -c1-12)Aa1!@#")
 START_DB=$(ask_bool "由本腳本啟動 Docker DB/Redis?")
+DB_HOST=127.0.0.1; DB_PORT=3306; REDIS_HOST=127.0.0.1; REDIS_PORT=6379
+if [ "$MODE" = "custom" ] && ! yesno_or "$START_DB"; then
+  DB_HOST=$(ask "外部 MySQL host" "127.0.0.1")
+  DB_PORT=$(ask "外部 MySQL port" "3306")
+  REDIS_HOST=$(ask "外部 Redis host" "127.0.0.1")
+  REDIS_PORT=$(ask "外部 Redis port" "6379")
+fi
 INSTALL_NGINX=$(ask_bool "安裝 nginx 靜態站?")
 INSTALL_SYSTEMD=$(ask_bool "安裝 systemd 自啟動?")
 SMTP_HOST=""; SMTP_USER=""; SMTP_PASSWORD=""; SMTP_FROM=""
@@ -128,13 +140,13 @@ EOF
   backup_if_exists "$REPO/backend/.env"
   cat > "$REPO/backend/.env" <<EOF
 APP_URL=http://127.0.0.1:$BACKEND_PORT
-DB_HOST=127.0.0.1
-DB_PORT=3306
+DB_HOST=$DB_HOST
+DB_PORT=$DB_PORT
 DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASSWORD
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
+REDIS_HOST=$REDIS_HOST
+REDIS_PORT=$REDIS_PORT
 REDIS_DB=0
 REDIS_PASSWORD=$REDIS_PASSWORD
 SHARE_TICKET_SECRET=$(randpw)
@@ -166,6 +178,7 @@ EOF
 
 start_db() {
   echo "=== 啟動 DB/Redis 容器 ==="
+  command -v docker >/dev/null 2>&1 || { echo "此模式需要 docker，但未安裝"; exit 1; }
   ( cd "$REPO/db" && docker compose up -d )
   echo "等待 MySQL 就緒..."
   for _ in $(seq 1 60); do
@@ -191,7 +204,7 @@ migrate_and_admin() {
 build_and_publish_frontend() {
   echo "=== 建置前端 ==="
   ( cd "$REPO/frontend" && pnpm install --frozen-lockfile && pnpm build )
-  sudo install -d -o "$(id -u)" -g http -m 755 /srv/meowcloud/releases
+  $SUDO install -d -o "$(id -u)" -g http -m 755 /srv/meowcloud/releases
   local dest="/srv/meowcloud/releases/$(date +%Y%m%d-%H%M%S)-deploy"
   mkdir -p "$dest" && cp -a "$REPO/frontend/dist/." "$dest/"
   ln -sfn "$dest" /srv/meowcloud/.current.tmp && mv -Tf /srv/meowcloud/.current.tmp /srv/meowcloud/current
@@ -200,15 +213,15 @@ build_and_publish_frontend() {
 
 install_nginx() {
   echo "=== 安裝 nginx 靜態站（port $STATIC_PORT）==="
-  sudo install -d -m 755 /etc/nginx/snippets
-  sudo tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null' <<EOF
+  $SUDO install -d -m 755 /etc/nginx/snippets
+  $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null' <<EOF
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
 add_header Content-Security-Policy "default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; font-src 'self' data: https://cdn.jsdelivr.net; connect-src 'self' http://127.0.0.1:$BACKEND_PORT ws://127.0.0.1:$BACKEND_PORT https://cloudflareinsights.com https://cdn.jsdelivr.net; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 EOF
-  sudo tee /etc/nginx/api-gw/spa.conf >'/dev/null' <<EOF
+  $SUDO tee /etc/nginx/api-gw/spa.conf >'/dev/null' <<EOF
 upstream meow_backend {
     server 127.0.0.1:$BACKEND_PORT;
     keepalive 64;
@@ -278,8 +291,12 @@ EOF
   if grep -q '^worker_processes  1;' /etc/nginx/nginx.conf; then
     sudo sed -i 's/^worker_processes  1;/worker_processes auto;/' /etc/nginx/nginx.conf
   fi
-  sudo nginx -t
-  if systemctl is-active --quiet nginx; then sudo systemctl reload nginx; else sudo systemctl enable --now nginx; fi
+  $SUDO nginx -t
+  if [ -d /run/systemd/system ]; then
+    if systemctl is-active --quiet nginx; then $SUDO systemctl reload nginx; else $SUDO systemctl enable --now nginx; fi
+  else
+    pgrep -x nginx >/dev/null 2>&1 && $SUDO nginx -s reload || $SUDO nginx
+  fi
   echo "nginx 完成"
 }
 
@@ -303,9 +320,13 @@ Environment=PATH=$HOME/.local/bin:$HOME/.local/share/pnpm:$node_bin:/usr/local/s
 [Install]
 WantedBy=default.target
 EOF
+  if [ ! -d /run/systemd/system ]; then
+    echo "未偵測到 systemd：unit 已寫入 $unit_dir/meowcloud.service，請手動執行 bash $REPO/deploy/meowcloud-run.sh 啟動"
+    return 0
+  fi
   systemctl --user daemon-reload
   systemctl --user enable --now meowcloud.service
-  sudo loginctl enable-linger "$(id -un)" || true
+  [ -d /run/systemd/system ] && $SUDO loginctl enable-linger "$(id -un)" || true
   echo "systemd 完成（開機/登入即自動啟動）"
 }
 
