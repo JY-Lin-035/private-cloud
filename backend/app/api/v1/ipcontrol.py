@@ -166,6 +166,10 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
         expires_at=_parse_abs_expires(payload.expires_at) if payload.expires_at else (
             (datetime.utcnow() + timedelta(hours=payload.expires_in_hours)) if payload.expires_in_hours else None),
     )
+    if rule.direction == "up":
+        rule.download_kbps = None
+    elif rule.direction == "down":
+        rule.upload_kbps = None
     db.add(rule)
     db.commit()
     sec.invalidate_rules_cache()
@@ -206,6 +210,11 @@ async def admin_update(rule_id: int, payload: ControlUpdate, request: Request, d
         rule.reason = payload.reason
     if rule.action == "block":
         rule.delay_ms = 0
+    # bandwidth must follow the final direction (no stale values)
+    if rule.direction == "up":
+        rule.download_kbps = None
+    elif rule.direction == "down":
+        rule.upload_kbps = None
     rule.auto = False  # manual edit takes ownership of an auto rule
     db.commit()
     sec.invalidate_rules_cache()

@@ -176,3 +176,23 @@ class TestToggleEnableKick:
         assert r["enabled"] is False
         redis.delete.assert_any_call("session:5")
         redis.delete.assert_any_call("session_data:5")
+
+
+class TestDirectionBandwidthHygiene:
+    def test_create_down_drops_upload_kbps(self, db):
+        rid = asyncio.run(api.admin_create(
+            payload=api.ControlCreate(subject_type="ip", ip="198.51.100.5",
+                                      direction="down", upload_kbps=999, download_kbps=321),
+            request=admin_req(), db=db))["id"]
+        rule = db.get(IpControl, rid)
+        assert rule.upload_kbps is None and rule.download_kbps == 321
+
+    def test_update_direction_clears_stale_kbps(self, db):
+        rid = asyncio.run(api.admin_create(
+            payload=api.ControlCreate(subject_type="ip", ip="198.51.100.6",
+                                      direction="both", upload_kbps=100, download_kbps=200),
+            request=admin_req(), db=db))["id"]
+        assert db.get(IpControl, rid).download_kbps == 200
+        asyncio.run(api.admin_update(rid, api.ControlUpdate(direction="up"), request=admin_req(), db=db))
+        rule = db.get(IpControl, rid)
+        assert rule.direction == "up" and rule.download_kbps is None and rule.upload_kbps == 100
