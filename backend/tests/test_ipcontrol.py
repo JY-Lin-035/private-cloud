@@ -133,3 +133,46 @@ class TestMatchRules:
     def test_mask_ip(self):
         assert sec.mask_ip("122.116.64.99") == "122.xx.xx.99"
         assert "xx" in sec.mask_ip("fd7a:115c:a1e0::1234")
+
+
+class TestAlertPrivacy:
+    def test_alert_body_has_no_storage_hints(self, monkeypatch):
+        sent = {}
+        def cap(subject, body):
+            sent['subject'] = subject; sent['body'] = body
+        monkeypatch.setattr(sec, "_send_alert", cap)
+        # bypass 10-min cooldown
+        from unittest.mock import patch
+        real_client = sec._client
+        fake = MagicMock()
+        fake.get.return_value = None
+        fake.incr.return_value = 0
+        fake.delete.return_value = 1
+        fake.setex.return_value = True
+        sec._redis = fake
+        try:
+            sec._alert("pw_lock", "1.2.3.4", "someuser", "tgt", "detail", "全站 429")
+        finally:
+            sec._redis = None
+        body = sent.get('body', '')
+        for banned in ('security.log', 'log', '伺服器', 'server'):
+            assert banned not in body, f'alert body 不应包含 {banned}'
+        assert '1.2.3.4' not in body  # full IP must never appear
+        assert '1.xx.xx.4' in sent['subject'] or '1.2.3.4' not in sent['subject']
+
+class TestToggleEnableKick:
+    def test_disable_kills_session(self, db):
+        import asyncio as _a
+        from app.api.v1 import accounts as acc
+        t = db.query(Account).filter(Account.name == "target").first()
+        t.enable = True
+        db.commit()
+        req = MagicMock()
+        req.state.user = {"identity": Identity.ADMIN, "id": 1}
+        req.state.user_id = 1
+        req.client.host = "9.9.9.9"
+        redis = MagicMock()
+        r = _a.run(acc.admin_toggle_enable(request=req, user_id=5, db=db, redis_client=redis))
+        assert r["enabled"] is False
+        redis.delete.assert_any_call("session:5")
+        redis.delete.assert_any_call("session_data:5")

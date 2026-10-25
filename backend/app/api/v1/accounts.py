@@ -503,6 +503,12 @@ async def admin_toggle_enable(
         raise HTTPException(status_code=403, detail="Cannot disable admin user")
     account.enable = not account.enable
     db.commit()
+    if not account.enable:
+        redis_client.delete(f"session:{user_id}")
+        redis_client.delete(f"session_data:{user_id}")
+        from app.utils.security_log import write_event
+        write_event("account_suspend", request.client.host if request.client else None,
+                    str(getattr(request.state, "user_id", "?")), account.name, "admin 開關停用，session 已失效")
     return {"enabled": account.enable}
 
 

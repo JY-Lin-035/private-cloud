@@ -25,6 +25,18 @@ router = APIRouter(prefix="/api/ipcontrol", tags=["ipcontrol"])
 logger = log.get_logger("ipcontrol_api.log")
 
 
+def _parse_abs_expires(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="到期時間格式不正確")
+    if dt.tzinfo is not None:
+        dt = (dt - dt.utcoffset()).replace(tzinfo=None)
+    return dt
+
+
 class ControlCreate(BaseModel):
     subject_type: str  # ip | ip_token | user
     ip: Optional[str] = None
@@ -37,6 +49,7 @@ class ControlCreate(BaseModel):
     upload_kbps: Optional[int] = None
     download_kbps: Optional[int] = None
     expires_in_hours: Optional[int] = None  # None = indefinite
+    expires_at: Optional[str] = None        # absolute local datetime, beats expires_in_hours
     reason: Optional[str] = None
 
 
@@ -48,6 +61,7 @@ class ControlUpdate(BaseModel):
     upload_kbps: Optional[int] = None
     download_kbps: Optional[int] = None
     expires_in_hours: Optional[int] = -1  # -1 = keep, null -> set indefinite
+    expires_at: Optional[str] = None      # absolute local datetime, beats expires_in_hours
     reason: Optional[str] = None
 
 
@@ -149,7 +163,8 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
         download_kbps=payload.download_kbps if payload.download_kbps is not None else (
             settings.SEC_DEFAULT_DOWNLOAD_KBPS if payload.direction in ("down", "both") else None),
         reason=payload.reason, auto=False, created_by=admin.get("id"),
-        expires_at=(datetime.utcnow() + timedelta(hours=payload.expires_in_hours)) if payload.expires_in_hours else None,
+        expires_at=_parse_abs_expires(payload.expires_at) if payload.expires_at else (
+            (datetime.utcnow() + timedelta(hours=payload.expires_in_hours)) if payload.expires_in_hours else None),
     )
     db.add(rule)
     db.commit()
@@ -183,7 +198,9 @@ async def admin_update(rule_id: int, payload: ControlUpdate, request: Request, d
         rule.upload_kbps = max(16, min(payload.upload_kbps, 1_000_000))
     if payload.download_kbps is not None:
         rule.download_kbps = max(16, min(payload.download_kbps, 1_000_000))
-    if payload.expires_in_hours != -1:
+    if payload.expires_at:
+        rule.expires_at = _parse_abs_expires(payload.expires_at)
+    elif payload.expires_in_hours != -1:
         rule.expires_at = (datetime.utcnow() + timedelta(hours=payload.expires_in_hours)) if payload.expires_in_hours else None
     if payload.reason is not None:
         rule.reason = payload.reason

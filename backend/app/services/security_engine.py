@@ -80,7 +80,7 @@ def _send_alert(subject, body):
     r.setex("alert:cooldown", ALERT_COOLDOWN_S, "1")
     pending = int(r.get("alert:pending") or 0)
     if pending:
-        body += f"\n（冷卻期間另有 {pending} 件事件，明細見 security.log）"
+        body += f"\n（冷卻期間另有 {pending} 件事件）"
         r.delete("alert:pending")
     try:
         from app.tasks.email_tasks import send_security_alert_task
@@ -100,8 +100,7 @@ def _alert(kind, ip, actor, target, detail, action_taken=""):
         f"目標: {target or '-'}\n"
         f"明細: {detail}\n"
         f"已採取動作: {action_taken or '僅記錄'}\n"
-        f"\n完整未遮罩資料見伺服器 /security.log（依政策不經郵件傳輸）。\n"
-        f"處置建議: 至後台「IP Management」檢視該來源，必要時升級為全站限速或 block。"
+        f"\n處置建議: 至後台「IP Management」檢視該來源，必要時升級為全站限速或 block。"
     )
     _send_alert(subject, body)
 
