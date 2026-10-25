@@ -258,7 +258,7 @@ async def reset_password(
 
 
 @router.get("/checkSession")
-async def check_session(request: Request):
+async def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
     """Check if user session is valid and return user data. Returns anonymous if not logged in."""
     try:
         session_token = request.cookies.get('session')
@@ -276,37 +276,33 @@ async def check_session(request: Request):
             return {"authenticated": False}
         
         # Check Redis
-        redis_client = Redis.from_url(settings.REDIS_URL)
-        try:
-            stored_token = redis_client.get(f"session:{user_id}")
-            if not stored_token:
-                return {"authenticated": False}
-            if isinstance(stored_token, bytes):
-                stored_token = stored_token.decode()
-            if stored_token != session_token:
-                return {"authenticated": False}
-                
-            user_data = redis_client.get(f"session_data:{user_id}")
-            if not user_data:
-                return {"authenticated": False}
-            if isinstance(user_data, bytes):
-                user_data = user_data.decode()
-            user_dict = json.loads(user_data)
-            
-            # Extend session
-            redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-            redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-            
-            logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
-            return {
-                "authenticated": True,
-                "id": user_dict.get("user_id"),
-                "username": user_dict.get("username"),
-                "email": user_dict.get("email"),
-                "identity": user_dict.get("identity")
-            }
-        finally:
-            redis_client.close()
+        stored_token = redis_client.get(f"session:{user_id}")
+        if not stored_token:
+            return {"authenticated": False}
+        if isinstance(stored_token, bytes):
+            stored_token = stored_token.decode()
+        if stored_token != session_token:
+            return {"authenticated": False}
+
+        user_data = redis_client.get(f"session_data:{user_id}")
+        if not user_data:
+            return {"authenticated": False}
+        if isinstance(user_data, bytes):
+            user_data = user_data.decode()
+        user_dict = json.loads(user_data)
+
+        # Extend session
+        redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+        redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+
+        logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
+        return {
+            "authenticated": True,
+            "id": user_dict.get("user_id"),
+            "username": user_dict.get("username"),
+            "email": user_dict.get("email"),
+            "identity": user_dict.get("identity")
+        }
     except Exception as e:
         logger.error(f"Check session endpoint error: {e}")
         return {"authenticated": False}

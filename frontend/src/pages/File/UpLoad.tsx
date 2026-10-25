@@ -64,7 +64,10 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       withCredentials: true,
       allowedMetaFields: ['name', 'type'],
       headers: (file) => {
-        const relativePath = (file.data as File)?.webkitRelativePath || '';
+        // 按鈕選資料夾時路徑在 data.webkitRelativePath；拖曳資料夾時 Uppy 放在 meta.relativePath
+        const relativePath = (file.meta as any)?.relativePath
+          || (file.data as File)?.webkitRelativePath
+          || '';
         const metadata = [
           `filename ${encodeTusMetadata(file.name || 'unknown')}`,
           `filetype ${encodeTusMetadata(file.type || 'application/octet-stream')}`,

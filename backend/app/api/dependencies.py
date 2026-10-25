@@ -19,13 +19,15 @@ def get_db():
         db.close()
 
 
+_shared_redis = None
+
+
 def get_redis():
-    """Get Redis client."""
-    redis_client = Redis.from_url(settings.REDIS_URL)
-    try:
-        yield redis_client
-    finally:
-        redis_client.close()
+    """Get shared Redis client (connection pool reused across requests)."""
+    global _shared_redis
+    if _shared_redis is None:
+        _shared_redis = Redis.from_url(settings.REDIS_URL)
+    yield _shared_redis
 
 
 def get_email_service(redis_client: Redis = Depends(get_redis)):
