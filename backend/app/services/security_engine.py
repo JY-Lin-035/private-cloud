@@ -21,7 +21,20 @@ WEIGHTS = {
     "login_fail": 1,
     "quota_change": 0,
 }
-AUTH_KINDS = {"pw_lock", "admin_probe"}
+AUTH_KINDS = {"pw_lock", "admin_probe", "login_fail"}
+# rate_limit events aimed at these endpoints are credential/abuse probing
+# (throttling transfers would be a painless punishment), so they score in the
+# auth pool which escalates straight to a full-site block.
+AUTH_ENDPOINTS = (
+    "/api/accounts/login", "/api/accounts/register", "/api/accounts/getCode",
+    "/api/accounts/resetPW", "/api/accounts/verifyEmail", "/api/share/verifyPassword",
+)
+# Only kinds whose actor is the *authenticated* account may lead to account
+# disabling; login_fail carries an attempted username and must never disable
+# (attackers could get a victim's account killed by guessing its name).
+DISABLE_ATTESTED_KINDS = {"admin_probe"}
+# Escalation ladder: strike # -> block hours; None = permanent (expires_at NULL)
+STRIKE_HOURS = (1, 3, 6, 12, 24, 72)
 STAGE_TTL = 3 * 3600
 SCORE_TTL = 3600
 ALERT_COOLDOWN_S = 600
@@ -206,13 +219,21 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
         else:
             q = q.where(IpControl.ip == subject["ip"], IpControl.token.is_(None))
         existing = db.execute(q).scalars().first()
-        expires = datetime.utcnow() + timedelta(hours=hours)
+        expires_new = None if hours is None else datetime.utcnow() + timedelta(hours=hours)
         if existing:
-            changed = existing.action != action or (existing.expires_at and existing.expires_at < expires)
+            if existing.expires_at is None:
+                return False  # permanent rules are terminal; only admins lift them
+            if existing.action == "block" and action == "slow":
+                return False  # never downgrade an active block to slow
+            changed = (
+                existing.action != action
+                or expires_new is None
+                or (existing.expires_at is not None and existing.expires_at < expires_new)
+            )
             existing.action = action
             existing.scope = scope
             existing.direction = direction
-            existing.expires_at = expires
+            existing.expires_at = expires_new
             if action == "slow":
                 if direction in ("up", "both"):
                     existing.delay_ms = settings.SEC_DEFAULT_UPLOAD_DELAY_MS
@@ -231,7 +252,7 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
             delay_ms=settings.SEC_DEFAULT_UPLOAD_DELAY_MS if direction in ("up", "both") else settings.SEC_DEFAULT_DOWNLOAD_DELAY_MS,
             upload_kbps=settings.SEC_DEFAULT_UPLOAD_KBPS if direction in ("up", "both") else None,
             download_kbps=settings.SEC_DEFAULT_DOWNLOAD_KBPS if direction in ("down", "both") else None,
-            reason="自動觸發（積分/流量閾值）", auto=True, expires_at=expires,
+            reason="自動觸發（積分/流量閾值）", auto=True, expires_at=None if hours is None else expires_new,
         ))
         db.commit()
         return True
@@ -248,7 +269,9 @@ def record_event(kind, ip, actor=None, target=None, detail=""):
         weight = WEIGHTS.get(kind)
         if weight and ip:
             r = _client()
-            if kind in AUTH_KINDS:
+            is_auth = kind in AUTH_KINDS or (
+                kind == "rate_limit" and any(str(target or "").startswith(p) for p in AUTH_ENDPOINTS))
+            if is_auth:
                 score_a = _incr_ttl(r, f"secScoreA:{ip}", weight, SCORE_TTL)
                 if score_a >= settings.SEC_SCORE_BLOCK_THRESHOLD:
                     _escalate_to_block(r, ip, actor, kind, score_a, detail)
@@ -269,11 +292,49 @@ def record_event(kind, ip, actor=None, target=None, detail=""):
 def _escalate_to_block(r, ip, actor, kind, score, detail):
     strikes = r.incr(f"secStrikes:{ip}")
     r.expire(f"secStrikes:{ip}", 7 * 24 * 3600)
-    hours = {1: 6, 2: 24}.get(strikes, 72)
-    _ensure_auto_rule(r, {"ip": ip}, "block", "full", "both", hours)
+    # One escalation per completed violation episode: clear both score buckets
+    # so the remaining events of the same burst cannot march up the ladder twice.
+    r.delete(f"secScoreA:{ip}")
+    r.delete(f"secScore:{ip}")
+    hours = STRIKE_HOURS[strikes - 1] if strikes <= len(STRIKE_HOURS) else None
+    changed = _ensure_auto_rule(r, {"ip": ip}, "block", "full", "both", hours)
+    if not changed:
+        return  # already at the same-or-harsher punishment — no duplicate alerts
     r.setex(f"secStage:{ip}", STAGE_TTL, "2")
     invalidate_rules_cache()
-    _alert(kind, ip, actor, "", f"{detail}｜積分 {score}", f"全站 429 冷卻 {hours} 小時（第 {strikes} 次）")
+    extra = ""
+    if hours is None and kind in DISABLE_ATTESTED_KINDS and actor:
+        extra = _disable_account(actor)
+    label = "永久" if hours is None else f"{hours} 小時"
+    _alert(kind, ip, actor, "", f"{detail}｜積分 {score}",
+           f"全站 429 冷卻 {label}（第 {strikes} 次）{extra}")
+
+
+def _disable_account(username):
+    """Terminal sanction for an authenticated account that kept abusing the
+    platform (e.g. probing admin endpoints). Disables it and kills sessions."""
+    try:
+        from sqlalchemy import select
+        from app.database import SessionLocal
+        from app.models.account import Account
+        db = SessionLocal()
+        try:
+            acct = db.execute(select(Account).where(Account.name == username)).scalars().first()
+            if not acct or not acct.enable:
+                return ""
+            acct.enable = False
+            db.commit()
+            uid = acct.id
+        finally:
+            db.close()
+        r = _client()
+        r.delete(f"session:{uid}")
+        r.delete(f"session_data:{uid}")
+        write_event("account_disabled", None, username, None, "累積違規達頂端處置")
+        invalidate_rules_cache()
+        return f"，並停用帳號 {username}"
+    except Exception:
+        return ""
 
 
 def record_admin(kind, ip, actor, target, detail=""):
