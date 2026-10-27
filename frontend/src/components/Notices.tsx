@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { validateDisplayName, MAX_NAME_LENGTH } from '../utils/nameValidation';
 
 interface NoticesProps {
   inputShow?: boolean;
@@ -27,7 +28,8 @@ function Notices({
     setLocalFolderName(folderName);
   }, [folderName]);
 
-  const valFolderName = useMemo(() => /^[A-Za-z0-9\p{Script=Han}]{1,30}$/u.test(localFolderName), [localFolderName]);
+  const folderNameError = useMemo(() => validateDisplayName(localFolderName), [localFolderName]);
+  const valFolderName = folderNameError === null;
 
   function handleBT() {
     if (inputShow) {
@@ -93,12 +95,13 @@ function Notices({
                       onUpdateFolderName?.(e.target.value);
                     }}
                     placeholder="請輸入資料夾名稱"
+                    maxLength={MAX_NAME_LENGTH}
                     className="w-full px-3 py-2 mt-6 mb-6 border rounded bg-white text-gray-900 border-gray-300"
                   />
 
                   {!valFolderName && localFolderName !== '' && (
                     <p className="text-red-500 text-[1.5rem]">
-                      *僅接受中、英、數，不接受任何符號，且以 30 字元為限
+                      *{folderNameError}
                     </p>
                   )}
                 </>

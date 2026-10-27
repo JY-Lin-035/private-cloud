@@ -34,10 +34,9 @@ class HTTPStatus(IntEnum):
 
 
 class FolderValidation:
-    """Folder name validation constants."""
+    """Folder name validation constants (rules live in app.utils.name_validation)."""
     MIN_LENGTH = 1
-    MAX_LENGTH = 30
-    PATTERN = r'^[A-Za-z0-9\u4e00-\u9fa5\s\-_\.]+$'
+    MAX_LENGTH = 255
 
 
 class FileValidation:

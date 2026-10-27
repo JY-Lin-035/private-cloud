@@ -8,6 +8,7 @@ let items: string[] = [];
 let subscribers = new Set<Listener>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let started = false;
+let visible = true;
 
 function notify() {
   subscribers.forEach(fn => fn(items));
@@ -28,14 +29,29 @@ async function refresh() {
   }
 }
 
+function tick() {
+  if (visible) {
+    void refresh();
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    visible = document.visibilityState === 'visible';
+    if (visible && started) {
+      void refresh();
+    }
+  });
+}
+
 /** Start polling (idempotent). Call when a ticker becomes visible. */
 export function startAnnouncementPolling() {
   if (!started) {
     started = true;
-    refresh();
+    void refresh();
   }
   if (!timer) {
-    timer = setInterval(refresh, POLL_MS);
+    timer = setInterval(tick, POLL_MS);
   }
 }
 

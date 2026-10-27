@@ -121,13 +121,10 @@ class FileService:
             return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _validate_upload_filename(self, filename: str) -> bool:
-        """Validate a filename for upload safety."""
-        return not (
-            '..' in filename
-            or filename.startswith('.')
-            or filename.startswith('/')
-            or filename.startswith('\\')
-        )
+        """Validate a filename for upload safety (shared denylist)."""
+        from app.utils.name_validation import validate_display_name
+        _, error = validate_display_name(filename)
+        return error is None
 
     def _get_tus_upload_dir(self, upload_id: str) -> str:
         """Return the temporary tus upload directory for an upload id."""
@@ -348,7 +345,7 @@ class FileService:
 
             # Validate filename
             filename = file.filename
-            if '..' in filename or filename.startswith('.') or filename.startswith('/') or filename.startswith('\\'):
+            if not self._validate_upload_filename(filename):
                 return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
 
             # Check if file with same name exists in same location

@@ -11,10 +11,21 @@ logger = log.get_logger("session_middleware.log")
 
 
 class SessionMiddleware(BaseHTTPMiddleware):
+    # Read-only, background-polled endpoints that authenticate the session but
+    # must never slide its expiry forward. Keeping these out of the renewal path
+    # is what makes an idle (but open) tab expire as designed.
+    NO_RENEW_PATHS = ('/api/announcements',)
+
     def __init__(self, app, redis_client: Redis):
         super().__init__(app)
         self.redis = redis_client
-    
+
+    def _is_no_renew(self, request: Request) -> bool:
+        return (
+            request.method == 'GET'
+            and any(request.url.path.startswith(p) for p in self.NO_RENEW_PATHS)
+        )
+
     async def dispatch(self, request: Request, call_next):
         # Skip session validation for public endpoints
         public_paths = ['/api/accounts/login', '/api/accounts/register', '/api/accounts/getCode', '/api/accounts/verifyEmail', '/api/accounts/resetPW', '/api/accounts/checkSession', '/api/accounts/settings/public', '/api/email/verify/', '/api/share/downloadFile', '/api/share/downloadFolder', '/api/share/downloadItems', '/api/share/browse', '/api/share/status', '/api/share/verifyPassword', '/api/files/download', '/ws/collab/']
@@ -78,9 +89,13 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 logger.info(f"Session middleware - User data not found in Redis, user_id: {user_id}")
                 return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
-            # Extend session expiration
-            self.redis.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-            self.redis.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            # Extend session expiration.
+            # Passive background-polling endpoints (the announcement ticker) must NOT
+            # keep a session alive, otherwise an idle-but-open tab would never expire.
+            # Real user interactions still slide the window forward as before.
+            if not self._is_no_renew(request):
+                self.redis.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+                self.redis.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
         else:
             logger.info(f"Session middleware - No session cookie provided, path: {request.url.path}")
         
@@ -88,7 +103,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         
         # Set session cookie if user is authenticated
-        if session_token and hasattr(request.state, 'user'):
+        if session_token and hasattr(request.state, 'user') and not self._is_no_renew(request):
                     response.set_cookie(
                         key='session',
                         value=session_token,

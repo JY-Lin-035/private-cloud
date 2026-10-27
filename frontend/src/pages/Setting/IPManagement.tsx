@@ -149,8 +149,8 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
       <div aria-hidden className="hidden md:block" />
       {f.subject_type === 'ip_token' && (
         <label className={labCls + ' md:col-span-2'}>
-          連結 token（分享網址 /share/ 之後的末段）
-          <input className={inputCls} disabled={subjectFixed} placeholder="例：3c7ee64910881deb532786d989a22b12"
+          連結
+          <input className={inputCls} disabled={subjectFixed}
             value={f.token} onChange={e => set({ token: e.target.value })} />
         </label>
       )}
@@ -204,7 +204,7 @@ function IPManagement({ layoutClass = "" }: Props) {
 
   function validate(f: FormState): string | null {
     if (f.subject_type !== 'user' && !f.ip.trim()) return '請輸入 IP';
-    if (f.subject_type === 'ip_token' && f.token.trim().length < 8) return '請輸入完整的連結 token（至少 8 字）';
+    if (f.subject_type === 'ip_token' && f.token.trim().length < 8) return '請輸入完整的連結（至少 8 字）';
     if (f.subject_type === 'user' && !f.username.trim()) return '請輸入帳號名稱';
     if (f.hours === 'custom' && !f.customAt) return '請選擇自定義到期時間';
     return null;
@@ -337,10 +337,10 @@ function IPManagement({ layoutClass = "" }: Props) {
                       {hotLinks.map(h => (
                         <button key={h.token} type="button" onClick={() => setF({ token: h.token })}
                           className="text-left text-xs px-2 py-1.5 rounded bg-gray-700 hover:bg-cyan-900/40 cursor-pointer text-gray-200">
-                          {h.type === 'folder' ? '📁' : '📄'} {h.item}｜擁有者 {h.owner}｜<span className="text-gray-400 break-all">{h.token}</span>
+                          {h.type === 'folder' ? '📁' : '📄'} {h.item}｜擁有者 {h.owner}
                         </button>
                       ))}
-                      <span className="text-[11px] text-gray-500">點擊即可填入 token</span>
+                      <span className="text-[11px] text-gray-500">點擊即可填入</span>
                     </div>
                   )
               )}

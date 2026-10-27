@@ -1,17 +1,35 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import datetime
 from app.constants import FolderValidation
+from app.utils.name_validation import validate_display_name
+
+
+def _checked_name(value: str) -> str:
+    cleaned, error = validate_display_name(value)
+    if error:
+        raise ValueError(error)
+    return cleaned
 
 
 class CreateFolderRequest(BaseModel):
     parent_folder_uuid: Optional[str] = None
-    name: str = Field(..., min_length=FolderValidation.MIN_LENGTH, max_length=FolderValidation.MAX_LENGTH, pattern=FolderValidation.PATTERN)
+    name: str = Field(..., min_length=FolderValidation.MIN_LENGTH, max_length=FolderValidation.MAX_LENGTH)
+
+    @field_validator('name')
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        return _checked_name(v)
 
 
 class RenameFolderRequest(BaseModel):
     folder_uuid: str
-    name: str = Field(..., min_length=FolderValidation.MIN_LENGTH, max_length=FolderValidation.MAX_LENGTH, pattern=FolderValidation.PATTERN)
+    name: str = Field(..., min_length=FolderValidation.MIN_LENGTH, max_length=FolderValidation.MAX_LENGTH)
+
+    @field_validator('name')
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        return _checked_name(v)
 
 
 class DeleteFolderRequest(BaseModel):

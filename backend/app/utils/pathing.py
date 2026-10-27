@@ -1,16 +1,16 @@
 """Shared path helpers for nested uploads and moves."""
-import re
 from typing import Optional
 
+from app.utils.name_validation import validate_display_name
+
 MAX_PATH_DEPTH = 16
-_INVALID_CHARS = re.compile(r'[\x00-\x1f<>:"\\|?*]')
 
 
 def sanitize_rel_path(rel_path: str) -> tuple[list[str], Optional[str]]:
     """Split a user-supplied relative path into safe segments.
 
-    Returns (segments, error). Rejects traversal attempts, control chars and
-    excessive depth; empty segments are dropped.
+    Returns (segments, error). Rejects traversal attempts, names failing the
+    shared display-name denylist, and excessive depth; empty segments dropped.
     """
     if rel_path is None:
         return [], '缺少路徑'
@@ -24,9 +24,10 @@ def sanitize_rel_path(rel_path: str) -> tuple[list[str], Optional[str]]:
             continue
         if part in ('.', '..'):
             return [], '路徑包含不合法段落'
-        if _INVALID_CHARS.search(part) or len(part) > 255:
-            return [], f'資料夾名稱不合法: {part[:30]}'
-        segments.append(part)
+        cleaned, error = validate_display_name(part)
+        if error:
+            return [], f'名稱不合法: {part[:30]}'
+        segments.append(cleaned)
     if len(segments) > MAX_PATH_DEPTH:
         return [], f'路徑深度超過上限 {MAX_PATH_DEPTH}'
     return segments, None
