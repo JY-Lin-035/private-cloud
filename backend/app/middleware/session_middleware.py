@@ -89,13 +89,13 @@ class SessionMiddleware(BaseHTTPMiddleware):
                 logger.info(f"Session middleware - User data not found in Redis, user_id: {user_id}")
                 return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
-        # Extend session expiration.
-        # Passive background-polling endpoints (the announcement ticker) must NOT
-        # keep a session alive, otherwise an idle-but-open tab would never expire.
-        # Real user interactions still slide the window forward as before.
-        if not self._is_no_renew(request):
-            self.redis.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-            self.redis.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+            # Extend session expiration.
+            # Passive background-polling endpoints (the announcement ticker) must NOT
+            # keep a session alive, otherwise an idle-but-open tab would never expire.
+            # Real user interactions still slide the window forward as before.
+            if not self._is_no_renew(request):
+                self.redis.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
+                self.redis.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
         else:
             logger.info(f"Session middleware - No session cookie provided, path: {request.url.path}")
         
