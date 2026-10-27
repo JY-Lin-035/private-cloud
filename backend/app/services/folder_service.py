@@ -1,5 +1,4 @@
 import uuid
-import re
 import os
 from datetime import datetime, timezone, timedelta
 
@@ -18,7 +17,8 @@ from app.models.file import File
 from app.repositories.account_repository import AccountRepository
 from app.repositories.folder_repository import FolderRepository
 from app.repositories.file_repository import FileRepository
-from app.constants import FolderValidation, HTTPStatus
+from app.constants import HTTPStatus
+from app.utils.name_validation import validate_display_name
 from app.config import settings
 
 
@@ -31,9 +31,9 @@ class FolderService:
         self.storage_base_path = settings.STORAGE_BASE_PATH
     
     def _validate_folder_name(self, name: str) -> bool:
-        """Validate folder name (alphanumeric and Chinese characters only)."""
-        pattern = f'^[A-Za-z0-9\u4e00-\u9fa5\\s\\-_\\.]{{{FolderValidation.MIN_LENGTH},{FolderValidation.MAX_LENGTH}}}$'
-        return bool(re.match(pattern, name))
+        """Validate folder name against the shared denylist (symbols allowed)."""
+        _, error = validate_display_name(name)
+        return error is None
     
     def _update_parent_folder_size(self, folder_uuid: str, size_delta: int):
         """Recursively update parent folder sizes."""
