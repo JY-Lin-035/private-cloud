@@ -1,42 +1,59 @@
 import { useEffect, useState } from 'react';
 import { previewApi } from '../../api/previewApi';
-import { mediaSrc } from '../../utils/mediaCache';
+import { fileApi } from '../../api/fileApi';
 
-interface Props { uuid: string; filename: string; updatedAt?: string; }
+interface Props { uuid: string; filename: string; }
+
+const META_CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; media-src data: blob:; font-src data:;">`;
 
 /**
- * Renders HTML/SVG in a hard-sandboxed iframe. The document is fetched from
- * the /raw endpoint with a short-lived single-file token (never the session
- * cookie) and served with `CSP: sandbox` (opaque origin). We also pin the
- * iframe sandbox attribute to empty (no scripts, no same-origin) so previewed
- * markup can never reach the app, its cookies, or storage.
+ * HTML/SVG static preview. Parent fetches the document with a single-use,
+ * cookie-less token, then renders it in a srcdoc frame: the parent CSP
+ * (script-src self, no unsafe-inline) kills every inline/remote script inside,
+ * the opaque frame cannot reach app data, and no service worker is required.
  */
-const MIME_BY_EXT: Record<string, string> = { html: 'text/html', htm: 'text/html', xhtml: 'application/xhtml+xml', svg: 'image/svg+xml' };
-
-function SandboxPane({ uuid, filename, updatedAt }: Props) {
-  const [src, setSrc] = useState<string>('');
+function SandboxPane({ uuid, filename }: Props) {
+  const [doc, setDoc] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
-    previewApi.previewToken(uuid)
-      .then(async (t) => {
-        const ext = (filename.split('.').pop() || '').toLowerCase();
-        const mime = MIME_BY_EXT[ext] || 'text/plain';
-        const url = await mediaSrc(uuid, updatedAt || 'sb', mime, { sandbox: true, ptk: t.token });
-        if (live) setSrc(url);
-      })
-      .catch((e: Error) => { if (live) setErr(e.message); });
+    (async () => {
+      try {
+        const t = await previewApi.previewToken(uuid);
+        const r = await fetch(`/api/files/raw?uuid=${encodeURIComponent(uuid)}&ptk=${encodeURIComponent(t.token)}`,
+          { credentials: 'same-origin' });
+        if (!r.ok) throw new Error(`載入失敗 (${r.status})`);
+        const text = await r.text();
+        if (live) setDoc(META_CSP + text);
+      } catch (e) {
+        if (live) setErr((e as Error).message);
+      }
+    })();
     return () => { live = false; };
   }, [uuid]);
 
-  if (err) return <div className="h-full grid place-items-center text-red-400">{err}</div>;
-  if (!src) return <div className="h-full grid place-items-center text-gray-400">載入中…</div>;
+  if (err) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-gray-400 p-8">
+        <div className="text-4xl">🚫</div>
+        <p>{err}</p>
+        <button type="button" className="px-4 py-2 rounded bg-blue-600 text-white text-sm"
+          onClick={() => fileApi.download(uuid)}>下載檔案</button>
+      </div>
+    );
+  }
+  if (doc === null) return <div className="h-full grid place-items-center text-gray-400">載入中…</div>;
+
   return (
-    <div className="h-full w-full bg-white">
-      {/* sandbox="" => no scripts, no same-origin; backend also sends CSP sandbox */}
-      <iframe title={filename} src={src} sandbox="" referrerPolicy="no-referrer"
-        className="w-full h-full min-h-[70vh] border-0 bg-white" />
+    <div className="h-full flex flex-col">
+      <div className="px-3 py-1.5 bg-amber-900/40 text-amber-300 text-xs border-b border-amber-800/50 shrink-0">
+        🛡️ 沙箱預覽：以下為不受信任的檔案內容，腳本與外連已全部停用
+      </div>
+      <div className="flex-1 min-h-0 bg-white">
+        <iframe title={filename} srcDoc={doc} sandbox="" referrerPolicy="no-referrer"
+          className="w-full h-full min-h-[65vh] border-0 bg-white" />
+      </div>
     </div>
   );
 }

@@ -21,7 +21,10 @@ UPLOAD_PREFIXES = ('/api/files/tus', '/api/files/uploadFile')
 DOWNLOAD_PREFIXES = (
     '/api/files/download', '/api/files/downloadBulk', '/api/folders/download',
     '/api/share/downloadFile', '/api/share/downloadFolder', '/api/share/downloadItems',
+    '/api/files/stream', '/api/files/raw',
 )
+STREAM_PREFIXES = ('/api/files/stream',)
+NO_COUNT_PREFIXES = ('/api/files/raw',)
 SHARE_PREFIX = '/api/share/'
 
 
@@ -91,6 +94,7 @@ class ThrottleMiddleware:
             is_upload = path.startswith(UPLOAD_PREFIXES)
             is_download = path.startswith(DOWNLOAD_PREFIXES)
             is_share = path.startswith(SHARE_PREFIX)
+            is_stream = path.startswith(STREAM_PREFIXES)
 
             if ip and await asyncio.to_thread(sec.flood_exceeded, ip):
                 rh, payload = self._json_429(headers.get("origin"))
@@ -99,7 +103,7 @@ class ThrottleMiddleware:
                 return
 
             blocked, delay_ms, up_kbps, dn_kbps = await asyncio.to_thread(
-                sec.match_rules, ip, uid, is_upload, is_download, is_share)
+                sec.match_rules, ip, uid, is_upload, is_download, is_share, is_stream)
             if blocked:
                 rh, payload = self._json_429(headers.get("origin"))
                 await send({"type": "http.response.start", "status": 429, "headers": rh})
@@ -113,7 +117,8 @@ class ThrottleMiddleware:
 
             if is_upload:
                 asyncio.create_task(asyncio.to_thread(sec.count_upload, uid, ip))
-            if is_download:
+            if is_download and path not in NO_COUNT_PREFIXES and (not is_stream or not headers.get("range") or headers.get("range").strip().startswith("bytes=0-")):
+                # stream/raw seeks are not new downloads; count playback sessions once
                 if uid:
                     asyncio.create_task(asyncio.to_thread(sec.count_download, uid, ip, None))
                 elif is_share:

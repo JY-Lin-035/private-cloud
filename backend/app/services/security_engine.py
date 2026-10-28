@@ -160,21 +160,49 @@ def invalidate_rules_cache():
         _rules_cache["ts"] = 0.0
 
 
-def match_rules(ip, user_id, is_upload, is_download, is_share):
-    """Return (block, delay_ms, upload_kbps, download_kbps) merged from active rules."""
+def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
+    """Return (block, delay_ms, upload_kbps, download_kbps) merged from active rules.
+
+    Stream precedence: dedicated `stream`-scope rules own playback traffic
+    (download_kbps column carries the stream cap); while any stream rule matches,
+    transfer/down rules no longer pace streams (single pacer, independent knob).
+    Without stream rules, transfer/down falls back and covers streams too, so
+    auto escalations never leave a streaming backdoor.
+    """
     blocked = False
     delay = 0
     up_kbps = None
     dn_kbps = None
-    for r in _active_rules():
-        hit_subject = (
+
+    def _subject_hit(r):
+        return (
             (r["subject_type"] == "ip" and ip and r["ip"] == ip)
             or (r["subject_type"] == "ip_token" and ip and r["ip"] == ip and is_share)
             or (r["subject_type"] == "user" and user_id and r["user_id"] == user_id)
         )
-        if not hit_subject:
+
+    rules = _active_rules()
+    stream_governed = is_stream and any(
+        _subject_hit(r) and r["scope"] == "stream" for r in rules)
+
+    for r in rules:
+        if not _subject_hit(r):
             continue
-        is_transfer = (is_upload and r["direction"] in ("up", "both")) or (is_download and r["direction"] in ("down", "both"))
+        if r["scope"] == "stream":
+            if not is_stream:
+                continue
+            if r["action"] == "block":
+                blocked = True
+                continue
+            delay = max(delay, r["delay_ms"])
+            v = r["download_kbps"]
+            if v:
+                dn_kbps = v if dn_kbps is None else min(dn_kbps, v)
+            continue
+        is_transfer = (is_upload and r["direction"] in ("up", "both")) or \
+                      (is_download and r["direction"] in ("down", "both"))
+        if is_stream and stream_governed and r["scope"] == "transfer" and not is_upload:
+            continue  # stream handled by dedicated rules; ignore transfer down/both pacing
         if r["scope"] == "full":
             if r["action"] == "block":
                 blocked = True

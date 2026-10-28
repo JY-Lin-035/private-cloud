@@ -3,7 +3,7 @@ import { previewApi } from '../../api/previewApi';
 import EditorPane from './EditorPane';
 import MediaPane from './MediaPane';
 import SandboxPane from './SandboxPane';
-import OfficePane from './OfficePane';
+import OfficeFrame from './OfficeFrame';
 import { classify, isStreamable } from '../../utils/fileClass';
 import MarkdownPane from './MarkdownPane';
 import JsonPane from './JsonPane';
@@ -33,12 +33,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
 
   const isMedia = isStreamable(filename);
   const localCat = classify(filename);
-  const bypassContent = isMedia || localCat === 'docx' || localCat === 'office';
-  const [officeFlag, setOfficeFlag] = useState(false);
-
-  useEffect(() => {
-    previewApi.authedFlags().then((f) => setOfficeFlag(!!f?.enable_preview_office));
-  }, []);
+  const bypassContent = isMedia || localCat === 'office' || localCat === 'office-legacy';
 
   useEffect(() => {
     let live = true;
@@ -150,13 +145,13 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
       return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
     }
     if ((category === 'html' || category === 'svg') && viewMode === 'preview') {
-      return <SandboxPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'sb'} />;
+      return <SandboxPane uuid={uuid} filename={filename} />;
     }
     if (['text', 'code', 'json', 'markdown', 'html', 'svg'].includes(category)) {
       return <EditorPane filename={filename} value={text} onChange={setText} onSave={saveStable} />;
     }
-    if (category === 'docx' || category === 'office') {
-      return <OfficePane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} officeConvertEnabled={officeFlag} />;
+    if (category === 'office' || category === 'office-legacy') {
+      return <OfficeFrame uuid={uuid} filename={filename} size={meta?.size || 0} />;
     }
     return <FallbackPane filename={filename} />;
   };

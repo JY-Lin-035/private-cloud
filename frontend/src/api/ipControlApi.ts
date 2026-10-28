@@ -7,7 +7,7 @@ export interface ControlRule {
   token_prefix: string | null;
   username: string | null;
   action: 'slow' | 'block';
-  scope: 'transfer' | 'full';
+  scope: 'transfer' | 'full' | 'stream';
   direction: 'up' | 'down' | 'both';
   delay_ms: number;
   upload_kbps: number | null;

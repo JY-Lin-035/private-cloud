@@ -1,3 +1,20 @@
+// True once THIS document is controlled by the media SW (active alone is not
+// enough — iframe subresource requests only route through an controlling SW).
+export async function swControlsDocument(): Promise<boolean> {
+  if (!('serviceWorker' in navigator)) return false;
+  if (navigator.serviceWorker.controller) return true;
+  const ok = await registerMediaSW();
+  if (!ok) return false;
+  if (navigator.serviceWorker.controller) return true;
+  return new Promise((res) => {
+    const t = setTimeout(() => res(!!navigator.serviceWorker.controller), 3000);
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      clearTimeout(t);
+      res(true);
+    }, { once: true });
+  });
+}
+
 // Client glue for the /__media service worker (P2 media cache).
 import { API_BASE_URL } from '../config/api';
 
@@ -35,7 +52,7 @@ export async function registerMediaSW(): Promise<boolean> {
   }
   inflight = (async () => {
     try {
-      const url = `/sw.js?api=${encodeURIComponent(API_BASE_URL)}&s=${__BUILD_TS__}`;
+      const url = `/meow-sw.js?api=${encodeURIComponent(API_BASE_URL)}&s=${__BUILD_TS__}`;
       await navigator.serviceWorker.register(url, { scope: '/' });
       await navigator.serviceWorker.ready;
       navigator.serviceWorker.addEventListener('message', (e) => {
@@ -57,14 +74,11 @@ export async function registerMediaSW(): Promise<boolean> {
   return inflight;
 }
 
-export async function mediaSrc(uuid: string, updatedAt: string, mime?: string,
-                               opts?: { conv?: boolean; sandbox?: boolean; ptk?: string }): Promise<string> {
+export async function mediaSrc(uuid: string, updatedAt: string, mime?: string): Promise<string> {
   const uid = await currentUid();
   const v = encodeURIComponent((updatedAt || '0').replace(/[^0-9A-Za-z:-]/g, ''));
   const m = mime ? `&m=${encodeURIComponent(mime)}` : '';
-  const ch = opts?.sandbox ? '&c=2' : (opts?.conv ? '&c=1' : '');
-  const p = opts?.ptk ? `&ptk=${encodeURIComponent(opts.ptk)}` : '';
-  return `/__media/${uid}/${uuid}?v=${v}${m}${ch}${p}`;
+  return `/__media/${uid}/${uuid}?v=${v}${m}`;
 }
 
 declare global { interface Window { __swTrace?: string[] } }

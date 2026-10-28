@@ -27,6 +27,11 @@ export const fileApi = {
     return response.data;
   },
 
+  downloadToken: async (file_uuid: string) => {
+    const response = await api.get('/api/files/downloadToken', { params: { file_uuid } });
+    return response.data as { token: string; file_uuid: string; expires_in: number };
+  },
+
   // Download file
   download: async (file_uuid: string) => {
     const response = await api.get('/api/files/downloadToken', {

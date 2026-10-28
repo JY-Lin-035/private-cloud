@@ -764,7 +764,6 @@ import re as _re
 from fastapi.responses import StreamingResponse
 
 from app.utils.file_classes import is_streamable
-from app.services import security_engine
 
 _STREAM_CHUNK = 64 * 1024
 _RANGE_RE = _re.compile(r'bytes=(\d*)-(\d*)$')
@@ -782,7 +781,7 @@ def _load_streamable(db: Session, user_id: int, file_uuid: str) -> FileModel:
     return f
 
 
-@router.get("/stream")
+@router.get("/stream", dependencies=[Depends(rate_limit(300, 60))])
 async def stream_file(
     request: Request,
     uuid: str,
@@ -790,21 +789,14 @@ async def stream_file(
     redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id),
 ):
-    """Authenticated Range-capable inline stream for media/pdf (single range)."""
+    """Authenticated Range-capable inline stream for media/pdf (single range).
+
+    Download/session accounting and throttle classification live in the
+    middleware layer (stream-aware), keeping one source of truth here.
+    """
     _require_preview_flag()
     batch_ops.assert_not_deleting(redis, uuid)
     f = _load_streamable(db, user_id, uuid)
-    ip = request.client.host if request.client else None
-    username = None
-    try:
-        if hasattr(request.state, "user"):
-            username = request.state.user.get("username")
-        security_engine.count_download(user_id, ip, username=username)
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-
     path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
     size = _os.path.getsize(path)
     etag = f'"{f.uuid}-{int(f.updated_at.timestamp()) if f.updated_at else 0}"'

@@ -1,7 +1,7 @@
 import { API_BASE_URL } from '../../config/api';
 import { useEffect, useRef, useState } from 'react';
 import { classify, extOf } from '../../utils/fileClass';
-import { mediaSrc, registerMediaSW, onMediaCacheEvent, purgeMediaCache } from '../../utils/mediaCache';
+import { mediaSrc, swControlsDocument, onMediaCacheEvent, purgeMediaCache } from '../../utils/mediaCache';
 
 interface Props {
   uuid: string;
@@ -13,6 +13,8 @@ interface Props {
 /** Media/image/pdf inline player backed by the /__media service worker cache. */
 function MediaPane({ uuid, filename, updatedAt, size }: Props) {
   const cat = classify(filename);
+  const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  const pdfFallback = cat === 'pdf' && isMobile;
   const [cacheState, setCacheState] = useState<'idle' | 'warming' | 'cached' | 'skip'>('idle');
   const [skipReason, setSkipReason] = useState('');
   const [unsupported, setUnsupported] = useState(false);
@@ -20,7 +22,7 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    registerMediaSW().then((ok) => { setUnsupported(!ok); setSwReady(true); });
+    void swControlsDocument().then((ok) => { setUnsupported(!ok); setSwReady(true); });
     const off = onMediaCacheEvent((ev) => {
       if (ev.uuid !== uuid) return;
       if (ev.type === 'media-cached') setCacheState('cached');
@@ -46,6 +48,26 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
     else { void mediaSrc(uuid, updatedAt, mime).then(setSrc); }
   }, [unsupported, uuid, updatedAt, mime]);
   if (!swReady) return <div className="h-full flex items-center justify-center text-gray-400">初始化媒體快取…</div>;
+  if (pdfFallback) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-gray-300 p-8 text-center bg-gray-900">
+        <div className="text-5xl">📄</div>
+        <p className="text-lg">此瀏覽器無法內嵌預覽 PDF</p>
+        <p className="text-sm break-all max-w-md text-gray-500">{filename}</p>
+        <div className="flex gap-3 mt-2">
+          <button type="button" className="px-4 py-2 rounded bg-blue-600 text-white text-sm"
+            onClick={() => window.open(src || '', '_blank', 'noopener')}>新視窗開啟</button>
+          <button type="button" className="px-4 py-2 rounded bg-gray-700 text-white text-sm"
+            onClick={() => fetch(src, { credentials: 'include' }).then(async (r) => {
+              const b = await r.blob(); const u = URL.createObjectURL(b);
+              const a = document.createElement('a'); a.href = u; a.download = filename;
+              document.body.appendChild(a); a.click(); a.remove();
+              setTimeout(() => URL.revokeObjectURL(u), 30000);
+            })}>下載檔案</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div ref={ref} className="h-full flex flex-col bg-black">

@@ -19,12 +19,12 @@ const IMAGE = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'ico'
 const VIDEO = new Set(['mp4', 'm4v', 'webm', 'ogv', 'mov']);
 const AUDIO = new Set(['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'oga', 'opus']);
 const PDF = new Set(['pdf']);
-const DOCX = new Set(['docx']);
-const OFFICE = new Set(['doc', 'odt', 'rtf', 'ppt', 'pptx', 'pps', 'ppsx', 'xls', 'xlsx', 'ods', 'odp']);
+const OFFICE_CLIENT = new Set(['docx', 'pptx', 'odp', 'odt']);
+const OFFICE_OTHER = new Set(['doc', 'rtf', 'pps', 'ppsx', 'xls', 'xlsx', 'ods']);
 
 export type FileCategory =
   | 'text' | 'markdown' | 'json' | 'code' | 'html' | 'svg'
-  | 'image' | 'video' | 'audio' | 'pdf' | 'docx' | 'office' | 'other';
+  | 'image' | 'video' | 'audio' | 'pdf' | 'office' | 'office-legacy' | 'other';
 
 export function extOf(filename: string): string {
   const base = (filename || '').split('/').pop() || '';
@@ -43,8 +43,8 @@ export function classify(filename: string): FileCategory {
   if (VIDEO.has(e)) return 'video';
   if (AUDIO.has(e)) return 'audio';
   if (PDF.has(e)) return 'pdf';
-  if (DOCX.has(e)) return 'docx';
-  if (OFFICE.has(e)) return 'office';
+  if (OFFICE_CLIENT.has(e)) return 'office';
+  if (OFFICE_OTHER.has(e)) return 'office-legacy';
   return 'other';
 }
 

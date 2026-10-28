@@ -245,12 +245,11 @@ class TestAuthedFlags:
         from app.constants import HTTPStatus
         db, a, *_ = ctx
         db.add_all([
-            FeatureFlag(key="enable_file_preview", enabled=False),
-            FeatureFlag(key="enable_preview_office", enabled=True),
+            FeatureFlag(key="enable_file_preview", enabled=True),
         ]); db.commit()
         req = type("R", (), {"state": type("S", (), {"user": {"id": 1}})})()
         out = asyncio.run(settings_api.authed_settings(request=req, db=db))
-        assert out == {"enable_file_preview": False, "enable_preview_office": True}
+        assert out == {"enable_file_preview": True}
         anon = type("R", (), {"state": type("S", (), {})})()
         with pytest.raises(HTTPException) as ex:
             asyncio.run(settings_api.authed_settings(request=anon, db=db))

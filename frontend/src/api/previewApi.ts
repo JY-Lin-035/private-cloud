@@ -2,7 +2,6 @@ import { api } from './api';
 
 export interface AuthedFlags {
   enable_file_preview: boolean;
-  enable_preview_office: boolean;
 }
 
 export interface FileContent {

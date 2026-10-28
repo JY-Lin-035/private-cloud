@@ -1,8 +1,6 @@
 /* MeowCloud media/preview service worker.
  * Intercepts same-origin /__media/<uid>/<uuid>?v=<updated_at>[&c=<ch>][&m=<mime>][&ptk=<t>]
  *   c absent -> media stream, cached in OPFS (Range aware)
- *   c=1      -> office PDF conversion (LibreOffice), cached
- *   c=2      -> ephemeral sandboxed raw (HTML/SVG) — never cached, opaque CSP, cookie-less
  * Cache purge on logout / 401 / account switch via {type:'media-purge'}.
  */
 /* eslint-disable no-restricted-globals */
@@ -10,7 +8,7 @@ const swUrl = new URL(self.location.href);
 const API_BASE = swUrl.searchParams.get('api') || '';
 const MEDIA_PREFIX = '/__media/';
 const ROOT = 'meow-media';
-const SW_BUILD = 'p5-paced-11';
+const SW_BUILD = 'p10-mediaonly-18';
 
 function trace0(k, stage) {
   broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` });
@@ -100,7 +98,6 @@ function abortWarmFor(uuid) {
 }
 
 async function warm(k) {
-  if (k.ch === '2') return;
   if (warmState.running) { warmState.pending = k; warmState.pendingUuid = k.uuid; return; }
   warmState.running = true;
   warmState.pendingUuid = k.uuid;
@@ -116,10 +113,9 @@ async function warm(k) {
 async function doWarm(k) {
   try {
     if (await cachedFile(k)) return;
-    const upstream = k.ch === '1' ? '/api/files/convert' : '/api/files/stream';
     const ctrl = new AbortController();
     warmState.ctrl = ctrl;
-    const full = await fetch(`${API_BASE}${upstream}?uuid=${k.uuid}`, { credentials: 'include', signal: ctrl.signal });
+    const full = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { credentials: 'include', signal: ctrl.signal });
     if (!full.ok || !full.body) { trace0(k, 'fetch' + full.status); return; }
     const dir = await dirFor(k, true);
     const wipName = k.file + '.wip';
@@ -191,27 +187,14 @@ self.addEventListener('message', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (url.origin !== self.location.origin || !url.pathname.startsWith(MEDIA_PREFIX)) return;
+  if (url.origin !== self.location.origin) return;
+  // office host page: synthesized in-SW so nginx security headers can't block framing
+  if (!url.pathname.startsWith(MEDIA_PREFIX)) return;
   const k = keyFor(url.pathname, url.search);
   if (!k) return;
   const trace = (stage) => broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[${SW_BUILD}:${stage}]` });
 
   e.respondWith((async () => {
-    // c=2: ephemeral sandbox raw preview — cookie-less, opaque, never cached
-    if (k.ch === '2') {
-      try {
-        const r = await fetch(`${API_BASE}/api/files/raw?uuid=${k.uuid}&ptk=${encodeURIComponent(k.ptk)}`,
-          { credentials: 'omit', cache: 'no-store' });
-        const h = new Headers();
-        h.set('Content-Type', k.mime || 'text/plain');
-        h.set('Content-Security-Policy', 'sandbox allow-scripts');
-        h.set('X-Content-Type-Options', 'nosniff');
-        h.set('Cache-Control', 'no-store');
-        return new Response(r.body, { status: r.status, headers: h });
-      } catch {
-        return new Response('preview unavailable', { status: 502 });
-      }
-    }
     let hit = null;
     try { hit = await cachedFile(k); } catch { /* miss */ }
     if (hit) return rangeResponse(hit, e.request.headers.get('range'), k);
@@ -223,8 +206,7 @@ self.addEventListener('fetch', (e) => {
         if (['range', 'accept-encoding', 'accept-language', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-dest'].includes(hk)) continue;
         headers.set(hk, hv);
       }
-      const upstream = k.ch === '1' ? '/api/files/convert' : '/api/files/stream';
-      const r = await fetch(`${API_BASE}${upstream}?uuid=${k.uuid}`, { headers, credentials: 'include', cache: 'no-store', mode: 'cors' });
+      const r = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { headers, credentials: 'include', cache: 'no-store', mode: 'cors' });
       return new Response(r.body, { status: r.status, statusText: r.statusText, headers: pickHeaders(r) });
     } catch (err) {
       trace('fwd-err:' + err.name);

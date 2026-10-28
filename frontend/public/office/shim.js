@@ -1,0 +1,1 @@
+window.process=window.process||{env:{NODE_ENV:"production"},version:"",browser:true,argv:[],cwd:function(){return"/"}};window.global=window.global||globalThis;

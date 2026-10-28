@@ -38,7 +38,7 @@ import { lazy, Suspense } from 'react';
 const FileOpener = lazy(() => import('../../components/preview/FileOpener'));
 import { previewApi } from '../../api/previewApi';
 import { isEditable, isStreamable, classify } from '../../utils/fileClass';
-const openable = (n: string) => isEditable(n) || isStreamable(n) || ['docx', 'office'].includes(classify(n));
+const openable = (n: string) => isEditable(n) || isStreamable(n) || ['office', 'office-legacy'].includes(classify(n));
 
 
 

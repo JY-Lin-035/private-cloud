@@ -128,8 +128,10 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
     admin = require_admin(request)
     if payload.subject_type not in ("ip", "ip_token", "user"):
         raise HTTPException(status_code=400, detail="無效的主鍵類型")
-    if payload.action not in ("slow", "block") or payload.scope not in ("transfer", "full"):
+    if payload.action not in ("slow", "block") or payload.scope not in ("transfer", "full", "stream"):
         raise HTTPException(status_code=400, detail="無效的動作/範圍")
+    if payload.scope == "stream":
+        payload.direction = "down"  # playback is downstream-only
     if payload.direction not in ("up", "down", "both"):
         raise HTTPException(status_code=400, detail="無效的方向")
 
@@ -149,12 +151,14 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
             raise HTTPException(status_code=404, detail="找不到該帳號")
         user_id = account.id
 
+    # one row per (subject, scope): transfer / stream / full are independent knobs
     dup = db.execute(select(IpControl).where(
         IpControl.subject_type == payload.subject_type,
         IpControl.ip == ip, IpControl.token == token, IpControl.user_id == user_id,
+        IpControl.scope == payload.scope,
     )).scalars().first()
     if dup:
-        raise HTTPException(status_code=400, detail="此對象已有管控條目，請直接編輯")
+        raise HTTPException(status_code=400, detail="此對象已有同範圍管控條目，請直接編輯")
 
     rule = IpControl(
         subject_type=payload.subject_type, ip=ip, token=token, user_id=user_id, username=username,
@@ -191,7 +195,7 @@ async def admin_update(rule_id: int, payload: ControlUpdate, request: Request, d
             raise HTTPException(status_code=400, detail="無效的動作")
         rule.action = payload.action
     if payload.scope is not None:
-        if payload.scope not in ("transfer", "full"):
+        if payload.scope not in ("transfer", "full", "stream"):
             raise HTTPException(status_code=400, detail="無效的範圍")
         rule.scope = payload.scope
     if payload.direction is not None:
