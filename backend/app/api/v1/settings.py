@@ -18,6 +18,16 @@ async def public_settings(db: Session = Depends(get_db)):
     return FeatureFlagService(db).public_flags()
 
 
+@router.get("/settings/features/authed")
+async def authed_settings(request: Request, db: Session = Depends(get_db)):
+    """Feature flags for signed-in users (FileOpener gating; not public)."""
+    if not hasattr(request.state, 'user'):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    from app.services.feature_flag_service import AUTHED_FEATURE_KEYS
+    svc = FeatureFlagService(db)
+    return {k: svc.is_enabled(k, default=False) for k in AUTHED_FEATURE_KEYS}
+
+
 @router.get("/admin/settings/features")
 async def list_feature_flags(request: Request, db: Session = Depends(get_db)):
     """List all feature flags (admin only)."""

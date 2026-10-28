@@ -3,6 +3,8 @@ import { validateDisplayName, MAX_NAME_LENGTH } from '../utils/nameValidation';
 
 interface NoticesProps {
   inputShow?: boolean;
+  placeholder?: string;
+  extraValidate?: (v: string) => string | null;
   folderName?: string;
   notices: string | string[];
   showMode: boolean;
@@ -14,6 +16,8 @@ interface NoticesProps {
 
 function Notices({
   inputShow = false,
+  placeholder,
+  extraValidate,
   folderName = '',
   notices,
   showMode,
@@ -28,7 +32,11 @@ function Notices({
     setLocalFolderName(folderName);
   }, [folderName]);
 
-  const folderNameError = useMemo(() => validateDisplayName(localFolderName), [localFolderName]);
+  const folderNameError = useMemo(() => {
+    const base = validateDisplayName(localFolderName);
+    if (base) return base;
+    return extraValidate ? extraValidate(localFolderName) : null;
+  }, [localFolderName, extraValidate]);
   const valFolderName = folderNameError === null;
 
   function handleBT() {
@@ -100,7 +108,7 @@ function Notices({
                         onEmitFolderName?.();
                       }
                     }}
-                    placeholder="請輸入資料夾名稱"
+                    placeholder={placeholder ?? "請輸入資料夾名稱"}
                     maxLength={MAX_NAME_LENGTH}
                     className="w-full px-3 py-2 mt-6 mb-6 border rounded bg-white text-gray-900 border-gray-300"
                   />

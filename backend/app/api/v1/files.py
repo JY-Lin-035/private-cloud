@@ -15,6 +15,7 @@ from app.services.file_service import FileService
 from app.services.folder_service import FolderService
 from app.services import zip_service
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
+from sqlalchemy import select
 from app.api.rate_limit import rate_limit
 from app.config import settings
 from app.services import batch_ops
@@ -586,3 +587,172 @@ async def download_bulk(
     )
     logger.info(f"Bulk zip for user {user_id}: {kept_files} files, {kept_folders} folders, {len(items)} entries")
     return zip_service.build_zip_response(items, 'meowcloud-download')
+
+
+# ================= preview / create / edit (P1) =================
+import os as _os
+import uuid as _uuid
+from datetime import datetime as _dt
+
+from app.models.account import Account
+from app.models.file import File as FileModel
+from app.models.folder import Folder as FolderModel
+from app.services.feature_flag_service import is_feature_enabled
+from app.utils.file_classes import MAX_EDIT_BYTES, classify, is_editable
+from app.utils.name_validation import validate_display_name
+from app.utils.pathing import unique_name
+
+
+def _require_preview_flag():
+    if not is_feature_enabled("enable_file_preview", default=False):
+        raise HTTPException(status_code=403, detail="檔案預覽功能尚未啟用")
+
+
+def _fmt_dt(dt) -> str:
+    return dt.isoformat() if isinstance(dt, _dt) else str(dt)
+
+
+def _load_editable(db: Session, user_id: int, file_uuid: str) -> FileModel:
+    f = db.execute(
+        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+    ).scalar_one_or_none()
+    if f is None or f.deleted_at is not None or not is_editable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    return f
+
+
+class CreateFileRequest(BaseModel):
+    name: str
+    parent_folder_uuid: Optional[str] = None
+
+
+class SaveContentRequest(BaseModel):
+    uuid: str
+    text: str
+    if_updated_at: Optional[str] = None
+
+
+@router.post("/create", dependencies=[Depends(rate_limit(20, 300))])
+async def create_text_file(
+    request: CreateFileRequest,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Create a new empty editable text file in the given folder."""
+    _require_preview_flag()
+    cleaned, err = validate_display_name(request.name)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    if not is_editable(cleaned):
+        raise HTTPException(status_code=400, detail="僅支援建立文字/代碼類檔案")
+    parent_uuid = request.parent_folder_uuid or None
+    if parent_uuid:
+        parent = db.execute(
+            select(FolderModel).where(FolderModel.uuid == parent_uuid, FolderModel.owner_id == user_id)
+        ).scalar_one_or_none()
+        if parent is None or parent.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="父資料夾不存在")
+        batch_ops.assert_not_deleting(redis, parent_uuid)
+        taken = set(db.execute(
+            select(FileModel.name).where(
+                FileModel.parent_folder_id == parent_uuid, FileModel.deleted_at.is_(None))
+        ).scalars().all())
+    else:
+        taken = set(db.execute(
+            select(FileModel.name).where(
+                FileModel.parent_folder_id.is_(None), FileModel.deleted_at.is_(None))
+        ).scalars().all())
+    name = unique_name(cleaned, taken)
+    file_uuid = str(_uuid.uuid4())
+    storage_path = _os.path.join(settings.STORAGE_BASE_PATH, file_uuid)
+    try:
+        with open(storage_path, "wb"):
+            pass
+    except OSError:
+        raise HTTPException(status_code=500, detail="無法建立檔案")
+    import mimetypes
+    mime = mimetypes.guess_type(name)[0] or "text/plain"
+    row = FileModel(uuid=file_uuid, owner_id=user_id, parent_folder_id=parent_uuid,
+                    name=name, size=0, mime_type=mime, storage_path=storage_path)
+    db.add(row)
+    db.commit()
+    logger.info(f"Text file created uuid={file_uuid} by user {user_id}")
+    return {"uuid": file_uuid, "name": name, "size": 0,
+            "updated_at": _fmt_dt(row.updated_at), "category": classify(name)}
+
+
+@router.get("/content", dependencies=[Depends(rate_limit(60, 60))])
+async def get_file_content(
+    uuid: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Read a text-class file's content for the editor."""
+    _require_preview_flag()
+    f = _load_editable(db, user_id, uuid)
+    if f.size and f.size > MAX_EDIT_BYTES:
+        raise HTTPException(status_code=413, detail="檔案超過編輯上限 2MB，請下載後編輯")
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    if not _os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="檔案內容不存在")
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        raise HTTPException(status_code=500, detail="讀取失敗")
+    return {"text": raw.decode("utf-8", "replace"), "size": f.size,
+            "updated_at": _fmt_dt(f.updated_at), "name": f.name, "category": classify(f.name)}
+
+
+@router.put("/content", dependencies=[Depends(rate_limit(30, 60))])
+async def save_file_content(
+    request: SaveContentRequest,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Write editor content back atomically with quota accounting and 409 conflict guard."""
+    _require_preview_flag()
+    batch_ops.assert_not_deleting(redis, request.uuid)
+    f = _load_editable(db, user_id, request.uuid)
+    if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
+        raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
+    data = request.text.encode("utf-8")
+    if len(data) > MAX_EDIT_BYTES:
+        raise HTTPException(status_code=413, detail="內容超過編輯上限 2MB")
+    delta = len(data) - (f.size or 0)
+    if delta > 0:
+        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="帳號不存在")
+        if len(data) > acct.signal_file_size:
+            raise HTTPException(status_code=413, detail="超過單檔大小上限")
+        if (acct.used_size or 0) + delta > acct.total_file_size:
+            raise HTTPException(status_code=413, detail="空間不足，無法儲存")
+        acct.used_size = (acct.used_size or 0) + delta
+    elif delta < 0:
+        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
+        if acct:
+            acct.used_size = max(0, (acct.used_size or 0) + delta)
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            _os.fsync(fh.fileno())
+        _os.replace(tmp, path)
+    except OSError:
+        try:
+            if _os.path.exists(tmp):
+                _os.remove(tmp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="寫入失敗")
+    f.size = len(data)
+    db.commit()
+    if f.parent_folder_id and delta:
+        FolderService(db)._update_parent_folder_size(f.parent_folder_id, delta)
+    logger.info(f"Content saved uuid={f.uuid} user={user_id} delta={delta}")
+    return {"uuid": f.uuid, "size": f.size, "updated_at": _fmt_dt(f.updated_at)}

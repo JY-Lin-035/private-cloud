@@ -34,6 +34,8 @@ api.interceptors.response.use(
           error.response?.status >= 500 ? "伺服器錯誤，請稍後再試" :
             error.response?.data?.detail ?? "發生錯誤，請稍後再試";
 
-    return Promise.reject(new Error(message));
+    const wrapped: Error & { status?: number } = new Error(message);
+    wrapped.status = error.response?.status;
+    return Promise.reject(wrapped);
   }
 );

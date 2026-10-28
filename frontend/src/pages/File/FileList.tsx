@@ -31,8 +31,13 @@ import {
   ChevronLeft,
   ChevronRight,
   ListChecks,
-  FolderDown
+  FolderDown,
+  FilePlus
 } from 'lucide-react';
+import { lazy, Suspense } from 'react';
+const FileOpener = lazy(() => import('../../components/preview/FileOpener'));
+import { previewApi } from '../../api/previewApi';
+import { isEditable } from '../../utils/fileClass';
 
 
 
@@ -76,6 +81,10 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
   const [currentFolderUuid, setCurrentFolderUuid] = useState<string | null>(null);
+  const [previewOn, setPreviewOn] = useState(false);
+  const [opener, setOpener] = useState<{ uuid: string; name: string } | null>(null);
+  const [newFileModal, setNewFileModal] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
 
   // Share modal state
   const [showShareModal, setShowShareModal] = useState(false);
@@ -92,6 +101,26 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [moveOpen, setMoveOpen] = useState(false);
   const [movePath, setMovePath] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    previewApi.authedFlags().then((f) => setPreviewOn(!!f?.enable_file_preview));
+  }, []);
+
+  async function newTextFile() {
+    const name = newFileName.trim();
+    if (!name) return;
+    try {
+      const res = await previewApi.createText(name, currentFolderUuid);
+      setNewFileModal(false);
+      setNewFileName('');
+      await getFileList(currentFolderUuid);
+      setOpener({ uuid: res.uuid, name: res.name });
+    } catch (e: any) {
+      setResponse([e?.message ?? '建立失敗']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+  }
 
   async function getFileList(parent_folder_uuid: string | null) {
     try {
@@ -553,6 +582,32 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         </div>
       )}
 
+      {newFileModal && (
+        <Notices
+          inputShow
+          folderName={newFileName}
+          notices={['新建文字檔案']}
+          showMode
+          className=""
+          placeholder="例：notes.md"
+          extraValidate={(v) => (isEditable(v) ? null : '請使用支援的副檔名（.txt .md .py .json .html .css ...）')}
+          onClose={() => { setNewFileModal(false); setNewFileName(''); }}
+          onUpdateFolderName={setNewFileName}
+          onEmitFolderName={newTextFile}
+        />
+      )}
+
+      {opener && (
+        <Suspense fallback={<div className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center text-gray-300">載入編輯器…</div>}>
+          <FileOpener
+            uuid={opener.uuid}
+            filename={opener.name}
+            onClose={() => setOpener(null)}
+            onSaved={() => { void getFileList(currentFolderUuid); }}
+          />
+        </Suspense>
+      )}
+
       {showUpLoad && (
         <>
           {/* 使用 Uppy 上傳組件 */}
@@ -673,6 +728,15 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                 setWaitFolderName([currentFolderUuid, null, 'create']);
               }}
             />
+
+            {previewOn && (
+              <span title="新建文字檔案" className="inline">
+                <FilePlus
+                  className="w-9 h-9 ml-3 text-cyan-300 inline cursor-pointer"
+                  onClick={() => { setNewFileName(''); setNewFileModal(true); }}
+                />
+              </span>
+            )}
 
             <Upload
               className="w-9 h-9 text-green-600 inline cursor-pointer"
@@ -801,6 +865,12 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       navigate(`/file-list/${item.uuid}`);
                     }
                   }}
+                  onDoubleClick={() => {
+                    if (previewOn && item.type === 'file' && isEditable(item.name)) {
+                      setOpener({ uuid: item.uuid, name: item.name });
+                    }
+                  }}
+                  title={previewOn && item.type === 'file' && isEditable(item.name) ? '雙擊開啟預覽／編輯' : undefined}
                 >
                   {selectionMode && (
                     <td
