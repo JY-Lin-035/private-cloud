@@ -103,6 +103,11 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
     }
   }, [uuid, text, updatedAt, onSaved]);
 
+  // stable proxy so Monaco's addCommand (captured at mount) always calls the LATEST save
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  const saveStable = useCallback(() => { void saveRef.current(); }, []);
+
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -136,10 +141,10 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
       return <FallbackPane filename={filename} message={status.msg} />;
     }
     if (category === 'markdown') {
-      return <MarkdownPane filename={filename} value={text} onChange={setText} onSave={save} />;
+      return <MarkdownPane filename={filename} value={text} onChange={setText} onSave={saveStable} />;
     }
     if (category === 'json') {
-      return <JsonPane filename={filename} value={text} onChange={setText} onSave={save} />;
+      return <JsonPane filename={filename} value={text} onChange={setText} onSave={saveStable} />;
     }
     if (['image', 'video', 'audio', 'pdf'].includes(category)) {
       return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
@@ -148,7 +153,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
       return <SandboxPane uuid={uuid} filename={filename} />;
     }
     if (['text', 'code', 'json', 'markdown', 'html', 'svg'].includes(category)) {
-      return <EditorPane filename={filename} value={text} onChange={setText} onSave={save} />;
+      return <EditorPane filename={filename} value={text} onChange={setText} onSave={saveStable} />;
     }
     if (category === 'docx' || category === 'office') {
       return <OfficePane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} officeConvertEnabled={officeFlag} />;
