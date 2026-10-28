@@ -11,7 +11,7 @@ const swUrl = new URL(self.location.href);
 const API_BASE = swUrl.searchParams.get('api') || '';  // empty => same-origin /api
 const MEDIA_PREFIX = '/__media/';
 const ROOT = 'meow-media';
-const SW_BUILD = 'p3-handles-7';
+const SW_BUILD = 'p3-conv-8';
 
 function keyFor(pathname, search) {
   // pathname: /__media/<uid>/<uuid> ; v param = file updated_at
@@ -22,7 +22,8 @@ function keyFor(pathname, search) {
   const v = q.get('v') || '0';
   const mime = q.get('m') || '';
   if (!/^[A-Za-z0-9._-]{1,80}$/.test(uid) || !/^[0-9a-fA-F-]{36}$/.test(uuid)) return null;
-  return { uid, uuid, file: `${uuid}@${v}.bin`, v, mime };
+  const conv = q.get('c') === '1';
+  return { uid, uuid, file: `${uuid}@${v}${conv ? '.c' : ''}.bin`, v, mime, conv };
 }
 
 function trace0(k, stage) { broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` }); }
@@ -80,14 +81,14 @@ async function warm(k) {
     if (await cachedFile(k)) { trace0(k, 'already'); return; }
     const est = await navigator.storage.estimate();
     const quota = (est.quota || 0) - (est.usage || 0);
-    const probe = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { credentials: 'include' });
+    const probe = await fetch(`${API_BASE}${k.conv ? '/api/files/convert' : '/api/files/stream'}?uuid=${k.uuid}`, { credentials: 'include' });
     if (!probe.ok) { trace0(k, 'probe' + probe.status); return; }
     const total = Number(probe.headers.get('content-length') || 0);
     if (quota < total + 20 * 1024 * 1024) {
       broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: '空間不足，僅串流' });
       return;
     }
-    const full = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { credentials: 'include' });
+    const full = await fetch(`${API_BASE}${k.conv ? '/api/files/convert' : '/api/files/stream'}?uuid=${k.uuid}`, { credentials: 'include' });
     if (!full.ok || !full.body) { trace0(k, 'full' + full.status); return; }
     const h = await fileHandle(k, true);
     const w = await h.createWritable();
@@ -139,7 +140,8 @@ self.addEventListener('fetch', (e) => {
         if (['range', 'accept-encoding', 'accept-language', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-dest'].includes(hk)) continue;
         headers.set(hk, hv);
       }
-      const r = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, {
+      const upstream = k.conv ? `/api/files/convert?uuid=${k.uuid}` : `/api/files/stream?uuid=${k.uuid}`;
+      const r = await fetch(`${API_BASE}${upstream}`, {
         headers, credentials: 'include', cache: 'no-store', mode: 'cors',
       });
       trace('FWD' + r.status);

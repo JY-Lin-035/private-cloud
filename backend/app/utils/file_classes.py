@@ -28,6 +28,7 @@ _CODE = {
 }
 _HTML = {"html", "htm", "xhtml"}
 _SANDBOX = _HTML | {"svg"}
+SANDBOX_EXTS = _SANDBOX
 _IMAGE = {"png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "ico"}
 _VIDEO = {"mp4", "m4v", "webm", "ogv", "mov"}
 _AUDIO = {"mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "opus"}

@@ -16,7 +16,7 @@ from app.models.account import Account
 from app.utils import logger as log
 
 from app.api.dependencies import get_redis
-from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws
+from app.api.v1 import accounts, files, folders, share, collaboration, collab_ws, preview
 from app.api.v1 import settings as settings_api
 from app.api.v1 import announcements
 from app.api.v1 import ipcontrol
@@ -108,6 +108,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(accounts.router)
 app.include_router(files.router)
+app.include_router(preview.router)
 app.include_router(folders.router)
 app.include_router(share.router)
 app.include_router(collaboration.router)

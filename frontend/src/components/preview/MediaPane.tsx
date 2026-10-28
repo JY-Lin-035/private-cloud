@@ -42,7 +42,7 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
   const mime = MIME[extOf(filename)] || 'application/octet-stream';
   const [src, setSrc] = useState<string>('');
   useEffect(() => {
-    if (unsupported) { setSrc(`${API_BASE_URL}/api/files/stream?uuid=${uuid}`); }
+    if (unsupported) { setSrc(`${API_BASE_URL}/api/files/stream?uuid=${encodeURIComponent(uuid)}`); }
     else { void mediaSrc(uuid, updatedAt, mime).then(setSrc); }
   }, [unsupported, uuid, updatedAt, mime]);
   if (!swReady) return <div className="h-full flex items-center justify-center text-gray-400">初始化媒體快取…</div>;

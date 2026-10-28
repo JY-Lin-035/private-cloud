@@ -122,6 +122,8 @@ async def sign_out(
 ):
     """Sign out user."""
     try:
+        from app.api.v1.preview import revoke_preview_tokens_for_user
+        revoke_preview_tokens_for_user(redis_client, user_id)
         logger.info(f"Sign out request received, user_id: {user_id}")
         
         account_service = AccountService(db, redis_client)

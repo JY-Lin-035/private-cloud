@@ -46,4 +46,9 @@ export const previewApi = {
     const r = await api.put('/api/files/content', { uuid, text, if_updated_at });
     return r.data as { uuid: string; size: number; updated_at: string };
   },
+
+  previewToken: async (uuid: string) => {
+    const r = await api.post('/api/files/previewToken', { uuid });
+    return r.data as { token: string; ttl: number };
+  },
 };

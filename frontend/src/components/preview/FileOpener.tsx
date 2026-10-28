@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { previewApi } from '../../api/previewApi';
 import EditorPane from './EditorPane';
 import MediaPane from './MediaPane';
+import SandboxPane from './SandboxPane';
+import OfficePane from './OfficePane';
 import { classify, isStreamable } from '../../utils/fileClass';
 import MarkdownPane from './MarkdownPane';
 import JsonPane from './JsonPane';
@@ -29,11 +31,18 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
   dirtyRef.current = dirty;
 
   const isMedia = isStreamable(filename);
+  const localCat = classify(filename);
+  const bypassContent = isMedia || localCat === 'docx' || localCat === 'office' || localCat === 'html' || localCat === 'svg';
+  const [officeFlag, setOfficeFlag] = useState(false);
+
+  useEffect(() => {
+    previewApi.authedFlags().then((f) => setOfficeFlag(!!f?.enable_preview_office));
+  }, []);
 
   useEffect(() => {
     let live = true;
-    if (isMedia) {
-      setCategory(classify(filename));
+    if (bypassContent) {
+      setCategory(localCat);
       setUpdatedAt('v1');
       setLoading(false);
       return () => { live = false; };
@@ -56,7 +65,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
         setCategory('unavailable');
       });
     return () => { live = false; };
-  }, [uuid, isMedia, filename]);
+  }, [uuid, bypassContent, localCat, filename]);
 
   const save = useCallback(async () => {
     if (!dirtyRef.current) return;
@@ -137,6 +146,12 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
     if (['image', 'video', 'audio', 'pdf'].includes(category)) {
       return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
     }
+    if (category === 'html' || category === 'svg') {
+      return <SandboxPane uuid={uuid} filename={filename} />;
+    }
+    if (category === 'docx' || category === 'office') {
+      return <OfficePane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} officeConvertEnabled={officeFlag} />;
+    }
     return <FallbackPane filename={filename} />;
   };
 
@@ -152,7 +167,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
           </span>
           <div className="flex-1" />
           {status.kind === 'saving' && <span className="text-cyan-300 text-sm animate-pulse">儲存中…</span>}
-          {!isMedia && <button
+          {!isMedia && !['html','svg','docx','office'].includes(category) && <button
             type="button"
             onClick={() => void save()}
             disabled={!dirty || status.kind === 'saving'}
