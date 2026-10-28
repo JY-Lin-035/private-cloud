@@ -10,7 +10,7 @@ const swUrl = new URL(self.location.href);
 const API_BASE = swUrl.searchParams.get('api') || '';
 const MEDIA_PREFIX = '/__media/';
 const ROOT = 'meow-media';
-const SW_BUILD = 'p4-ch-10';
+const SW_BUILD = 'p5-paced-11';
 
 function trace0(k, stage) {
   broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` });
@@ -89,13 +89,37 @@ function rangeResponse(file, rangeHeader, k) {
   });
 }
 
-// Background cache warm for stream/c=1 (attempt-write; browser enforces quota)
+// Background cache warm: single-slot queue + pacing so it never starves
+// playback or other API traffic through the (tunnel-bottlenecked) uplink.
+const warmState = { running: false, pending: null, ctrl: null };
+
+function abortWarmFor(uuid) {
+  if (warmState.ctrl && warmState.running && warmState.pendingUuid === uuid) {
+    try { warmState.ctrl.abort(); } catch { /* noop */ }
+  }
+}
+
 async function warm(k) {
+  if (k.ch === '2') return;
+  if (warmState.running) { warmState.pending = k; warmState.pendingUuid = k.uuid; return; }
+  warmState.running = true;
+  warmState.pendingUuid = k.uuid;
+  try { await doWarm(k); }
+  finally {
+    warmState.running = false;
+    const next = warmState.pending;
+    warmState.pending = null; warmState.pendingUuid = null;
+    if (next) warm(next).catch(() => {});
+  }
+}
+
+async function doWarm(k) {
   try {
-    if (k.ch === '2') return;                 // sandbox raw: never cached
     if (await cachedFile(k)) return;
     const upstream = k.ch === '1' ? '/api/files/convert' : '/api/files/stream';
-    const full = await fetch(`${API_BASE}${upstream}?uuid=${k.uuid}`, { credentials: 'include' });
+    const ctrl = new AbortController();
+    warmState.ctrl = ctrl;
+    const full = await fetch(`${API_BASE}${upstream}?uuid=${k.uuid}`, { credentials: 'include', signal: ctrl.signal });
     if (!full.ok || !full.body) { trace0(k, 'fetch' + full.status); return; }
     const dir = await dirFor(k, true);
     const wipName = k.file + '.wip';
@@ -103,16 +127,22 @@ async function warm(k) {
     try {
       const w = await tmpH.createWritable();
       const reader = full.body.getReader();
+      let sinceCheck = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         await w.write(value);
-        const est = await navigator.storage.estimate();
-        if (est.quota && est.usage > est.quota * 0.92) {
-          await w.abort().catch(() => {});
-          await dir.removeFile(wipName).catch(() => {});
-          broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: '空間接近上限，停止快取' });
-          return;
+        sinceCheck += value ? value.byteLength : 0;
+        if (sinceCheck >= 262144) {           // throttle ~1.25MB/s; yield bandwidth to live traffic
+          sinceCheck = 0;
+          await new Promise(r => setTimeout(r, 200));
+          const est = await navigator.storage.estimate();
+          if (est.quota && est.usage > est.quota * 0.92) {
+            await w.abort().catch(() => {});
+            await dir.removeFile(wipName).catch(() => {});
+            broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: '空間接近上限，停止快取' });
+            return;
+          }
         }
       }
       await w.close();
@@ -128,8 +158,10 @@ async function warm(k) {
     } catch (err) {
       await dir.removeFile(wipName).catch(() => {});
       trace0(k, 'write:' + (err && err.name ? err.name : 'err'));
-    }
+    } finally { warmState.ctrl = null; }
   } catch (e) {
+    warmState.ctrl = null;
+    if (e && e.name === 'AbortError') return;
     trace0(k, 'setup:' + (e && e.name ? e.name : 'err'));
   }
 }
@@ -183,6 +215,7 @@ self.addEventListener('fetch', (e) => {
     let hit = null;
     try { hit = await cachedFile(k); } catch { /* miss */ }
     if (hit) return rangeResponse(hit, e.request.headers.get('range'), k);
+    abortWarmFor(k.uuid);
     warm(k).catch(() => {});
     try {
       const headers = new Headers();
