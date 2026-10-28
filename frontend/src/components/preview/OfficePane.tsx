@@ -35,10 +35,26 @@ function OfficePane({ uuid, filename, updatedAt, officeConvertEnabled }: Props) 
         })
         .catch((e: Error) => { if (live) { setErr(e.message); setState('error'); } });
     } else if (officeConvertEnabled) {
-      void mediaSrc(uuid, 'cv-' + updatedAt, 'application/pdf', true).then((u) => {
-        if (!live) return;
-        setPdfSrc(u); setState('pdf');
-      });
+      // probe conversion status first (headers only) so 415/501/503 show as messages,
+      // then let the iframe load through the SW (server-side disk cache makes it cheap)
+      (async () => {
+        try {
+          const pr = await fetch(`${API_BASE_URL}/api/files/convert?uuid=${encodeURIComponent(uuid)}`,
+            { credentials: 'include' });
+          if (!pr.ok) {
+            let detail = `轉換失败 (${pr.status})`;
+            try { detail = (await pr.json()).detail || detail; } catch { /* keep */ }
+            pr.body?.cancel().catch(() => {});
+            if (live) { setErr(detail); setState('error'); }
+            return;
+          }
+          pr.body?.cancel().catch(() => {});
+          const u = await mediaSrc(uuid, 'cv-' + updatedAt, 'application/pdf', { conv: true });
+          if (live) { setPdfSrc(u); setState('pdf'); }
+        } catch (e) {
+          if (live) { setErr((e as Error).message || '轉換暫不可用'); setState('error'); }
+        }
+      })();
     } else {
       setErr('Office 伺服器端預覽未啟用，請改用下載。');
       setState('error');

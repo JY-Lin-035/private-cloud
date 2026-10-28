@@ -133,14 +133,25 @@ def _preview_dir() -> str:
     return d
 
 
-def _soffice_bin() -> Optional[str]:
+_soffice_cache = {"checked": False, "path": None}
+
+
+def _detect_soffice() -> Optional[str]:
     for cand in ("soffice", "libreoffice"):
         try:
-            subprocess.run([cand, "--version"], capture_output=True, timeout=10, check=False)
-            return cand
-        except (FileNotFoundError, subprocess.TimeoutExpired):
+            r = subprocess.run([cand, "--version"], capture_output=True, timeout=10, check=False)
+            if r.returncode == 0:
+                return cand
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             continue
     return None
+
+
+def _soffice_bin() -> Optional[str]:
+    if not _soffice_cache["checked"]:
+        _soffice_cache["checked"] = True
+        _soffice_cache["path"] = _detect_soffice()
+    return _soffice_cache["path"]
 
 
 def _limits():
@@ -186,6 +197,25 @@ def _first_pdf(d: str) -> str:
     return os.path.join(d, "out.pdf")
 
 
+def _convert_pipeline(src: str, cache_path: str) -> None:
+    """Blocking; must run via asyncio.to_thread so the event loop stays free."""
+    soff = _soffice_bin()
+    if not soff:
+        raise HTTPException(status_code=501, detail="伺服器未安裝轉換元件（libreoffice）")
+    with tempfile.TemporaryDirectory(prefix="loconv-") as tmp:
+        out_dir = os.path.join(tmp, "out")
+        prof = os.path.join(tmp, "profile")
+        os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(prof, exist_ok=True)
+        ok = _run_convert(soff, src, out_dir, prof)
+        produced = _first_pdf(out_dir) if ok else ""
+        if not ok or not os.path.isfile(produced):
+            raise HTTPException(status_code=502, detail="轉換失敗，請改用下載")
+        tmp_cache = cache_path + f".tmp{secrets.token_hex(4)}"
+        os.replace(produced, tmp_cache)
+        os.replace(tmp_cache, cache_path)
+
+
 @router.get("/convert", dependencies=[Depends(rate_limit(10, 300))])
 async def convert_office(
     uuid: str = Query(...),
@@ -193,6 +223,7 @@ async def convert_office(
     redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id),
 ):
+    import asyncio
     _require_preview_flag()
     if not is_feature_enabled("enable_preview_office", default=False):
         raise HTTPException(status_code=403, detail="Office 預覽功能尚未啟用")
@@ -210,8 +241,7 @@ async def convert_office(
     if os.path.getsize(src) > CONVERT_MAX_SRC:
         raise HTTPException(status_code=413, detail="檔案超過 100MB，不轉換預覽")
     mtag = int(f.updated_at.timestamp()) if f.updated_at else 0
-    cache_name = f"{uuid}-{mtag}.pdf"
-    cache_path = os.path.join(_preview_dir(), cache_name)
+    cache_path = os.path.join(_preview_dir(), f"{uuid}-{mtag}.pdf")
     if not os.path.isfile(cache_path):
         if not redis.set(f"conv:{uuid}", "1", nx=True, ex=CONVERT_TIMEOUT_S + 30):
             raise HTTPException(status_code=503, detail="轉換進行中，請稍後重試", headers={"Retry-After": "20"})
@@ -222,21 +252,7 @@ async def convert_office(
                 redis.decr("conv:active")
                 raise HTTPException(status_code=503, detail="轉換服務忙碌，請稍後重試", headers={"Retry-After": "30"})
             try:
-                soff = _soffice_bin()
-                if not soff:
-                    raise HTTPException(status_code=501, detail="伺服器未安裝轉換元件")
-                with tempfile.TemporaryDirectory(prefix="loconv-") as tmp:
-                    out_dir = os.path.join(tmp, "out")
-                    prof = os.path.join(tmp, "profile")
-                    os.makedirs(out_dir, exist_ok=True)
-                    os.makedirs(prof, exist_ok=True)
-                    ok = _run_convert(soff, src, out_dir, prof)
-                    produced = _first_pdf(out_dir) if ok else ""
-                    if not ok or not os.path.isfile(produced):
-                        raise HTTPException(status_code=502, detail="轉換失敗，請改用下載")
-                    tmp_cache = cache_path + f".tmp{secrets.token_hex(4)}"
-                    os.replace(produced, tmp_cache)
-                    os.replace(tmp_cache, cache_path)
+                await asyncio.to_thread(_convert_pipeline, src, cache_path)
             finally:
                 redis.decr("conv:active")
         finally:

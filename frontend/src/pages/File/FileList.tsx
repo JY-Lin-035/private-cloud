@@ -709,7 +709,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[1%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
         <div className="mb-4 flex justify-between items-center">
-          <span>
+          <span className="inline-flex items-center gap-2 flex-wrap">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -719,7 +719,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
             />
 
             <Plus
-              className="w-9 h-9 ml-6 mr-4 text-yellow-300 inline cursor-pointer"
+              className="w-8 h-8 shrink-0 text-yellow-300 inline cursor-pointer"
               onClick={() => {
                 setResponse('');
                 setClassName('text-white');
@@ -731,21 +731,21 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
             />
 
             {previewOn && (
-              <span title="新建文字檔案" className="inline">
+              <span title="新建文字檔案" className="inline-flex">
                 <FilePlus
-                  className="w-9 h-9 ml-3 text-cyan-300 inline cursor-pointer"
+                  className="w-8 h-8 shrink-0 text-cyan-300 inline cursor-pointer"
                   onClick={() => { setNewFileName(''); setNewFileModal(true); }}
                 />
               </span>
             )}
 
             <Upload
-              className="w-9 h-9 text-green-600 inline cursor-pointer"
+              className="w-8 h-8 shrink-0 text-green-600 inline cursor-pointer"
               onClick={() => setShowUpLoad(true)}
             />
 
             <ListChecks
-              className={`w-9 h-9 ml-4 inline cursor-pointer ${selectionMode ? 'text-blue-400' : 'text-gray-100'}`}
+              className={`w-8 h-8 shrink-0 inline cursor-pointer ${selectionMode ? 'text-blue-400' : 'text-gray-100'}`}
               onClick={toggleSelectionMode}
             />
           </span>
@@ -900,11 +900,12 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       return `${value} ${unit}`;
                     })()}
                   </td>
-                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal"
+                    onDoubleClick={(e) => e.stopPropagation()}>
                     <span className="flex justify-center gap-1 sm:gap-2 md:gap-4 lg:gap-6 xl:gap-10">
                       {item.type === 'file' && (
                         <Download
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
+                          className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-green-600 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation();
                             callDownloadFile(item.uuid);
@@ -914,7 +915,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
                       {item.type === 'folder' && !selectionMode && (
                         <FolderDown
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-300 cursor-pointer"
+                          className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-cyan-300 cursor-pointer"
                           onClick={async (e) => {
                             e.stopPropagation();
                             try {
@@ -930,7 +931,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
                       {item.type === 'folder' && (
                         <Edit3
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
+                          className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-green-600 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation();
                             setResponse('');
@@ -948,13 +949,13 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       )}
 
                       {!selectionMode && (
-                        <div className="relative">
+                        <div className="relative inline-flex items-center">
                           {(() => {
                             const hasValidLink = item.shared && (!item.limited_date || new Date(item.limited_date) > new Date());
                             const IconComponent = hasValidLink ? Link2 : Share2;
                             return (
                               <IconComponent
-                                className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                                className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-blue-500 cursor-pointer"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   callShareFileLink(item.uuid, item.type, item.shared, item.limited_date);
@@ -993,7 +994,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       )}
 
                       <Trash2
-                        className="w-5 h-5 sm:w-6 sm:h-6 text-red-500 cursor-pointer"
+                        className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-red-500 cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
                           if (item.type === 'file') {

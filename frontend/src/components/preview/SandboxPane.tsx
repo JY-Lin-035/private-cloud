@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { previewApi } from '../../api/previewApi';
+import { mediaSrc } from '../../utils/mediaCache';
 
-interface Props { uuid: string; filename: string; }
+interface Props { uuid: string; filename: string; updatedAt?: string; }
 
 /**
  * Renders HTML/SVG in a hard-sandboxed iframe. The document is fetched from
@@ -10,14 +11,21 @@ interface Props { uuid: string; filename: string; }
  * iframe sandbox attribute to empty (no scripts, no same-origin) so previewed
  * markup can never reach the app, its cookies, or storage.
  */
-function SandboxPane({ uuid, filename }: Props) {
+const MIME_BY_EXT: Record<string, string> = { html: 'text/html', htm: 'text/html', xhtml: 'application/xhtml+xml', svg: 'image/svg+xml' };
+
+function SandboxPane({ uuid, filename, updatedAt }: Props) {
   const [src, setSrc] = useState<string>('');
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
     previewApi.previewToken(uuid)
-      .then((t) => { if (live) setSrc(`/api/files/raw?uuid=${uuid}&ptk=${encodeURIComponent(t.token)}`); })
+      .then(async (t) => {
+        const ext = (filename.split('.').pop() || '').toLowerCase();
+        const mime = MIME_BY_EXT[ext] || 'text/plain';
+        const url = await mediaSrc(uuid, updatedAt || 'sb', mime, { sandbox: true, ptk: t.token });
+        if (live) setSrc(url);
+      })
       .catch((e: Error) => { if (live) setErr(e.message); });
     return () => { live = false; };
   }, [uuid]);

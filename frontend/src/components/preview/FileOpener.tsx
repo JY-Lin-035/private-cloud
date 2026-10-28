@@ -150,7 +150,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
       return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
     }
     if ((category === 'html' || category === 'svg') && viewMode === 'preview') {
-      return <SandboxPane uuid={uuid} filename={filename} />;
+      return <SandboxPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'sb'} />;
     }
     if (['text', 'code', 'json', 'markdown', 'html', 'svg'].includes(category)) {
       return <EditorPane filename={filename} value={text} onChange={setText} onSave={saveStable} />;

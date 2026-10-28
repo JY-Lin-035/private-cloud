@@ -57,11 +57,14 @@ export async function registerMediaSW(): Promise<boolean> {
   return inflight;
 }
 
-export async function mediaSrc(uuid: string, updatedAt: string, mime?: string, conv = false): Promise<string> {
+export async function mediaSrc(uuid: string, updatedAt: string, mime?: string,
+                               opts?: { conv?: boolean; sandbox?: boolean; ptk?: string }): Promise<string> {
   const uid = await currentUid();
   const v = encodeURIComponent((updatedAt || '0').replace(/[^0-9A-Za-z:-]/g, ''));
   const m = mime ? `&m=${encodeURIComponent(mime)}` : '';
-  return `/__media/${uid}/${uuid}?v=${v}${m}${conv ? '&c=1' : ''}`;
+  const ch = opts?.sandbox ? '&c=2' : (opts?.conv ? '&c=1' : '');
+  const p = opts?.ptk ? `&ptk=${encodeURIComponent(opts.ptk)}` : '';
+  return `/__media/${uid}/${uuid}?v=${v}${m}${ch}${p}`;
 }
 
 declare global { interface Window { __swTrace?: string[] } }
