@@ -61,7 +61,6 @@ async def issue_preview_token(
     user_id: int = Depends(get_current_user_id),
 ):
     _require_preview_flag()
-    origin = request.headers.get("origin") if hasattr(request, "headers") else None
     f = db.execute(select(File).where(File.uuid == request.uuid, File.owner_id == user_id)).scalar_one_or_none()
     if f is None or f.deleted_at is not None or ext_of(f.name) not in SANDBOX_EXTS:
         raise HTTPException(status_code=404, detail="檔案不存在或不支援沙箱預覽")

@@ -26,13 +26,14 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
   const [updatedAt, setUpdatedAt] = useState('');
   const [meta, setMeta] = useState<{ size: number } | null>(null);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [viewMode, setViewMode] = useState<'preview' | 'source'>('preview');
   const dirty = text !== baseline;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
   const isMedia = isStreamable(filename);
   const localCat = classify(filename);
-  const bypassContent = isMedia || localCat === 'docx' || localCat === 'office' || localCat === 'html' || localCat === 'svg';
+  const bypassContent = isMedia || localCat === 'docx' || localCat === 'office';
   const [officeFlag, setOfficeFlag] = useState(false);
 
   useEffect(() => {
@@ -140,14 +141,14 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
     if (category === 'json') {
       return <JsonPane filename={filename} value={text} onChange={setText} onSave={save} />;
     }
-    if (['text', 'code', 'html', 'svg'].includes(category)) {
-      return <EditorPane filename={filename} value={text} onChange={setText} onSave={save} />;
-    }
     if (['image', 'video', 'audio', 'pdf'].includes(category)) {
       return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
     }
-    if (category === 'html' || category === 'svg') {
+    if ((category === 'html' || category === 'svg') && viewMode === 'preview') {
       return <SandboxPane uuid={uuid} filename={filename} />;
+    }
+    if (['text', 'code', 'json', 'markdown', 'html', 'svg'].includes(category)) {
+      return <EditorPane filename={filename} value={text} onChange={setText} onSave={save} />;
     }
     if (category === 'docx' || category === 'office') {
       return <OfficePane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} officeConvertEnabled={officeFlag} />;
@@ -166,8 +167,14 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
             {status.kind !== 'idle' && status.kind !== 'saving' ? status.msg : ''}
           </span>
           <div className="flex-1" />
+          {(category === 'html' || category === 'svg') && !loading && (
+            <button type="button" onClick={() => setViewMode(m => m === 'preview' ? 'source' : 'preview')}
+              className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-100 text-xs shrink-0">
+              {viewMode === 'preview' ? '編輯原始碼' : '沙箱預覽'}
+            </button>
+          )}
           {status.kind === 'saving' && <span className="text-cyan-300 text-sm animate-pulse">儲存中…</span>}
-          {!isMedia && !['html','svg','docx','office'].includes(category) && <button
+          {['text','code','markdown','json','html','svg'].includes(category) && !(isMedia) && <button
             type="button"
             onClick={() => void save()}
             disabled={!dirty || status.kind === 'saving'}
