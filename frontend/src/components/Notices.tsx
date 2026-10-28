@@ -94,6 +94,12 @@ function Notices({
                       setLocalFolderName(e.target.value);
                       onUpdateFolderName?.(e.target.value);
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && valFolderName && localFolderName !== '') {
+                        e.preventDefault();
+                        onEmitFolderName?.();
+                      }
+                    }}
                     placeholder="請輸入資料夾名稱"
                     maxLength={MAX_NAME_LENGTH}
                     className="w-full px-3 py-2 mt-6 mb-6 border rounded bg-white text-gray-900 border-gray-300"

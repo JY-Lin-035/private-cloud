@@ -195,9 +195,9 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     if (!window.confirm(`確定要將選取的 ${selected.length} 項目移入資源回收筒？`)) return;
     setBusy(true);
     try {
-      for (const u of selectedFiles) await fileApi.delete({ file_uuid: u, permanent: false });
-      for (const u of selectedFolders) await folderApi.delete({ folder_uuid: u, permanent: false });
-      setResponse([`已將 ${selected.length} 個項目移入資源回收筒`]);
+      const res = await fileApi.batchOp({ folders: selectedFolders, files: selectedFiles, mode: 'soft' });
+      setResponse([`已將 ${res.folders + res.files} 個項目移入資源回收筒`,
+                   ...(res.skipped.length ? [`跳過 ${res.skipped.length} 項`] : [])]);
       setClassName('text-green-500');
       setShowMode(true);
       await getFileList(currentFolderUuid);

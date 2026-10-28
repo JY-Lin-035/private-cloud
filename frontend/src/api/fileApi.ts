@@ -44,6 +44,10 @@ export const fileApi = {
 
 
   // Delete file (soft or hard)
+  batchOp: async (data: { folders: string[]; files: string[]; mode: 'soft' | 'permanent' | 'restore' }) => {
+    const response = await api.post('/api/files/batchDelete', data);
+    return response.data as { folders: number; files: number; freed_bytes: number; skipped: { uuid: string; reason: string }[] };
+  },
   delete: async (data: { file_uuid: string; permanent: boolean }) => {
     const response = await api.delete('/api/files/delete', { data });
     return response.data;

@@ -17,6 +17,7 @@ from app.services import zip_service
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
 from app.api.rate_limit import rate_limit
 from app.config import settings
+from app.services import batch_ops
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -61,9 +62,11 @@ async def tus_create_upload(
     tus_resumable: str = Header(None, alias='Tus-Resumable'),
     x_parent_folder_uuid: str = Header(None, alias='X-Parent-Folder-Uuid'),
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id),
 ):
     """Create a new tus upload session and respond with the initial offset."""
+    batch_ops.assert_not_deleting(redis, x_parent_folder_uuid)
     try:
         if not tus_resumable:
             raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
@@ -283,9 +286,11 @@ async def upload_file(
     parent_folder_uuid: str = Form(None),
     relative_path: str = Form(None),
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Upload a file."""
+    batch_ops.assert_not_deleting(redis, parent_folder_uuid)
     try:
         logger.info(f"Upload file request received, user_id: {user_id}, parent_folder_uuid: {parent_folder_uuid}, relative_path: {relative_path}, filename: {file.filename}")
         
@@ -332,6 +337,7 @@ async def get_download_token(
     user_id: int = Depends(get_current_user_id),
 ):
     """Generate a short-lived token for cross-origin file download."""
+    batch_ops.assert_not_deleting(redis, file_uuid)
     try:
         logger.info("Token req: {}/{}".format(user_id, file_uuid))
         file_service = FileService(db)
@@ -363,6 +369,7 @@ async def download_file(
     user_id: Optional[int] = Depends(get_current_user_id_optional)
 ):
     """Download a file."""
+    batch_ops.assert_not_deleting(redis, file_uuid)
     try:
         file_service = FileService(db)
         actual_user_id = user_id
@@ -408,9 +415,11 @@ async def download_file(
 async def delete_file(
     request: DeleteFileRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Delete a file (soft or hard)."""
+    batch_ops.assert_not_deleting(redis, request.file_uuid)
     try:
         logger.info(f"Delete file request received, user_id: {user_id}, file_uuid: {request.file_uuid}, permanent: {request.permanent}")
         
@@ -434,9 +443,11 @@ async def delete_file(
 async def restore_file(
     request: RestoreFileRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Restore a soft-deleted file."""
+    batch_ops.assert_not_deleting(redis, request.file_uuid)
     try:
         logger.info(f"Restore file request received, user_id: {user_id}, file_uuid: {request.file_uuid}")
         
@@ -506,6 +517,22 @@ async def recalculate_storage(
         raise
 
 
+class BatchDeleteRequest(BaseModel):
+    folders: list[str] = []
+    files: list[str] = []
+    mode: str  # soft | permanent | restore
+
+
+@router.post("/batchDelete")
+async def batch_delete(
+    request: BatchDeleteRequest,
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """One-shot batch trash op with per-item deletion locks (423 while running)."""
+    return batch_ops.batch_operation(user_id, request.folders, request.files, request.mode, redis)
+
+
 class FileMoveRequest(BaseModel):
     file_uuids: list[str]
     target_folder_uuid: Optional[str] = None
@@ -521,9 +548,11 @@ class BulkDownloadRequest(BaseModel):
 async def move_files(
     request: FileMoveRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Move files to an existing folder or a (auto-created) nested path."""
+    batch_ops.assert_not_deleting(redis, *request.file_uuids, request.target_folder_uuid)
     target = request.target_folder_uuid
     if not target and request.target_path:
         resolved = FolderService(db).resolve_or_create_path(user_id, None, request.target_path)
@@ -544,9 +573,11 @@ async def move_files(
 async def download_bulk(
     request: BulkDownloadRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Stream multiple selected files/folders as one zip archive."""
+    batch_ops.assert_not_deleting(redis, *request.file_uuids, *request.folder_uuids)
     if not request.file_uuids and not request.folder_uuids:
         raise HTTPException(status_code=400, detail='沒有選擇任何項目')
 

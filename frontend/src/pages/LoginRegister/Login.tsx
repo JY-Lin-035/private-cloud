@@ -46,6 +46,13 @@ function Login({ onFlip, onNotice, allowRegistration = false }: LoginProps) {
 
   const goForgetPW = () => navigate('/forget-password');
 
+  const submitOnEnter = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && userName && PW && lock) {
+      e.preventDefault();
+      void login();
+    }
+  };
+
   return (
     <div className="absolute w-full h-full bg-white rounded-xl shadow-md flex flex-col justify-center items-center gap-4 p-6 [backface-visibility:hidden] [transform:translateZ(250px)]">
       <div className="flex-1"></div>
@@ -55,6 +62,7 @@ function Login({ onFlip, onNotice, allowRegistration = false }: LoginProps) {
         placeholder="使用者名稱"
         value={userName}
         onChange={(e) => setUserName(e.target.value)}
+        onKeyDown={submitOnEnter}
         className="border w-full px-3 py-2 rounded mt-[30px]"
       />
       <input
@@ -62,6 +70,7 @@ function Login({ onFlip, onNotice, allowRegistration = false }: LoginProps) {
         placeholder="密碼"
         value={PW}
         onChange={(e) => setPW(e.target.value)}
+        onKeyDown={submitOnEnter}
         className="w-full px-3 py-2 border rounded"
       />
       <button
