@@ -344,3 +344,15 @@ class TestStream:
         with pytest.raises(HTTPException) as ex:
             asyncio.run(files.stream_file(uuid="f-media", request=_Req(), db=db, redis=FakeR(), user_id=a.id))
         assert ex.value.status_code == 403
+
+
+class TestSaveEdge:
+    def test_same_size_edit_bumps_mtime(self, ctx):
+        db, a, *_ = ctx
+        _mkfile(db, a, "same.txt", b"AA")
+        r1 = _put(db, a, "f-same.txt", "BB")
+        r2 = _put(db, a, "f-same.txt", "CC", if_u=r1["updated_at"])
+        assert r2["updated_at"] != r1["updated_at"]
+        with pytest.raises(HTTPException) as ex:
+            _put(db, a, "f-same.txt", "DD", if_u=r1["updated_at"])
+        assert ex.value.status_code == 409

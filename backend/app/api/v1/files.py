@@ -751,6 +751,7 @@ async def save_file_content(
             pass
         raise HTTPException(status_code=500, detail="寫入失敗")
     f.size = len(data)
+    f.updated_at = _dt.utcnow()
     db.commit()
     if f.parent_folder_id and delta:
         FolderService(db)._update_parent_folder_size(f.parent_folder_id, delta)
