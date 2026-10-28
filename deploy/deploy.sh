@@ -297,8 +297,15 @@ server {
         proxy_read_timeout 43200s; proxy_send_timeout 43200s;
     }
 
+    location = /sw.js {
+        include /etc/nginx/snippets/meow_security_headers.conf;
+        open_file_cache off;
+        add_header Cache-Control "no-store";
+        try_files $uri =404;
+    }
     location / {
         include /etc/nginx/snippets/meow_security_headers.conf;
+        open_file_cache off;
         add_header Cache-Control "no-cache";
         try_files $uri $uri/ /index.html;
     }

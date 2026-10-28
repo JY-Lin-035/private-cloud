@@ -29,3 +29,5 @@ declare module '*.webp' {
   const src: string;
   export default src;
 }
+
+declare const __BUILD_TS__: string;

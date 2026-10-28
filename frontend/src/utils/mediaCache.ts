@@ -6,44 +6,65 @@ type Listener = (ev: CacheEv) => void;
 const listeners = new Set<Listener>();
 let registered = false;
 let registeredOk = false;
+let inflight: Promise<boolean> | null = null;
 
-export function currentUid(): string {
-  // per-account isolation (defense-in-depth; full purge happens on logout/401)
+let uidCache: string | null = null;
+
+// Per-account OPFS namespace. The session email is masked by the API, so we
+// derive a filesystem-safe stable token from it (also avoids storing PII in
+// file names). Full purge still happens on logout/401/account-switch.
+export async function currentUid(): Promise<string> {
+  if (uidCache) return uidCache;
   const e = localStorage.getItem('email') || 'anon';
-  return encodeURIComponent(e).replace(/%/g, '').slice(0, 80) || 'anon';
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(e));
+    uidCache = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+  } catch {
+    uidCache = 'u' + (e.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40) || 'anon');
+  }
+  return uidCache;
 }
 
 export async function registerMediaSW(): Promise<boolean> {
+  if (inflight) return inflight;
   if (registered) return registeredOk;
   registered = true;
   if (!('serviceWorker' in navigator) || !navigator.storage?.getDirectory) {
     registeredOk = false;
     return false;
   }
-  try {
-    const url = `/sw.js?api=${encodeURIComponent(API_BASE_URL)}`;
-    await navigator.serviceWorker.register(url, { scope: '/' });
-    await navigator.serviceWorker.ready;
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      const d = e.data as CacheEv;
-      if (d && (d.type === 'media-cached' || d.type === 'media-skip')) {
-        listeners.forEach((l) => l(d));
-      }
-    });
-    // request persistent storage so cache survives eviction up to disk limits
-    try { if (navigator.storage.persist) await navigator.storage.persist(); } catch { /* noop */ }
-    registeredOk = true;
-  } catch {
-    registeredOk = false;
-  }
-  return registeredOk;
+  inflight = (async () => {
+    try {
+      const url = `/sw.js?api=${encodeURIComponent(API_BASE_URL)}&s=${__BUILD_TS__}`;
+      await navigator.serviceWorker.register(url, { scope: '/' });
+      await navigator.serviceWorker.ready;
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        const d = e.data as CacheEv;
+        if (d && (d.type === 'media-cached' || d.type === 'media-skip' || d.type === 'sw-pong')) {
+          listeners.forEach((l) => l(d));
+        }
+      });
+      try { if (navigator.storage.persist) await navigator.storage.persist(); } catch { /* noop */ }
+      registeredOk = true;
+    } catch (e) {
+      console.warn('[mediaCache] SW register failed:', e);
+      registeredOk = false;
+    } finally {
+      inflight = null;
+    }
+    return registeredOk;
+  })();
+  return inflight;
 }
 
-export function mediaSrc(uuid: string, updatedAt: string): string {
-  const uid = currentUid();
+export async function mediaSrc(uuid: string, updatedAt: string, mime?: string): Promise<string> {
+  const uid = await currentUid();
   const v = encodeURIComponent((updatedAt || '0').replace(/[^0-9A-Za-z:-]/g, ''));
-  return `/__media/${uid}/${uuid}?v=${v}`;
+  const m = mime ? `&m=${encodeURIComponent(mime)}` : '';
+  return `/__media/${uid}/${uuid}?v=${v}${m}`;
 }
+
+declare global { interface Window { __swTrace?: string[] } }
 
 export function onMediaCacheEvent(fn: Listener): () => void {
   listeners.add(fn);

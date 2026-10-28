@@ -32,7 +32,23 @@ app = FastAPI(title="File Management Backend", version="1.0.0")
 logger = log.get_logger("main.log")
 
 
-# Add CORS middleware - must use explicit origins when credentials=True
+# (engine and SessionLocal imported from app.database above)
+# Redis client
+redis_client = Redis.from_url(
+    settings.REDIS_URL,
+    decode_responses=True,
+    socket_connect_timeout=5,
+    socket_timeout=5,
+    retry_on_timeout=True
+)
+
+# Add middleware — registration order = inner to outer (last added is OUTERMOST).
+# CORS must be outermost so that early responses produced by the session layer
+# (401 stale/kicked session) and the throttle layer (429 slow-lane/block) still
+# carry Access-Control-Allow-Origin; otherwise browsers report them as opaque
+# CORS failures and the frontend 401 interceptor never fires.
+app.add_middleware(SessionMiddleware, redis_client=redis_client)
+app.add_middleware(ThrottleMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -50,22 +66,12 @@ app.add_middleware(
         "Upload-Length",
         "Tus-Resumable",
         "Upload-Complete",
+        "Content-Range",
+        "Accept-Ranges",
+        "Content-Length",
+        "ETag",
     ],
 )
-
-# (engine and SessionLocal imported from app.database above)
-# Redis client
-redis_client = Redis.from_url(
-    settings.REDIS_URL,
-    decode_responses=True,
-    socket_connect_timeout=5,
-    socket_timeout=5,
-    retry_on_timeout=True
-)
-
-# Add middleware
-app.add_middleware(SessionMiddleware, redis_client=redis_client)
-app.add_middleware(ThrottleMiddleware)
 
 
 # Background scheduler for auto-save and snapshots
