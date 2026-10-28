@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { previewApi } from '../../api/previewApi';
 import EditorPane from './EditorPane';
+import MediaPane from './MediaPane';
+import { classify, isStreamable } from '../../utils/fileClass';
 import MarkdownPane from './MarkdownPane';
 import JsonPane from './JsonPane';
 import FallbackPane from './FallbackPane';
@@ -26,8 +28,16 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
 
+  const isMedia = isStreamable(filename);
+
   useEffect(() => {
     let live = true;
+    if (isMedia) {
+      setCategory(classify(filename));
+      setUpdatedAt('v1');
+      setLoading(false);
+      return () => { live = false; };
+    }
     setLoading(true);
     previewApi.content(uuid)
       .then((c) => {
@@ -46,7 +56,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
         setCategory('unavailable');
       });
     return () => { live = false; };
-  }, [uuid]);
+  }, [uuid, isMedia, filename]);
 
   const save = useCallback(async () => {
     if (!dirtyRef.current) return;
@@ -124,6 +134,9 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
     if (['text', 'code', 'html', 'svg'].includes(category)) {
       return <EditorPane filename={filename} value={text} onChange={setText} onSave={save} />;
     }
+    if (['image', 'video', 'audio', 'pdf'].includes(category)) {
+      return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
+    }
     return <FallbackPane filename={filename} />;
   };
 
@@ -139,7 +152,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
           </span>
           <div className="flex-1" />
           {status.kind === 'saving' && <span className="text-cyan-300 text-sm animate-pulse">儲存中…</span>}
-          <button
+          {!isMedia && <button
             type="button"
             onClick={() => void save()}
             disabled={!dirty || status.kind === 'saving'}
@@ -147,7 +160,7 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
             title="Ctrl+S"
           >
             儲存
-          </button>
+          </button>}
           <button
             type="button"
             onClick={attemptClose}

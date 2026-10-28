@@ -756,3 +756,106 @@ async def save_file_content(
         FolderService(db)._update_parent_folder_size(f.parent_folder_id, delta)
     logger.info(f"Content saved uuid={f.uuid} user={user_id} delta={delta}")
     return {"uuid": f.uuid, "size": f.size, "updated_at": _fmt_dt(f.updated_at)}
+
+
+# ================= media stream with Range support (P2) =================
+import re as _re
+from fastapi.responses import StreamingResponse
+
+from app.utils.file_classes import is_streamable
+from app.services import security_engine
+
+_STREAM_CHUNK = 64 * 1024
+_RANGE_RE = _re.compile(r'bytes=(\d*)-(\d*)$')
+
+
+def _load_streamable(db: Session, user_id: int, file_uuid: str) -> FileModel:
+    f = db.execute(
+        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+    ).scalar_one_or_none()
+    if f is None or f.deleted_at is not None or not is_streamable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援串流")
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    if not _os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="檔案內容不存在")
+    return f
+
+
+@router.get("/stream")
+async def stream_file(
+    request: Request,
+    uuid: str,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Authenticated Range-capable inline stream for media/pdf (single range)."""
+    _require_preview_flag()
+    batch_ops.assert_not_deleting(redis, uuid)
+    f = _load_streamable(db, user_id, uuid)
+    ip = request.client.host if request.client else None
+    username = None
+    try:
+        if hasattr(request.state, "user"):
+            username = request.state.user.get("username")
+        security_engine.count_download(user_id, ip, username=username)
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    size = _os.path.getsize(path)
+    etag = f'"{f.uuid}-{int(f.updated_at.timestamp()) if f.updated_at else 0}"'
+    mime = f.mime_type or "application/octet-stream"
+    base_headers = {
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'",
+    }
+
+    range_hdr = request.headers.get("range")
+    start, end = 0, size - 1
+    status = 200
+    if range_hdr:
+        m = _RANGE_RE.match(range_hdr.strip())
+        if not m:
+            raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        s, e = m.group(1), m.group(2)
+        if s == "" and e == "":
+            raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        if s == "":  # suffix range bytes=-N
+            length = int(e)
+            if length == 0:
+                raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+            start = max(0, size - min(length, size))
+            end = size - 1
+        else:
+            start = int(s)
+            end = int(e) if e else size - 1
+            end = min(end, size - 1)
+        if start >= size or start > end:
+            raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        status = 206
+
+    length = end - start + 1
+
+    def reader():
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = fh.read(min(_STREAM_CHUNK, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers = dict(base_headers)
+    headers["Content-Length"] = str(length)
+    headers["Content-Type"] = mime
+    if status == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(reader(), status_code=status, headers=headers, media_type=mime)

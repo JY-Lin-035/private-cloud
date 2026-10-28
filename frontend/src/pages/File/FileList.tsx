@@ -37,7 +37,7 @@ import {
 import { lazy, Suspense } from 'react';
 const FileOpener = lazy(() => import('../../components/preview/FileOpener'));
 import { previewApi } from '../../api/previewApi';
-import { isEditable } from '../../utils/fileClass';
+import { isEditable, isStreamable } from '../../utils/fileClass';
 
 
 
@@ -866,11 +866,11 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                     }
                   }}
                   onDoubleClick={() => {
-                    if (previewOn && item.type === 'file' && isEditable(item.name)) {
+                    if (previewOn && item.type === 'file' && (isEditable(item.name) || isStreamable(item.name))) {
                       setOpener({ uuid: item.uuid, name: item.name });
                     }
                   }}
-                  title={previewOn && item.type === 'file' && isEditable(item.name) ? '雙擊開啟預覽／編輯' : undefined}
+                  title={previewOn && item.type === 'file' && (isEditable(item.name) || isStreamable(item.name)) ? '雙擊開啟預覽／編輯' : undefined}
                 >
                   {selectionMode && (
                     <td

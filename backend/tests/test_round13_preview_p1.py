@@ -255,3 +255,92 @@ class TestAuthedFlags:
         with pytest.raises(HTTPException) as ex:
             asyncio.run(settings_api.authed_settings(request=anon, db=db))
         assert ex.value.status_code == 401
+
+
+async def _collect(resp):
+    return b"".join([c if isinstance(c, bytes) else c.encode() async for c in resp.body_iterator])
+
+
+def _mkmedia(ctx, name="clip.mp4", content=b"A" * 1000):
+    db, a, *_ = ctx
+    row = File(uuid="f-media", owner_id=a.id, parent_folder_id=None, name=name,
+               size=len(content), mime_type="video/mp4", storage_path="storage/f-media")
+    db.add(row); db.commit()
+    open(os.path.join(settings.STORAGE_BASE_PATH, "f-media"), "wb").write(content)
+    return content
+
+
+class _Req:
+    def __init__(self, headers=None):
+        self.headers = headers or {}
+        self.client = type("C", (), {"host": "9.9.9.9"})()
+        self.state = type("S", (), {"user": {"username": "alice"}})()
+
+
+class TestStream:
+    def test_basics_headers(self, ctx):
+        db, a, *_ = ctx
+        _mkmedia(ctx)
+        resp = asyncio.run(files.stream_file(uuid="f-media", request=_Req(), db=db,
+                                             redis=FakeR(), user_id=a.id))
+        assert resp.status_code == 200
+        h = {k.lower(): v for k, v in resp.headers.items()}
+        assert h["accept-ranges"] == "bytes"
+        assert h["content-length"] == "1000"
+        assert h["x-content-type-options"] == "nosniff"
+        assert "no-store" in h["cache-control"]
+        assert "default-src 'none'" in h["content-security-policy"]
+        assert asyncio.run(_collect(resp)) == b"A" * 1000
+
+    def test_range_slices(self, ctx):
+        db, a, *_ = ctx
+        _mkmedia(ctx)
+        r1 = asyncio.run(files.stream_file(uuid="f-media", request=_Req({"range": "bytes=100-199"}),
+                                           db=db, redis=FakeR(), user_id=a.id))
+        assert r1.status_code == 206
+        assert asyncio.run(_collect(r1)) == b"A" * 100
+        assert r1.headers["content-range"] == "bytes 100-199/1000"
+        r2 = asyncio.run(files.stream_file(uuid="f-media", request=_Req({"range": "bytes=-50"}),
+                                           db=db, redis=FakeR(), user_id=a.id))
+        assert r2.headers["content-range"] == "bytes 950-999/1000"
+        r3 = asyncio.run(files.stream_file(uuid="f-media", request=_Req({"range": "bytes=990-"}),
+                                           db=db, redis=FakeR(), user_id=a.id))
+        assert len(asyncio.run(_collect(r3))) == 10
+
+    def test_range_invalid_416(self, ctx):
+        db, a, *_ = ctx
+        _mkmedia(ctx)
+        for bad in ("bytes=1000-2000", "bytes=", "bytes=200-100"):
+            with pytest.raises(HTTPException) as ex:
+                asyncio.run(files.stream_file(uuid="f-media", request=_Req({"range": bad}),
+                                              db=db, redis=FakeR(), user_id=a.id))
+            assert ex.value.status_code == 416, bad
+
+    def test_cross_user_and_nonmedia_404(self, ctx):
+        db, a, b, *_ = ctx
+        _mkmedia(ctx)
+        with pytest.raises(HTTPException) as ex:
+            asyncio.run(files.stream_file(uuid="f-media", request=_Req(), db=db, redis=FakeR(), user_id=b.id))
+        assert ex.value.status_code == 404
+        html = File(uuid="f-html", owner_id=a.id, parent_folder_id=None, name="x.html",
+                    size=5, mime_type="text/html", storage_path="storage/f-html")
+        db.add(html); db.commit()
+        with pytest.raises(HTTPException) as ex2:
+            asyncio.run(files.stream_file(uuid="f-html", request=_Req(), db=db, redis=FakeR(), user_id=a.id))
+        assert ex2.value.status_code == 404
+
+    def test_locked_423(self, ctx):
+        db, a, *_ = ctx
+        _mkmedia(ctx)
+        r = FakeR(); r.held.add("delLock:f-media")
+        with pytest.raises(HTTPException) as ex:
+            asyncio.run(files.stream_file(uuid="f-media", request=_Req(), db=db, redis=r, user_id=a.id))
+        assert ex.value.status_code == 423
+
+    def test_flag_off_403(self, ctx, monkeypatch):
+        db, a, *_ = ctx
+        _mkmedia(ctx)
+        monkeypatch.setattr(files, "is_feature_enabled", lambda k, default=True: False)
+        with pytest.raises(HTTPException) as ex:
+            asyncio.run(files.stream_file(uuid="f-media", request=_Req(), db=db, redis=FakeR(), user_id=a.id))
+        assert ex.value.status_code == 403

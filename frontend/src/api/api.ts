@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_BASE_URL } from '../config/api';
+import { purgeMediaCache } from '../utils/mediaCache';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -19,7 +20,8 @@ api.interceptors.response.use(
         return Promise.reject(new Error(error.response?.data?.message ?? error.response?.data?.detail));
       }
       else if (!publicPaths.includes(window.location.pathname)) {
-        // Unauthorized - clear localStorage and redirect to login
+        // Unauthorized - drop cached media, clear localStorage, redirect to login
+        purgeMediaCache();
         localStorage.clear();
         window.location.href = '/';
       }

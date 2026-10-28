@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree, Users, Sliders, Megaphone, Shield } from 'lucide-react';
 import Dashboard from '../pages/Dashboard/Dashboard';
+import { purgeMediaCache } from '../utils/mediaCache';
 import { authApi } from '../api/authApi';
 
 
@@ -23,6 +24,7 @@ function Drawer() {
   async function signOut() {
     try {
       await authApi.signOut();
+      purgeMediaCache();
 
       localStorage.clear();
       window.location.href = "/";
