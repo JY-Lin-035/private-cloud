@@ -172,7 +172,7 @@ class TestToggleEnableKick:
         req.state.user_id = 1
         req.client.host = "9.9.9.9"
         redis = MagicMock()
-        r = _a.run(acc.admin_toggle_enable(request=req, user_id=5, db=db, redis_client=redis))
+        r = acc.admin_toggle_enable(request=req, user_id=5, db=db, redis_client=redis)
         assert r["enabled"] is False
         redis.delete.assert_any_call("session:5")
         redis.delete.assert_any_call("session_data:5")

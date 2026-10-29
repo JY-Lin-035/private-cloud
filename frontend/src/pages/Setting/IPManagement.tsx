@@ -34,7 +34,7 @@ interface FormState {
   token: string;
   username: string;
   action: 'slow' | 'block';
-  scope: 'transfer' | 'full';
+  scope: 'transfer' | 'full' | 'stream';
   direction: 'up' | 'down' | 'both';
   delay: string;
   upK: string;
@@ -61,8 +61,8 @@ function toBody(f: FormState) {
     scope: f.scope,
     direction: f.scope === 'full' ? 'both' : f.direction,
     delay_ms: f.action === 'block' ? 0 : Number(f.delay) || 0,
-    upload_kbps: (f.action !== 'block' && (f.scope === 'full' || f.direction !== 'down') && f.upK) ? Number(f.upK) : null,
-    download_kbps: (f.action !== 'block' && (f.scope === 'full' || f.direction !== 'up') && f.dnK) ? Number(f.dnK) : null,
+    upload_kbps: (f.action !== 'block' && f.scope !== 'stream' && (f.scope === 'full' || f.direction !== 'down') && f.upK) ? Number(f.upK) : null,
+    download_kbps: (f.action !== 'block' && (f.scope !== 'transfer' || f.direction !== 'up') && f.dnK) ? Number(f.dnK) : null,
     expires_in_hours: (f.hours && f.hours !== 'custom') ? Number(f.hours) : null,
     expires_at: f.hours === 'custom' ? localToIso(f.customAt) : null,
     reason: f.reason.trim() || (f.action === 'block' ? '手動封鎖' : '手動設定'),
@@ -98,6 +98,7 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
         <select className={inputCls} value={f.scope}
           onChange={e => set({ scope: e.target.value as FormState['scope'] })}>
           <option value="transfer">僅傳輸</option>
+          <option value="stream">串流播放</option>
           <option value="full">全站</option>
         </select>
       </label>
@@ -118,13 +119,13 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
             value={f.delay} onChange={e => set({ delay: e.target.value })} />
         </label>
       ) : <div className="hidden md:block" aria-hidden />}
-      {f.action === 'slow' && (f.scope === 'full' || f.direction !== 'down') ? (
+      {f.action === 'slow' && f.scope !== 'stream' && (f.scope === 'full' || f.direction !== 'down') ? (
         <label className={labCls}>上傳頻寬上限（KB/秒）
           <input type="number" min="16" className={inputCls} value={f.upK} onChange={e => set({ upK: e.target.value })} />
         </label>
       ) : <div className="hidden md:block" aria-hidden />}
-      {f.action === 'slow' && (f.scope === 'full' || f.direction !== 'up') ? (
-        <label className={labCls}>下載頻寬上限（KB/秒）
+      {f.action === 'slow' && (f.scope === 'full' || f.scope === 'stream' || f.direction !== 'up') ? (
+        <label className={labCls}>{f.scope === 'stream' ? '串流頻寬上限（KB/秒）' : '下載頻寬上限（KB/秒）'}
           <input type="number" min="16" className={inputCls} value={f.dnK} onChange={e => set({ dnK: e.target.value })} />
         </label>
       ) : <div className="hidden md:block" aria-hidden />}
@@ -245,8 +246,8 @@ function IPManagement({ layoutClass = "" }: Props) {
         scope: editForm.scope,
         direction: editForm.scope === 'full' ? 'both' : editForm.direction,
         delay_ms: editForm.action === 'block' ? 0 : Number(editForm.delay) || 0,
-        upload_kbps: (editForm.action !== 'block' && (editForm.scope === 'full' || editForm.direction !== 'down') && editForm.upK) ? Number(editForm.upK) : null,
-        download_kbps: (editForm.action !== 'block' && (editForm.scope === 'full' || editForm.direction !== 'up') && editForm.dnK) ? Number(editForm.dnK) : null,
+        upload_kbps: (editForm.action !== 'block' && editForm.scope !== 'stream' && (editForm.scope === 'full' || editForm.direction !== 'down') && editForm.upK) ? Number(editForm.upK) : null,
+        download_kbps: (editForm.action !== 'block' && (editForm.scope !== 'transfer' || editForm.direction !== 'up') && editForm.dnK) ? Number(editForm.dnK) : null,
         expires_in_hours: (editForm.hours && editForm.hours !== 'custom') ? Number(editForm.hours) : null,
         expires_at: editForm.hours === 'custom' ? localToIso(editForm.customAt) : (editForm.hours === '' ? '' : null),
         reason: editForm.reason.trim() || undefined,
@@ -276,7 +277,7 @@ function IPManagement({ layoutClass = "" }: Props) {
   const statusPill = (r: ControlRule) => (
     <span className="flex flex-col gap-1">
       <span className={`inline-flex w-max items-center px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${r.action === 'block' ? 'bg-red-900/30 text-red-400 ring-red-500/30' : 'bg-amber-900/30 text-amber-300 ring-amber-500/30'}`}>
-        {r.action === 'block' ? '429 封鎖' : '慢速'}・{r.scope === 'full' ? '全站' : `傳輸・${r.direction === 'both' ? '上下' : r.direction === 'up' ? '上' : '下'}`}
+        {r.action === 'block' ? '429 封鎖' : '慢速'}・{r.scope === 'full' ? '全站' : r.scope === 'stream' ? '串流播放' : `傳輸・${r.direction === 'both' ? '上下' : r.direction === 'up' ? '上' : '下'}`}
       </span>
       {r.action === 'slow' && (
         <span className="text-xs text-gray-400">

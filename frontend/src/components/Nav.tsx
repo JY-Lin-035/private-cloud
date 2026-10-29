@@ -4,7 +4,7 @@ import Drawer from './Drawer';
 import AnnouncementTicker from './AnnouncementTicker';
 import { authApi } from '../api/authApi';
 
-import logoImage from '../assets/Logo.png';
+import logoImage from '../assets/Logo.webp';
 
 function Nav({ layoutClass = '' }: { layoutClass?: string }) {
   const location = useLocation();

@@ -1,5 +1,7 @@
 /// <reference types="vite/client" />
 
+declare module 'pdfjs-dist/build/pdf.worker.min.mjs'
+
 declare module '*.png' {
   const src: string;
   export default src;
@@ -29,3 +31,5 @@ declare module '*.webp' {
   const src: string;
   export default src;
 }
+
+declare const __BUILD_TS__: string;

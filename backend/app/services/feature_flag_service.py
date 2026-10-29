@@ -5,6 +5,12 @@ ALLOWED_FEATURE_KEYS = (
     "allow_registration",
     "enable_verification_email",
     "enable_auth_code_email",
+    "enable_file_preview",
+)
+
+# flags readable by any signed-in user (drives FileOpener visibility)
+AUTHED_FEATURE_KEYS = (
+    "enable_file_preview",
 )
 
 PUBLIC_FEATURE_KEYS = (

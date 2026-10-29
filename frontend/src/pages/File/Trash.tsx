@@ -147,6 +147,8 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
       setResponse([e.message]);
       setClassName('text-red-500');
       setShowMode(true);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -158,12 +160,14 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
 
       const firstCheck = confirm(firstConfirmMessage);
       if (!firstCheck) {
+        setBusy(false);
         return;
       }
 
       if (item.type === 'folder') {
         const secondCheck = confirm('此操作將一併永久刪除所有子項目');
         if (!secondCheck) {
+          setBusy(false);
           return;
         }
         await folderApi.delete({ folder_uuid: item.uuid, permanent: true });
@@ -186,6 +190,8 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
       setResponse([e.message]);
       setClassName('text-red-500');
       setShowMode(true);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -212,22 +218,22 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
   async function batchRestore() {
     if (!selectedItems.length || busy) return;
     setBusy(true);
-    let ok = 0;
-    const errs: string[] = [];
-    for (const item of selectedItems) {
-      try {
-        if (item.type === 'folder') await folderApi.restore({ folder_uuid: item.uuid });
-        else await fileApi.restore({ file_uuid: item.uuid });
-        ok++;
-      } catch (e: any) {
-        errs.push(`${item.name}（${e?.message ?? '失敗'}）`);
-      }
+    try {
+      const res = await fileApi.batchOp({
+        folders: selectedItems.filter(i => i.type === 'folder').map(i => i.uuid),
+        files: selectedItems.filter(i => i.type === 'file').map(i => i.uuid),
+        mode: 'restore',
+      });
+      await getTrashList();
+      setSelected([]);
+      setSelectionMode(false);
+      const skipNote = res.skipped.length ? [`跳過 ${res.skipped.length} 項：` + res.skipped.map(x => x.reason).join('、')] : [];
+      setResponse([`已還原 ${res.folders + res.files} 項`, ...skipNote]);
+      setClassName('text-green-500');
+    } catch (e: any) {
+      setResponse([e.message ?? '還原失敗']);
+      setClassName('text-red-500');
     }
-    await getTrashList();
-    setSelected([]);
-    setSelectionMode(false);
-    setResponse([`已還原 ${ok} 項`, ...(errs.length ? [`失敗 ${errs.length} 項：`, ...errs] : [])]);
-    setClassName(errs.length ? 'text-red-500' : 'text-green-500');
     setShowMode(true);
     setBusy(false);
   }
@@ -236,26 +242,24 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
     if (!selectedItems.length || busy) return;
     if (!window.confirm(`確定要永久刪除選取的 ${selectedItems.length} 個項目？此操作無法還原。`)) return;
     setBusy(true);
-    let ok = 0;
-    let freed = 0;
-    const errs: string[] = [];
-    for (const item of selectedItems) {
-      try {
-        if (item.type === 'folder') await folderApi.delete({ folder_uuid: item.uuid, permanent: true });
-        else await fileApi.delete({ file_uuid: item.uuid, permanent: true });
-        ok++;
-        freed += item.size || 0;
-      } catch (e: any) {
-        errs.push(`${item.name}（${e?.message ?? '失敗'}）`);
-      }
+    try {
+      const res = await fileApi.batchOp({
+        folders: selectedItems.filter(i => i.type === 'folder').map(i => i.uuid),
+        files: selectedItems.filter(i => i.type === 'file').map(i => i.uuid),
+        mode: 'permanent',
+      });
+      storage.addUsedStorage(-res.freed_bytes);
+      storage.getFromAPI();
+      await getTrashList();
+      setSelected([]);
+      setSelectionMode(false);
+      const skipNote = res.skipped.length ? [`跳過 ${res.skipped.length} 項`] : [];
+      setResponse([`已永久刪除 ${res.folders + res.files} 項`, ...skipNote]);
+      setClassName('text-green-500');
+    } catch (e: any) {
+      setResponse([e.message ?? '刪除失敗']);
+      setClassName('text-red-500');
     }
-    storage.addUsedStorage(-freed);
-    storage.getFromAPI();
-    await getTrashList();
-    setSelected([]);
-    setSelectionMode(false);
-    setResponse([`已永久刪除 ${ok} 項`, ...(errs.length ? [`失敗 ${errs.length} 項：`, ...errs] : [])]);
-    setClassName(errs.length ? 'text-red-500' : 'text-green-500');
     setShowMode(true);
     setBusy(false);
   }
@@ -505,14 +509,14 @@ function TrashList({ layoutClass = "" }: { layoutClass?: string }) {
               disabled={!selected.length || busy}
               className="px-3 py-1.5 rounded text-sm bg-green-600 hover:bg-green-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
             >
-              還原
+              {busy ? '處理中…' : '還原'}
             </button>
             <button
               onClick={batchPermanentDelete}
               disabled={!selected.length || busy}
               className="px-3 py-1.5 rounded text-sm bg-red-600 hover:bg-red-500 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
             >
-              永久刪除
+              {busy ? '處理中…' : '永久刪除'}
             </button>
             <button
               onClick={toggleSelectionMode}

@@ -1,3 +1,5 @@
+from redis import Redis
+from app.services import batch_ops
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -7,7 +9,7 @@ from app.schemas.folder import (
 )
 from app.services.folder_service import FolderService
 from app.services import zip_service
-from app.api.dependencies import get_db, get_current_user_id
+from app.api.dependencies import get_db, get_current_user_id, get_redis
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
@@ -18,8 +20,10 @@ logger = log.get_logger("folders_api.log")
 async def create_folder(
     request: CreateFolderRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
+    batch_ops.assert_not_deleting(redis, request.parent_folder_uuid)
     """Create a new folder."""
     try:
         logger.info(f"Create folder request received, user_id: {user_id}, parent_folder_uuid: {request.parent_folder_uuid}, name: {request.name}")
@@ -44,9 +48,11 @@ async def create_folder(
 async def rename_folder(
     request: RenameFolderRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Rename a folder."""
+    batch_ops.assert_not_deleting(redis, request.folder_uuid)
     try:
         logger.info(f"Rename folder request received, user_id: {user_id}, folder_uuid: {request.folder_uuid}, name: {request.name}")
         
@@ -70,9 +76,11 @@ async def rename_folder(
 async def delete_folder(
     request: DeleteFolderRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Delete a folder (soft or hard)."""
+    batch_ops.assert_not_deleting(redis, request.folder_uuid)
     try:
         logger.info(f"Delete folder request received, user_id: {user_id}, folder_uuid: {request.folder_uuid}, permanent: {request.permanent}")
         
@@ -96,9 +104,11 @@ async def delete_folder(
 async def restore_folder(
     request: RestoreFolderRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Restore a soft-deleted folder."""
+    batch_ops.assert_not_deleting(redis, request.folder_uuid)
     try:
         logger.info(f"Restore folder request received, user_id: {user_id}, folder_uuid: {request.folder_uuid}")
         
@@ -223,9 +233,11 @@ class FolderMoveRequest(BaseModel):
 async def move_folders(
     request: FolderMoveRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Move folders to an existing folder or a (auto-created) nested path."""
+    batch_ops.assert_not_deleting(redis, *request.folder_uuids, request.target_folder_uuid)
     target = request.target_folder_uuid
     if not target and request.target_path:
         resolved = FolderService(db).resolve_or_create_path(user_id, None, request.target_path)

@@ -94,7 +94,7 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
               <img src={githubIcon} alt='GitHub' className='w-6 h-6 brightness-0 invert' />
             </a>
             <a
-              href='mailto:JY@junmail.abrdns.com'
+              href='mailto:meow@jmail.jun.org.uk'
               className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
             >
               <Mail className='w-6 h-6' />

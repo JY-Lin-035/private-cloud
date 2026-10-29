@@ -27,6 +27,11 @@ export const fileApi = {
     return response.data;
   },
 
+  downloadToken: async (file_uuid: string) => {
+    const response = await api.get('/api/files/downloadToken', { params: { file_uuid } });
+    return response.data as { token: string; file_uuid: string; expires_in: number };
+  },
+
   // Download file
   download: async (file_uuid: string) => {
     const response = await api.get('/api/files/downloadToken', {
@@ -44,6 +49,10 @@ export const fileApi = {
 
 
   // Delete file (soft or hard)
+  batchOp: async (data: { folders: string[]; files: string[]; mode: 'soft' | 'permanent' | 'restore' }) => {
+    const response = await api.post('/api/files/batchDelete', data);
+    return response.data as { folders: number; files: number; freed_bytes: number; skipped: { uuid: string; reason: string }[] };
+  },
   delete: async (data: { file_uuid: string; permanent: boolean }) => {
     const response = await api.delete('/api/files/delete', { data });
     return response.data;

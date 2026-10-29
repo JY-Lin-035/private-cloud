@@ -1,3 +1,5 @@
+from redis import Redis
+from app.services import batch_ops
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -60,9 +62,11 @@ async def get_share_list(
 async def create_share_link(
     request: ShareLinkRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Create a share link for a folder or file."""
+    batch_ops.assert_not_deleting(redis, request.item_uuid)
     try:
         logger.info(f"Create share link request received, user_id: {user_id}, item_uuid: {request.item_uuid}, item_type: {request.item_type}, limited_date_raw: {request.limited_date}")
         

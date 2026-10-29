@@ -15,8 +15,10 @@ from app.services.file_service import FileService
 from app.services.folder_service import FolderService
 from app.services import zip_service
 from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user_id_optional
+from sqlalchemy import select
 from app.api.rate_limit import rate_limit
 from app.config import settings
+from app.services import batch_ops
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -61,9 +63,11 @@ async def tus_create_upload(
     tus_resumable: str = Header(None, alias='Tus-Resumable'),
     x_parent_folder_uuid: str = Header(None, alias='X-Parent-Folder-Uuid'),
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id),
 ):
     """Create a new tus upload session and respond with the initial offset."""
+    batch_ops.assert_not_deleting(redis, x_parent_folder_uuid)
     try:
         if not tus_resumable:
             raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
@@ -283,9 +287,11 @@ async def upload_file(
     parent_folder_uuid: str = Form(None),
     relative_path: str = Form(None),
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Upload a file."""
+    batch_ops.assert_not_deleting(redis, parent_folder_uuid)
     try:
         logger.info(f"Upload file request received, user_id: {user_id}, parent_folder_uuid: {parent_folder_uuid}, relative_path: {relative_path}, filename: {file.filename}")
         
@@ -332,6 +338,7 @@ async def get_download_token(
     user_id: int = Depends(get_current_user_id),
 ):
     """Generate a short-lived token for cross-origin file download."""
+    batch_ops.assert_not_deleting(redis, file_uuid)
     try:
         logger.info("Token req: {}/{}".format(user_id, file_uuid))
         file_service = FileService(db)
@@ -363,6 +370,7 @@ async def download_file(
     user_id: Optional[int] = Depends(get_current_user_id_optional)
 ):
     """Download a file."""
+    batch_ops.assert_not_deleting(redis, file_uuid)
     try:
         file_service = FileService(db)
         actual_user_id = user_id
@@ -408,9 +416,11 @@ async def download_file(
 async def delete_file(
     request: DeleteFileRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Delete a file (soft or hard)."""
+    batch_ops.assert_not_deleting(redis, request.file_uuid)
     try:
         logger.info(f"Delete file request received, user_id: {user_id}, file_uuid: {request.file_uuid}, permanent: {request.permanent}")
         
@@ -434,9 +444,11 @@ async def delete_file(
 async def restore_file(
     request: RestoreFileRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Restore a soft-deleted file."""
+    batch_ops.assert_not_deleting(redis, request.file_uuid)
     try:
         logger.info(f"Restore file request received, user_id: {user_id}, file_uuid: {request.file_uuid}")
         
@@ -506,6 +518,22 @@ async def recalculate_storage(
         raise
 
 
+class BatchDeleteRequest(BaseModel):
+    folders: list[str] = []
+    files: list[str] = []
+    mode: str  # soft | permanent | restore
+
+
+@router.post("/batchDelete")
+async def batch_delete(
+    request: BatchDeleteRequest,
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """One-shot batch trash op with per-item deletion locks (423 while running)."""
+    return batch_ops.batch_operation(user_id, request.folders, request.files, request.mode, redis)
+
+
 class FileMoveRequest(BaseModel):
     file_uuids: list[str]
     target_folder_uuid: Optional[str] = None
@@ -521,9 +549,11 @@ class BulkDownloadRequest(BaseModel):
 async def move_files(
     request: FileMoveRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Move files to an existing folder or a (auto-created) nested path."""
+    batch_ops.assert_not_deleting(redis, *request.file_uuids, request.target_folder_uuid)
     target = request.target_folder_uuid
     if not target and request.target_path:
         resolved = FolderService(db).resolve_or_create_path(user_id, None, request.target_path)
@@ -544,9 +574,11 @@ async def move_files(
 async def download_bulk(
     request: BulkDownloadRequest,
     db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user_id: int = Depends(get_current_user_id)
 ):
     """Stream multiple selected files/folders as one zip archive."""
+    batch_ops.assert_not_deleting(redis, *request.file_uuids, *request.folder_uuids)
     if not request.file_uuids and not request.folder_uuids:
         raise HTTPException(status_code=400, detail='沒有選擇任何項目')
 
@@ -555,3 +587,268 @@ async def download_bulk(
     )
     logger.info(f"Bulk zip for user {user_id}: {kept_files} files, {kept_folders} folders, {len(items)} entries")
     return zip_service.build_zip_response(items, 'meowcloud-download')
+
+
+# ================= preview / create / edit (P1) =================
+import os as _os
+import uuid as _uuid
+from datetime import datetime as _dt
+
+from app.models.account import Account
+from app.models.file import File as FileModel
+from app.models.folder import Folder as FolderModel
+from app.services.feature_flag_service import is_feature_enabled
+from app.utils.file_classes import MAX_EDIT_BYTES, classify, is_editable
+from app.utils.name_validation import validate_display_name
+from app.utils.pathing import unique_name
+
+
+def _require_preview_flag():
+    if not is_feature_enabled("enable_file_preview", default=False):
+        raise HTTPException(status_code=403, detail="檔案預覽功能尚未啟用")
+
+
+def _fmt_dt(dt) -> str:
+    return dt.isoformat() if isinstance(dt, _dt) else str(dt)
+
+
+def _load_editable(db: Session, user_id: int, file_uuid: str) -> FileModel:
+    f = db.execute(
+        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+    ).scalar_one_or_none()
+    if f is None or f.deleted_at is not None or not is_editable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    return f
+
+
+class CreateFileRequest(BaseModel):
+    name: str
+    parent_folder_uuid: Optional[str] = None
+
+
+class SaveContentRequest(BaseModel):
+    uuid: str
+    text: str
+    if_updated_at: Optional[str] = None
+
+
+@router.post("/create", dependencies=[Depends(rate_limit(20, 300))])
+async def create_text_file(
+    request: CreateFileRequest,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Create a new empty editable text file in the given folder."""
+    _require_preview_flag()
+    cleaned, err = validate_display_name(request.name)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    if not is_editable(cleaned):
+        raise HTTPException(status_code=400, detail="僅支援建立文字/代碼類檔案")
+    parent_uuid = request.parent_folder_uuid or None
+    if parent_uuid:
+        parent = db.execute(
+            select(FolderModel).where(FolderModel.uuid == parent_uuid, FolderModel.owner_id == user_id)
+        ).scalar_one_or_none()
+        if parent is None or parent.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="父資料夾不存在")
+        batch_ops.assert_not_deleting(redis, parent_uuid)
+        taken = set(db.execute(
+            select(FileModel.name).where(
+                FileModel.parent_folder_id == parent_uuid, FileModel.deleted_at.is_(None))
+        ).scalars().all())
+    else:
+        taken = set(db.execute(
+            select(FileModel.name).where(
+                FileModel.parent_folder_id.is_(None), FileModel.deleted_at.is_(None))
+        ).scalars().all())
+    name = unique_name(cleaned, taken)
+    file_uuid = str(_uuid.uuid4())
+    storage_path = _os.path.join(settings.STORAGE_BASE_PATH, file_uuid)
+    try:
+        with open(storage_path, "wb"):
+            pass
+    except OSError:
+        raise HTTPException(status_code=500, detail="無法建立檔案")
+    import mimetypes
+    mime = mimetypes.guess_type(name)[0] or "text/plain"
+    row = FileModel(uuid=file_uuid, owner_id=user_id, parent_folder_id=parent_uuid,
+                    name=name, size=0, mime_type=mime, storage_path=storage_path)
+    db.add(row)
+    db.commit()
+    logger.info(f"Text file created uuid={file_uuid} by user {user_id}")
+    return {"uuid": file_uuid, "name": name, "size": 0,
+            "updated_at": _fmt_dt(row.updated_at), "category": classify(name)}
+
+
+@router.get("/content", dependencies=[Depends(rate_limit(60, 60))])
+async def get_file_content(
+    uuid: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Read a text-class file's content for the editor."""
+    _require_preview_flag()
+    f = _load_editable(db, user_id, uuid)
+    if f.size and f.size > MAX_EDIT_BYTES:
+        raise HTTPException(status_code=413, detail="檔案超過編輯上限 2MB，請下載後編輯")
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    if not _os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="檔案內容不存在")
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        raise HTTPException(status_code=500, detail="讀取失敗")
+    return {"text": raw.decode("utf-8", "replace"), "size": f.size,
+            "updated_at": _fmt_dt(f.updated_at), "name": f.name, "category": classify(f.name)}
+
+
+@router.put("/content", dependencies=[Depends(rate_limit(30, 60))])
+async def save_file_content(
+    request: SaveContentRequest,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Write editor content back atomically with quota accounting and 409 conflict guard."""
+    _require_preview_flag()
+    batch_ops.assert_not_deleting(redis, request.uuid)
+    f = _load_editable(db, user_id, request.uuid)
+    if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
+        raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
+    data = request.text.encode("utf-8")
+    if len(data) > MAX_EDIT_BYTES:
+        raise HTTPException(status_code=413, detail="內容超過編輯上限 2MB")
+    delta = len(data) - (f.size or 0)
+    if delta > 0:
+        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
+        if acct is None:
+            raise HTTPException(status_code=404, detail="帳號不存在")
+        if len(data) > acct.signal_file_size:
+            raise HTTPException(status_code=413, detail="超過單檔大小上限")
+        if (acct.used_size or 0) + delta > acct.total_file_size:
+            raise HTTPException(status_code=413, detail="空間不足，無法儲存")
+        acct.used_size = (acct.used_size or 0) + delta
+    elif delta < 0:
+        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
+        if acct:
+            acct.used_size = max(0, (acct.used_size or 0) + delta)
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            _os.fsync(fh.fileno())
+        _os.replace(tmp, path)
+    except OSError:
+        try:
+            if _os.path.exists(tmp):
+                _os.remove(tmp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail="寫入失敗")
+    f.size = len(data)
+    f.updated_at = _dt.utcnow()
+    db.commit()
+    if f.parent_folder_id and delta:
+        FolderService(db)._update_parent_folder_size(f.parent_folder_id, delta)
+    logger.info(f"Content saved uuid={f.uuid} user={user_id} delta={delta}")
+    return {"uuid": f.uuid, "size": f.size, "updated_at": _fmt_dt(f.updated_at)}
+
+
+# ================= media stream with Range support (P2) =================
+import re as _re
+from fastapi.responses import StreamingResponse
+
+from app.utils.file_classes import is_streamable
+
+_STREAM_CHUNK = 64 * 1024
+_RANGE_RE = _re.compile(r'bytes=(\d*)-(\d*)$')
+
+
+def _load_streamable(db: Session, user_id: int, file_uuid: str) -> FileModel:
+    f = db.execute(
+        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+    ).scalar_one_or_none()
+    if f is None or f.deleted_at is not None or not is_streamable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援串流")
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    if not _os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="檔案內容不存在")
+    return f
+
+
+@router.get("/stream", dependencies=[Depends(rate_limit(300, 60))])
+async def stream_file(
+    request: Request,
+    uuid: str,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Authenticated Range-capable inline stream for media/pdf (single range).
+
+    Download/session accounting and throttle classification live in the
+    middleware layer (stream-aware), keeping one source of truth here.
+    """
+    _require_preview_flag()
+    batch_ops.assert_not_deleting(redis, uuid)
+    f = _load_streamable(db, user_id, uuid)
+    path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
+    size = _os.path.getsize(path)
+    etag = f'"{f.uuid}-{int(f.updated_at.timestamp()) if f.updated_at else 0}"'
+    mime = f.mime_type or "application/octet-stream"
+    base_headers = {
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'",
+    }
+
+    range_hdr = request.headers.get("range")
+    start, end = 0, size - 1
+    status = 200
+    if range_hdr:
+        m = _RANGE_RE.match(range_hdr.strip())
+        if not m:
+            raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        s, e = m.group(1), m.group(2)
+        if s == "" and e == "":
+            raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        if s == "":  # suffix range bytes=-N
+            length = int(e)
+            if length == 0:
+                raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+            start = max(0, size - min(length, size))
+            end = size - 1
+        else:
+            start = int(s)
+            end = int(e) if e else size - 1
+            end = min(end, size - 1)
+        if start >= size or start > end:
+            raise HTTPException(status_code=416, headers={"Content-Range": f"bytes */{size}"})
+        status = 206
+
+    length = end - start + 1
+
+    def reader():
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = fh.read(min(_STREAM_CHUNK, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers = dict(base_headers)
+    headers["Content-Length"] = str(length)
+    headers["Content-Type"] = mime
+    if status == 206:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(reader(), status_code=status, headers=headers, media_type=mime)

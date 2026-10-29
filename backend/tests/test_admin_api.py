@@ -81,7 +81,7 @@ class TestAdminListUsers4:
     @pytest.mark.asyncio
     async def test_empty(self, admin_request, db_session):
         from app.api.v1.accounts import admin_list_users
-        r = await admin_list_users(admin_request, 1, 10, "", db_session, "mock")
+        r = admin_list_users(admin_request, 1, 10, "", db_session, "mock")
         assert r["users"] == []
 
     @pytest.mark.asyncio
@@ -98,7 +98,7 @@ class TestAdminListUsers4:
         for u in [u1, u2, ad]:
             db_session.add(u)
         db_session.flush()
-        r = await admin_list_users(admin_request, 1, 10, "", db_session, mockredis)
+        r = admin_list_users(admin_request, 1, 10, "", db_session, mockredis)
         assert r["total"] == 2
 
     @pytest.mark.asyncio
@@ -109,7 +109,7 @@ class TestAdminListUsers4:
         cu(db_session, "bob", "bob@t.com")
         mockr = MM()
         mockr.exists.return_value = False
-        r = await admin_list_users(admin_request, 1, 10, "ali", db_session, mockr)
+        r = admin_list_users(admin_request, 1, 10, "ali", db_session, mockr)
         assert len(r["users"]) == 1
         assert r["users"][0]["username"] == "alice"
 
@@ -118,7 +118,7 @@ class TestAdminListUsers4:
         from app.api.v1.accounts import admin_list_users
         from unittest.mock import MagicMock
         cu(db_session, "u1", "hello@world.com", 0)
-        r = await admin_list_users(admin_request, 1, 10, "hello", db_session,  MagicMock())
+        r = admin_list_users(admin_request, 1, 10, "hello", db_session,  MagicMock())
         assert len(r["users"]) == 1
 
     @pytest.mark.asyncio
@@ -126,7 +126,7 @@ class TestAdminListUsers4:
         from app.api.v1.accounts import admin_list_users
         from unittest.mock import MagicMock
         cu(db_session, "u1", "u1@t.com", 0)
-        r = await admin_list_users(admin_request, 1, 10, "xxxxxxxxxx", db_session, MagicMock())
+        r = admin_list_users(admin_request, 1, 10, "xxxxxxxxxx", db_session, MagicMock())
         assert r["users"] == []
 
 
@@ -138,7 +138,7 @@ class TestAdminUpdateQuota:
         u = Account(name="u1", password="pw", email="u1@t.com", identity=0, total_file_size=100)
         db_session.add(u)
         db_session.flush()
-        r = await admin_update_quota(admin_request, u.id, 500, db_session, MagicMock())
+        r = admin_update_quota(admin_request, u.id, 500, db_session, MagicMock())
         assert r["total_storage"] == 500
 
     @pytest.mark.asyncio
@@ -146,7 +146,7 @@ class TestAdminUpdateQuota:
         from app.api.v1.accounts import admin_update_quota
         from unittest.mock import MagicMock
         with pytest.raises(HTTPException) as e:
-            await admin_update_quota(admin_request, 99999, 500, db_session, MagicMock())
+            admin_update_quota(admin_request, 99999, 500, db_session, MagicMock())
         assert e.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -157,7 +157,7 @@ class TestAdminUpdateQuota:
         db_session.add(u)
         db_session.flush()
         with pytest.raises(HTTPException) as e:
-            await admin_update_quota(admin_request, u.id, 500, db_session, MagicMock())
+            admin_update_quota(admin_request, u.id, 500, db_session, MagicMock())
         assert e.value.status_code == 403
 
 
@@ -171,7 +171,7 @@ class TestAdminForceLogout:
         db_session.flush()
         mr = MagicMock()
         mr.delete.return_value = 1
-        await admin_force_logout(admin_request, u.id, db_session, mr)
+        admin_force_logout(admin_request, u.id, db_session, mr)
         assert mr.delete.call_count >= 1
 
     @pytest.mark.asyncio
@@ -179,7 +179,7 @@ class TestAdminForceLogout:
         from app.api.v1.accounts import admin_force_logout
         from unittest.mock import MagicMock
         with pytest.raises(HTTPException) as e:
-            await admin_force_logout(admin_request, 99999, db_session, MagicMock())
+            admin_force_logout(admin_request, 99999, db_session, MagicMock())
         assert e.value.status_code == 404
 
     @pytest.mark.asyncio
@@ -190,7 +190,7 @@ class TestAdminForceLogout:
         db_session.add(ad)
         db_session.flush()
         with pytest.raises(HTTPException) as e:
-            await admin_force_logout(admin_request, ad.id, db_session, MagicMock())
+            admin_force_logout(admin_request, ad.id, db_session, MagicMock())
         assert e.value.status_code == 403
 
 
@@ -202,7 +202,7 @@ class TestAdminToggleEnable:
         u = Account(name="u3", password="pw", email="u3@t.com", identity=0, enable=True)
         db_session.add(u)
         db_session.flush()
-        r = await admin_toggle_enable(admin_request, u.id, db_session, MagicMock())
+        r = admin_toggle_enable(admin_request, u.id, db_session, MagicMock())
         assert r["enabled"] is False
 
     @pytest.mark.asyncio
@@ -212,5 +212,5 @@ class TestAdminToggleEnable:
         u = Account(name="u4", password="pw", email="u4@t.com", identity=0, enable=False)
         db_session.add(u)
         db_session.flush()
-        r = await admin_toggle_enable(admin_request, u.id, db_session, MagicMock())
+        r = admin_toggle_enable(admin_request, u.id, db_session, MagicMock())
         assert r["enabled"] is True

@@ -26,6 +26,7 @@ MeowCloud 是一套**自架個人雲端**：檔案存放、資料夾樹、斷點
 | ⬇️ 下載 | 單檔安全連結下載；資料夾／多選項目以**串流 ZIP** 即時打包（零壓縮、不落地、記憶體恆定） |
 | 🔗 分享 | 四種模式自由組合：不限時／限時／**密碼保護**／限時＋密碼；資料夾分享支援線上瀏覽與逐項選取下載；密碼採 argon2 雜湊＋短效簽名通行券 |
 | ✍️ 協作 | 多人即時編輯（Yjs + Monaco），自動存檔與歷史快照 |
+| 👁️ 預覽／編輯（功能開關，預設關） | 雙擊開啟：文字／代碼 60+ 副檔名線上編輯（自架 Monaco，零 CDN）、Markdown 即時渲染（DOMPurify 淨化）、JSON 格式化驗證、HTML/SVG 沙箱預覽（不透明源＋代券认证）、圖片／PDF 預覽、Word 檔前端轉譯、影音 Range 串流＋瀏覽器本地快取（OPFS，再播零流量，登出即清）；新建文字檔；存檔衝突 409 偵測；垃圾桶鎖 423 |
 | 🗑️ 垃圾桶 | 軟刪除／還原／永久刪除，批次操作，超過保留期（預設 30 天）自動清場，頁面即時顯示倒數政策 |
 | 🛡️ 管理後台 | 使用者管理（配額／小黑屋／踢出）、功能開關（註冊、驗證信）、公告系統（導覽列跑馬燈）、IP 管控台 |
 | 🚨 自動防禦 | 違規積分引擎：囓端點限流、試密碼、探測 admin → 自動「慢速通道 → 全站 429 冷卻」階梯處置；每檔分享連結×IP 錯密碼鎖；即時踢出被停用帳號；資安事件郵件警報（10 分鐘節流防轟炸） |
@@ -136,6 +137,7 @@ MeowCloud is a **self-hosted personal cloud**: file & folder management, resumab
 | ⬇️ Download | Signed one-click links; folders and multi-selections streamed as ZIP (store-mode, no temp files, constant memory) |
 | 🔗 Sharing | Four combinable modes: permanent / expiring / **password-protected** / expiring + password; shared folders get online browsing with per-file selection; passwords stored as argon2 hashes behind short-lived HMAC tickets |
 | ✍️ Collaboration | Multi-user editing (Yjs + Monaco) with autosave and history snapshots |
+| 👁️ Preview / Edit (feature-flagged, off by default) | Double-click to open: 60+ text/code formats edited in a self-hosted Monaco (zero CDN), live Markdown preview (DOMPurify-sanitized), JSON format/validate, sandboxed HTML/SVG preview (opaque origin + single-purpose tokens), image/PDF preview, in-browser Word rendering, Range-streamed media with local OPFS cache (replays offline, purged on logout), file creation, 409 conflict detection, 423 trash locks |
 | 🗑️ Trash | Soft delete, restore, batch purge, automatic cleanup past retention (30 days by default, env-driven) |
 | 🛡️ Admin | User management (quota / disable / force logout), feature flags, announcement ticker, IP control panel |
 | 🚨 Auto-defense | Violation scoring: endpoint abuse, password guessing, admin probing → automatic *slow-lane* (real bandwidth throttling) escalating to staged site-wide 429 cooldowns; per link×IP lockouts; instant session revocation; email security alerts with a 10-minute anti-spam cooldown |

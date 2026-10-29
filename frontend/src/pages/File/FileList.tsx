@@ -31,8 +31,14 @@ import {
   ChevronLeft,
   ChevronRight,
   ListChecks,
-  FolderDown
+  FolderDown,
+  FilePlus
 } from 'lucide-react';
+import { lazy, Suspense } from 'react';
+const FileOpener = lazy(() => import('../../components/preview/FileOpener'));
+import { previewApi } from '../../api/previewApi';
+import { isEditable, isStreamable, classify } from '../../utils/fileClass';
+const openable = (n: string) => isEditable(n) || isStreamable(n) || ['office', 'office-legacy'].includes(classify(n));
 
 
 
@@ -76,6 +82,10 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [inputShow, setInputShow] = useState(false);
   const [waitFolderName, setWaitFolderName] = useState<any[]>([]);
   const [currentFolderUuid, setCurrentFolderUuid] = useState<string | null>(null);
+  const [previewOn, setPreviewOn] = useState(false);
+  const [opener, setOpener] = useState<{ uuid: string; name: string } | null>(null);
+  const [newFileModal, setNewFileModal] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
 
   // Share modal state
   const [showShareModal, setShowShareModal] = useState(false);
@@ -92,6 +102,26 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
   const [moveOpen, setMoveOpen] = useState(false);
   const [movePath, setMovePath] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    previewApi.authedFlags().then((f) => setPreviewOn(!!f?.enable_file_preview));
+  }, []);
+
+  async function newTextFile() {
+    const name = newFileName.trim();
+    if (!name) return;
+    try {
+      const res = await previewApi.createText(name, currentFolderUuid);
+      setNewFileModal(false);
+      setNewFileName('');
+      await getFileList(currentFolderUuid);
+      setOpener({ uuid: res.uuid, name: res.name });
+    } catch (e: any) {
+      setResponse([e?.message ?? '建立失敗']);
+      setClassName('text-red-500');
+      setShowMode(true);
+    }
+  }
 
   async function getFileList(parent_folder_uuid: string | null) {
     try {
@@ -195,9 +225,9 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
     if (!window.confirm(`確定要將選取的 ${selected.length} 項目移入資源回收筒？`)) return;
     setBusy(true);
     try {
-      for (const u of selectedFiles) await fileApi.delete({ file_uuid: u, permanent: false });
-      for (const u of selectedFolders) await folderApi.delete({ folder_uuid: u, permanent: false });
-      setResponse([`已將 ${selected.length} 個項目移入資源回收筒`]);
+      const res = await fileApi.batchOp({ folders: selectedFolders, files: selectedFiles, mode: 'soft' });
+      setResponse([`已將 ${res.folders + res.files} 個項目移入資源回收筒`,
+                   ...(res.skipped.length ? [`跳過 ${res.skipped.length} 項`] : [])]);
       setClassName('text-green-500');
       setShowMode(true);
       await getFileList(currentFolderUuid);
@@ -553,6 +583,32 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         </div>
       )}
 
+      {newFileModal && (
+        <Notices
+          inputShow
+          folderName={newFileName}
+          notices={['新建文字檔案']}
+          showMode
+          className=""
+          placeholder="例：notes.md"
+          extraValidate={(v) => (isEditable(v) ? null : '請使用支援的副檔名（.txt .md .py .json .html .css ...）')}
+          onClose={() => { setNewFileModal(false); setNewFileName(''); }}
+          onUpdateFolderName={setNewFileName}
+          onEmitFolderName={newTextFile}
+        />
+      )}
+
+      {opener && (
+        <Suspense fallback={<div className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center text-gray-300">載入編輯器…</div>}>
+          <FileOpener
+            uuid={opener.uuid}
+            filename={opener.name}
+            onClose={() => setOpener(null)}
+            onSaved={() => { void getFileList(currentFolderUuid); }}
+          />
+        </Suspense>
+      )}
+
       {showUpLoad && (
         <>
           {/* 使用 Uppy 上傳組件 */}
@@ -653,7 +709,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
         className={`w-[95vw] sm:w-[90vw] md:w-[80vw] lg:w-[75vw] xl:w-[70vw] mx-auto mt-[1%] flex-1 transition-all duration-[900ms] ease-in-out ${IN ? 'opacity-100' : 'opacity-0'}`}
       >
         <div className="mb-4 flex justify-between items-center">
-          <span>
+          <span className="inline-flex items-center gap-2 flex-wrap">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -663,7 +719,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
             />
 
             <Plus
-              className="w-9 h-9 ml-6 mr-4 text-yellow-300 inline cursor-pointer"
+              className="w-8 h-8 shrink-0 text-yellow-300 inline cursor-pointer"
               onClick={() => {
                 setResponse('');
                 setClassName('text-white');
@@ -674,13 +730,22 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
               }}
             />
 
+            {previewOn && (
+              <span title="新建文字檔案" className="inline-flex">
+                <FilePlus
+                  className="w-8 h-8 shrink-0 text-cyan-300 inline cursor-pointer"
+                  onClick={() => { setNewFileName(''); setNewFileModal(true); }}
+                />
+              </span>
+            )}
+
             <Upload
-              className="w-9 h-9 text-green-600 inline cursor-pointer"
+              className="w-8 h-8 shrink-0 text-green-600 inline cursor-pointer"
               onClick={() => setShowUpLoad(true)}
             />
 
             <ListChecks
-              className={`w-9 h-9 ml-4 inline cursor-pointer ${selectionMode ? 'text-blue-400' : 'text-gray-100'}`}
+              className={`w-8 h-8 shrink-0 inline cursor-pointer ${selectionMode ? 'text-blue-400' : 'text-gray-100'}`}
               onClick={toggleSelectionMode}
             />
           </span>
@@ -801,6 +866,12 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       navigate(`/file-list/${item.uuid}`);
                     }
                   }}
+                  onDoubleClick={() => {
+                    if (previewOn && item.type === 'file' && openable(item.name)) {
+                      setOpener({ uuid: item.uuid, name: item.name });
+                    }
+                  }}
+                  title={previewOn && item.type === 'file' && openable(item.name) ? '雙擊開啟預覽／編輯' : undefined}
                 >
                   {selectionMode && (
                     <td
@@ -829,11 +900,12 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       return `${value} ${unit}`;
                     })()}
                   </td>
-                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal">
-                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-4 lg:gap-6 xl:gap-10">
+                  <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal"
+                    onDoubleClick={(e) => e.stopPropagation()}>
+                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-3 lg:gap-4">
                       {item.type === 'file' && (
                         <Download
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
+                          className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-green-600 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation();
                             callDownloadFile(item.uuid);
@@ -843,7 +915,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
                       {item.type === 'folder' && !selectionMode && (
                         <FolderDown
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-300 cursor-pointer"
+                          className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-cyan-300 cursor-pointer"
                           onClick={async (e) => {
                             e.stopPropagation();
                             try {
@@ -859,7 +931,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
 
                       {item.type === 'folder' && (
                         <Edit3
-                          className="w-5 h-5 sm:w-6 sm:h-6 text-green-600 cursor-pointer"
+                          className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-green-600 cursor-pointer"
                           onClick={(e) => {
                             e.stopPropagation();
                             setResponse('');
@@ -877,13 +949,13 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       )}
 
                       {!selectionMode && (
-                        <div className="relative">
+                        <div className="relative inline-flex items-center">
                           {(() => {
                             const hasValidLink = item.shared && (!item.limited_date || new Date(item.limited_date) > new Date());
                             const IconComponent = hasValidLink ? Link2 : Share2;
                             return (
                               <IconComponent
-                                className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500 cursor-pointer"
+                                className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-blue-500 cursor-pointer"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   callShareFileLink(item.uuid, item.type, item.shared, item.limited_date);
@@ -922,7 +994,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                       )}
 
                       <Trash2
-                        className="w-5 h-5 sm:w-6 sm:h-6 text-red-500 cursor-pointer"
+                        className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-red-500 cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
                           if (item.type === 'file') {

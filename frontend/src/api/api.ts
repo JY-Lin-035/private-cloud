@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_BASE_URL } from '../config/api';
+import { purgeMediaCache } from '../utils/mediaCache';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -19,7 +20,8 @@ api.interceptors.response.use(
         return Promise.reject(new Error(error.response?.data?.message ?? error.response?.data?.detail));
       }
       else if (!publicPaths.includes(window.location.pathname)) {
-        // Unauthorized - clear localStorage and redirect to login
+        // Unauthorized - drop cached media, clear localStorage, redirect to login
+        purgeMediaCache();
         localStorage.clear();
         window.location.href = '/';
       }
@@ -34,6 +36,8 @@ api.interceptors.response.use(
           error.response?.status >= 500 ? "伺服器錯誤，請稍後再試" :
             error.response?.data?.detail ?? "發生錯誤，請稍後再試";
 
-    return Promise.reject(new Error(message));
+    const wrapped: Error & { status?: number } = new Error(message);
+    wrapped.status = error.response?.status;
+    return Promise.reject(wrapped);
   }
 );

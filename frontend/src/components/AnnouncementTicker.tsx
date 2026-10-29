@@ -26,6 +26,9 @@ function AnnouncementTicker({ visible }: { visible: boolean }) {
     }
     return subscribeAnnouncements(list => {
       setItems(list);
+      // cold start: show the first line immediately once data arrives,
+      // instead of sitting blank through a full hold interval first
+      setIdx(prev => (prev < 0 && list.length ? 0 : prev));
     });
   }, [visible]);
 
