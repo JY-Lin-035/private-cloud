@@ -9,7 +9,7 @@ const API_BASE = swUrl.searchParams.get('api') || '';
 const MEDIA_PREFIX = '/__media/';
 const ROOT = 'meow-media-2';
 const LEGACY_ROOTS = ['meow-media'];
-const SW_BUILD = 'p11-coherent-19';
+const SW_BUILD = 'p12-streaming-20';
 
 function trace0(k, stage) {
   broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` });
@@ -101,6 +101,7 @@ function abortWarmFor(uuid) {
 }
 
 async function warm(k) {
+  if (warmState.runningUuid === k.uuid || warmState.pendingUuid === k.uuid) return; // already fetching this one
   if (warmState.running) { warmState.pending = k; warmState.pendingUuid = k.uuid; return; }
   warmState.running = true;
   warmState.runningUuid = k.uuid;
@@ -149,6 +150,7 @@ async function doWarm(k) {
     } catch (err) {
       await dir.removeEntry(wipName).catch(() => {});
       const name = err && err.name ? err.name : 'err';
+      if (name === 'AbortError' || ctrl.signal.aborted) return; // aborted (purge) - not a failure
       broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid,
         reason: name === 'QuotaExceededError' ? '裝置空間不足，無法快取（仍可串流播放）' : '寫入失敗:' + name });
     } finally { warmState.ctrl = null; }
@@ -177,6 +179,7 @@ self.addEventListener('message', (e) => {
   }
   if (d.type === 'media-purge') {
     e.waitUntil((async () => {
+      try { if (warmState.ctrl) warmState.ctrl.abort(); } catch { /* noop */ }
       try {
         const base = await navigator.storage.getDirectory();
         await base.removeEntry(ROOT, { recursive: true });
@@ -200,12 +203,11 @@ self.addEventListener('fetch', (e) => {
     let hit = null;
     try { hit = await cachedFile(k); } catch { /* miss */ }
     if (hit) { broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid }); return rangeResponse(hit, e.request.headers.get('range'), k); }
-    abortWarmFor(k.uuid);
     warm(k).catch(() => {});
     try {
       const headers = new Headers();
       for (const [hk, hv] of e.request.headers.entries()) {
-        if (['range', 'accept-encoding', 'accept-language', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-dest'].includes(hk)) continue;
+        if (['accept-encoding', 'accept-language', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-dest'].includes(hk)) continue;
         headers.set(hk, hv);
       }
       const r = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { headers, credentials: 'include', cache: 'no-store', mode: 'cors' });

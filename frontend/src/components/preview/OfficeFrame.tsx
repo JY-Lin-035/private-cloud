@@ -15,7 +15,7 @@ const MAX_RENDER_BYTES = 80 * 1024 * 1024;
 const HOST_STYLES = `html,body{margin:0;padding:0;background:#fff;color:#111;font-family:system-ui,-apple-system,"Noto Sans TC",sans-serif}
 html,body,#stage{height:100%}
 #stage{padding:0;max-width:none;margin:0 auto;overflow:auto;display:block}
-#stage.pptx-mode{overflow:hidden}
+#stage.pptx-mode{overflow:auto;display:flex;align-items:center;justify-content:center}
 .pdf-page{display:block;width:calc(100% - 32px);max-width:960px;margin:16px auto;border:1px solid #ddd;border-radius:4px;box-shadow:0 1px 6px rgba(0,0,0,.08);height:auto}
 .pdf-more{text-align:center;color:#888;font-size:13px;padding:12px}
 .docx-body p{margin:.6em 0;line-height:1.7}.docx-body h1,.docx-body h2,.docx-body h3{margin:1em 0 .5em}
@@ -23,7 +23,7 @@ html,body,#stage{height:100%}
 .docx-body img{max-width:100%;height:auto}
 .slide-card{border:1px solid #ddd;border-radius:10px;padding:24px 28px;margin:18px 0;min-height:200px;background:#fdfdfd;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .slide-no{font-size:12px;color:#888;margin-bottom:10px}
-.slide-text{margin:.45em 0;line-height:1.65}.pptx-stage{margin:0 auto;height:100%}`;
+.slide-text{margin:.45em 0;line-height:1.65}.pptx-stage{margin:0 auto;flex:none}`;
 const HOST_SRCDOC = `<!doctype html><html><head><meta charset="utf-8"><style>${HOST_STYLES}</style></head><body><div id="stage"></div><script src="/office/render.js?v=${__BUILD_TS__}"><\/script></body></html>`;
 
 
@@ -108,8 +108,10 @@ function OfficeFrame({ uuid, filename, size }: Props) {
   }, [state, kind]);
 
   useEffect(() => {
-    if (state !== 'rendering') return;
-    const guard = setTimeout(() => setState((x) => (x === 'rendering' ? 'error' : x)), 90000);
+    if (state !== 'rendering' && state !== 'ready') return;
+    const guard = state === 'rendering'
+      ? setTimeout(() => setState((x) => (x === 'rendering' ? 'error' : x)), 90000)
+      : 0;
     const host = iframeRef.current
     let ro: ResizeObserver | null = null
     let last = { w: 0, h: 0 }

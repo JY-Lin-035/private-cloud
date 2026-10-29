@@ -36,10 +36,28 @@ async function renderDocx(bytes: ArrayBuffer, stage: HTMLElement) {
 }
 
 async function renderPptx(bytes: ArrayBuffer, stage: HTMLElement, w: number, h: number) {
+  // native slide aspect (EMU units) from presentation.xml; fallback 16:9
+  let aspect = 16 / 9
+  try {
+    const zip = await JSZip.loadAsync(bytes)
+    const p = zip.file('ppt/presentation.xml')
+    if (p) {
+      const xml = await p.async('string')
+      const m = xml.match(/sldSz[^>]*cx="(\d+)"[^>]*cy="(\d+)"/)
+      if (m) { const cx = Number(m[1]), cy = Number(m[2]); if (cx > 0 && cy > 0) aspect = cx / cy }
+    }
+  } catch { /* keep default */ }
+  const availW = Math.max(320, w - 24)
+  const availH = Math.max(200, h - 24)
+  let boxW = availW
+  let boxH = boxW / aspect
+  if (boxH > availH) { boxH = availH; boxW = boxH * aspect }
   const holder = el('div', 'pptx-stage')
-  holder.style.width = `${Math.max(320, w)}px`
+  holder.style.width = `${Math.round(boxW)}px`
+  holder.style.height = `${Math.round(boxH)}px`
+  stage.classList.add('pptx-mode')
   stage.appendChild(holder)
-  const previewer = initPptx(holder, { width: Math.max(320, w), height: Math.max(240, h / 1.4), mode: 'slide' })
+  const previewer = initPptx(holder, { width: Math.round(boxW), height: Math.round(boxH), mode: 'slide' })
   await (previewer as any).preview(bytes)
 }
 

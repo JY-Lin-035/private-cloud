@@ -235,7 +235,7 @@ add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:$BACKEND_PORT ws://127.0.0.1:$BACKEND_PORT https://cloudflareinsights.com; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://meowcloud-api.jun.org.uk wss://meowcloud-api.jun.org.uk https://cloudflareinsights.com; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 EOF
   env BACKEND_PORT="$BACKEND_PORT" STATIC_PORT="$STATIC_PORT" envsubst '$BACKEND_PORT $STATIC_PORT' <<'EOF' | $SUDO tee /etc/nginx/api-gw/spa.conf >'/dev/null'
 upstream meow_backend {
