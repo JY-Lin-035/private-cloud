@@ -10,9 +10,9 @@
 
 @font-face {
   font-family: "Brand";
-  src: url("/assets/fonts/851TEGAKI_ZATSU_NORMAL.TTF");
+  src: url("/assets/fonts/brand-851-subset.woff2") format("woff2");
   font-display: swap;
-  unicode-range: U+2E80-2EFF, U+3000-38FF, U+3400-4DBF, U+4E00-9FFF, U+20000-2FFFF;
+  unicode-range: U+2E80-2EFF, U+3000-38FF, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF;
 }
 
 @theme {

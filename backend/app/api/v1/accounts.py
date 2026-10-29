@@ -23,7 +23,7 @@ logger = log.get_logger("accounts_api.log")
 
 
 @router.post("/register", dependencies=[Depends(rate_limit(5, 300))])
-async def register(
+def register(
     request: RegisterRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -63,7 +63,7 @@ async def register(
 
 
 @router.post("/login", dependencies=[Depends(rate_limit(5, 30))])
-async def login(
+def login(
     http_request: Request,
     request: LoginRequest,
     db: Session = Depends(get_db),
@@ -84,7 +84,7 @@ async def login(
             try:
                 from app.services import security_engine
                 if result.get('stateCode') == 401:
-                    security_engine.record_event_async(
+                    security_engine.record_event(
                         "login_fail", http_request.client.host if http_request.client else None,
                         request.username, None, str(result.get('error', '')))
             except Exception:
@@ -114,7 +114,7 @@ async def login(
 
 
 @router.post("/signOut")
-async def sign_out(
+def sign_out(
     request: Request,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -146,7 +146,7 @@ async def sign_out(
 
 
 @router.post("/getCode", dependencies=[Depends(rate_limit(1, 30))])
-async def get_code(
+def get_code(
     request: GetCodeRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis)
@@ -188,7 +188,7 @@ async def get_code(
 
 
 @router.put("/modifyMail")
-async def modify_mail(
+def modify_mail(
     request: ModifyEmailRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -216,7 +216,7 @@ async def modify_mail(
 
 @router.put("/modifyPassword")
 @router.put("/modifyPW")
-async def modify_password(
+def modify_password(
     request: ModifyPasswordRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis),
@@ -243,7 +243,7 @@ async def modify_password(
 
 
 @router.put("/resetPW", dependencies=[Depends(rate_limit(2, 30))])
-async def reset_password(
+def reset_password(
     request: ResetPasswordRequest,
     db: Session = Depends(get_db),
     redis_client: Redis = Depends(get_redis)
@@ -269,7 +269,7 @@ async def reset_password(
 
 
 @router.get("/checkSession")
-async def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
+def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
     """Check if user session is valid and return user data. Returns anonymous if not logged in."""
     try:
         session_token = request.cookies.get('session')
@@ -320,7 +320,7 @@ async def check_session(request: Request, redis_client: Redis = Depends(get_redi
 
 
 @router.post("/admin/recalculate-user-storage")
-async def recalculate_user_storage(
+def recalculate_user_storage(
     username: str,
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
@@ -409,7 +409,7 @@ def _admin_required(request) -> dict:
 
 
 @router.get("/admin/users")
-async def admin_list_users(
+def admin_list_users(
     request: Request,
     page: int = Query(1, ge=1),
     per_page: int = Query(10, ge=1, le=100),
@@ -449,7 +449,7 @@ async def admin_list_users(
 
 
 @router.put("/admin/users/{user_id}/quota")
-async def admin_update_quota(
+def admin_update_quota(
     request: Request,
     user_id: int,
     total_storage: int = Query(..., ge=0),
@@ -473,7 +473,7 @@ async def admin_update_quota(
 
 
 @router.post("/admin/users/{user_id}/force-logout")
-async def admin_force_logout(
+def admin_force_logout(
     request: Request,
     user_id: int,
     db: Session = Depends(get_db),
@@ -491,7 +491,7 @@ async def admin_force_logout(
 
 
 @router.put("/admin/users/{user_id}/toggle-enable")
-async def admin_toggle_enable(
+def admin_toggle_enable(
     request: Request,
     user_id: int,
     db: Session = Depends(get_db),
@@ -515,7 +515,7 @@ async def admin_toggle_enable(
 
 
 @router.put("/quota/self")
-async def update_own_quota(
+def update_own_quota(
     request: Request,
     total_storage: int = Query(..., ge=0),
     db: Session = Depends(get_db),

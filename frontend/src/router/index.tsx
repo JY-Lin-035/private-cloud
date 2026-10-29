@@ -1,21 +1,22 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
+import { lazy } from 'react';
 import RouteError from '../components/RouteError';
 import Nav from '../components/Nav';
 import Footer from '../components/Footer';
 import Home from '../pages/Home/Home';
-import LoginRegisterPage from '../pages/LoginRegister/LoginRegisterPage';
-import ResetPW from '../pages/ResetPW/ResetPW';
-import FileList from '../pages/File/FileList';
-import ShareList from '../pages/File/ShareList';
-import DownloadShareFile from '../pages/File/DownloadShareFile';
-import Account from '../pages/Setting/Account';
-import FunctionControl from '../pages/Setting/FunctionControl';
-import AnnouncementManagement from '../pages/Setting/AnnouncementManagement';
-import IPManagement from '../pages/Setting/IPManagement';
-import AdminPage from '../pages/AdminManagement/AdminManagement';
-import Trash from '../pages/File/Trash';
-import CollaborationPage from '../pages/Collaboration/CollaborationPage';
-import CollabEditor from '../pages/Collaboration/CollabEditor';
+const LoginRegisterPage = lazy(() => import('../pages/LoginRegister/LoginRegisterPage'));
+const ResetPW = lazy(() => import('../pages/ResetPW/ResetPW'));
+const FileList = lazy(() => import('../pages/File/FileList'));
+const ShareList = lazy(() => import('../pages/File/ShareList'));
+const DownloadShareFile = lazy(() => import('../pages/File/DownloadShareFile'));
+const Account = lazy(() => import('../pages/Setting/Account'));
+const FunctionControl = lazy(() => import('../pages/Setting/FunctionControl'));
+const AnnouncementManagement = lazy(() => import('../pages/Setting/AnnouncementManagement'));
+const IPManagement = lazy(() => import('../pages/Setting/IPManagement'));
+const AdminPage = lazy(() => import('../pages/AdminManagement/AdminManagement'));
+const Trash = lazy(() => import('../pages/File/Trash'));
+const CollaborationPage = lazy(() => import('../pages/Collaboration/CollaborationPage'));
+const CollabEditor = lazy(() => import('../pages/Collaboration/CollabEditor'));
 
 const router = createBrowserRouter([
   {

@@ -9,7 +9,7 @@ const API_BASE = swUrl.searchParams.get('api') || '';
 const MEDIA_PREFIX = '/__media/';
 const ROOT = 'meow-media-2';
 const LEGACY_ROOTS = ['meow-media'];
-const SW_BUILD = 'p12-streaming-20';
+const SW_BUILD = 'p14-seal-22';
 
 function trace0(k, stage) {
   broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` });
@@ -89,15 +89,17 @@ function rangeResponse(file, rangeHeader, k) {
   });
 }
 
-// Background cache warm: single-slot queue + pacing so it never starves
-// playback or other API traffic through the (tunnel-bottlenecked) uplink.
-const warmState = { running: false, pending: null, ctrl: null, runningUuid: null };
+// Background cache warm: single-slot queue + pacing + pause/resume.
+// media-stop (player closed) aborts the running warm but KEEPS the partial
+// .wip so the next open resumes via Range; purge drops everything.
+const warmState = { running: false, pending: null, ctrl: null, runningUuid: null, pendingUuid: null, abortReason: null };
 
-function abortWarmFor(uuid) {
-  if (warmState.ctrl && warmState.runningUuid === uuid) {
+function stopWarm(uuid) {
+  if (warmState.pendingUuid === uuid) { warmState.pending = null; warmState.pendingUuid = null; }
+  if (warmState.runningUuid === uuid && warmState.ctrl) {
+    warmState.abortReason = 'pause';
     try { warmState.ctrl.abort(); } catch { /* noop */ }
   }
-  if (warmState.pending && warmState.pendingUuid === uuid) { warmState.pending = null; warmState.pendingUuid = null; }
 }
 
 async function warm(k) {
@@ -109,48 +111,90 @@ async function warm(k) {
   finally {
     warmState.running = false;
     warmState.runningUuid = null;
+    warmState.abortReason = null;
     const next = warmState.pending;
     warmState.pending = null; warmState.pendingUuid = null;
     if (next) warm(next).catch(() => {});
   }
 }
 
-async function doWarm(k) {
+async function publishWip(dir, wipName, finalName) {
+  try { await dir.moveEntry(wipName, finalName); return; } catch { /* unsupported */ }
+  const finalH = await dir.getFileHandle(finalName, { create: true });
+  const w2 = await finalH.createWritable();
+  await (await dir.getFileHandle(wipName)).getFile().then((f) => f.stream().pipeTo(w2));
+  await dir.removeEntry(wipName).catch(() => {});
+}
+
+async function doWarm(k, allowRetry = true) {
+  let dir = null;
+  const wipName = k.file + '.wip';
   try {
     if (await cachedFile(k)) return;
+    dir = await dirFor(k, true);
+    let start = 0;
+    try { const h0 = await dir.getFileHandle(wipName); start = (await h0.getFile()).size; } catch { /* fresh */ }
     const ctrl = new AbortController();
     warmState.ctrl = ctrl;
-    const full = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { credentials: 'include', signal: ctrl.signal });
-    if (!full.ok || !full.body) { trace0(k, 'fetch' + full.status); return; }
+    const full = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, {
+      credentials: 'include', signal: ctrl.signal,
+      headers: start > 0 ? { Range: `bytes=${start}-` } : undefined,
+    });
+    let total = null;
+    if (full.status === 206 && start > 0) {
+      const m = /\/(\d+)\s*$/.exec(full.headers.get('content-range') || '');
+      total = m ? Number(m[1]) : null;
+      if (total != null && total <= start) { // partial already complete or stale-bigger
+        if (total === start) { await publishWip(dir, wipName, k.file); broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid }); }
+        else { await dir.removeEntry(wipName).catch(() => {}); if (allowRetry) return doWarm(k, false); }
+        return;
+      }
+    }
+    if (!full.ok || !full.body) {
+      if (full.status === 416 && start > 0 && allowRetry) { await dir.removeEntry(wipName).catch(() => {}); return doWarm(k, false); }
+      trace0(k, 'fetch' + full.status); return;
+    }
+    const resume = full.status === 206 && start > 0;
     try { await navigator.storage.persist(); } catch { /* opt-in */ }
-    const dir = await dirFor(k, true);
-    const wipName = k.file + '.wip';
     const tmpH = await dir.getFileHandle(wipName, { create: true });
+    let acc = 0;
+    let w = null;
     try {
-      let total = 0;
-      const w = await tmpH.createWritable();
+      if (resume) {
+        try {
+          w = await tmpH.createWritable({ keepExistingData: true });
+          if (typeof w.seek === 'function') await w.seek(start);
+          acc = start;
+        } catch { acc = 0; w = await tmpH.createWritable(); } // no append support -> restart
+      } else {
+        w = await tmpH.createWritable();
+      }
       const reader = full.body.getReader();
+      let sincePace = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         await w.write(value);
-        total += value ? value.byteLength : 0;
-        await new Promise(r => setTimeout(r, 40)); // gentle pacing between chunks
+        acc += value ? value.byteLength : 0;
+        sincePace += value ? value.byteLength : 0;
+        if (sincePace >= 262144) { sincePace = 0; await new Promise(r => setTimeout(r, 60)); } // ~4MB/s cap
       }
       await w.close();
-      // atomic publish wip -> final (fallback copy if moveEntry unsupported)
-      try { await dir.moveEntry(wipName, k.file); }
-      catch {
-        const finalH = await dir.getFileHandle(k.file, { create: true });
-        const w2 = await finalH.createWritable();
-        await (await tmpH.getFile()).stream().pipeTo(w2);
-        await dir.removeEntry(wipName).catch(() => {});
-      }
+      // total may be null for 200 responses; size verified implicitly by close
+      if (total != null && acc !== total) throw new Error('size-mismatch');
+      await publishWip(dir, wipName, k.file);
       broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid });
     } catch (err) {
+      const aborted = (err && err.name === 'AbortError') || ctrl.signal.aborted;
+      if (aborted && warmState.abortReason === 'pause') { // player closed: seal partial so bytes survive for resume
+        try { if (w) await w.close(); } catch { /* stream unusable after abort */ }
+        broadcast({ type: 'media-paused', uid: k.uid, uuid: k.uuid });
+        return;
+      }
+      try { if (w) await w.close().catch(() => {}); } catch { /* noop */ }
       await dir.removeEntry(wipName).catch(() => {});
+      if (aborted) return; // purge
       const name = err && err.name ? err.name : 'err';
-      if (name === 'AbortError' || ctrl.signal.aborted) return; // aborted (purge) - not a failure
       broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid,
         reason: name === 'QuotaExceededError' ? '裝置空間不足，無法快取（仍可串流播放）' : '寫入失敗:' + name });
     } finally { warmState.ctrl = null; }
@@ -177,8 +221,10 @@ self.addEventListener('message', (e) => {
       c && c.postMessage({ type: 'sw-pong', build: SW_BUILD });
     })());
   }
+  if (d.type === 'media-stop') { stopWarm(d.uuid); return; }
   if (d.type === 'media-purge') {
     e.waitUntil((async () => {
+      warmState.abortReason = 'purge';
       try { if (warmState.ctrl) warmState.ctrl.abort(); } catch { /* noop */ }
       try {
         const base = await navigator.storage.getDirectory();

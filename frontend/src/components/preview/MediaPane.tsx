@@ -26,7 +26,13 @@ function MediaPane({ uuid, filename, updatedAt }: Props) {
       if (ev.type === 'media-cached') setCacheState('cached');
       else if (ev.type === 'media-skip') { setCacheState('skip'); setSkipReason(ev.reason || ''); }
     });
-    return off;
+    return () => {
+      off();
+      // player closed: pause background caching for this file (partial kept for resume)
+      try {
+        void navigator.serviceWorker?.ready.then((r) => r.active?.postMessage({ type: 'media-stop', uuid })).catch(() => { /* noop */ });
+      } catch { /* noop */ }
+    };
   }, [uuid]);
 
   const MIME: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',

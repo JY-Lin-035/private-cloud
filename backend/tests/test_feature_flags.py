@@ -155,12 +155,10 @@ class TestQuotaSelfEdit:
         db.commit()
         req = _admin_request(admin_id)
         import asyncio
-        return asyncio.run(
-            admin_update_quota(
+        return admin_update_quota(
                 request=req, user_id=target_id, total_storage=123,
                 db=db, redis_client=MagicMock(),
             )
-        )
 
     def test_admin_can_update_own_quota(self, db_session):
         result = self._call(db_session, admin_id=9, target_id=9, target_identity=Identity.ADMIN)
@@ -188,10 +186,10 @@ class TestQuotaSelfEdit:
         u.id = 12
         db_session.add(u)
         db_session.commit()
-        result = asyncio.run(admin_update_quota(
+        result = admin_update_quota(
             request=_admin_request(9), user_id=12, total_storage=123,
             db=db_session, redis_client=MagicMock(),
-        ))
+        )
         assert result["total_storage"] == 123
 
 
@@ -208,27 +206,27 @@ class TestSelfQuotaEndpoint:
         from app.api.v1.accounts import update_own_quota
         import asyncio
         self._make_admin(db_session)
-        result = asyncio.run(update_own_quota(
+        result = update_own_quota(
             request=_admin_request(9), total_storage=456, db=db_session,
-        ))
+        )
         assert result["total_storage"] == 456
 
     def test_normal_user_denied(self, db_session):
         from app.api.v1.accounts import update_own_quota
         import asyncio
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(update_own_quota(
+            update_own_quota(
                 request=_user_request(), total_storage=456, db=db_session,
-            ))
+            )
         assert exc.value.status_code == 403
 
     def test_missing_account_404(self, db_session):
         from app.api.v1.accounts import update_own_quota
         import asyncio
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(update_own_quota(
+            update_own_quota(
                 request=_admin_request(99), total_storage=456, db=db_session,
-            ))
+            )
         assert exc.value.status_code == 404
 
     def test_self_quota_below_usage_rejected(self, db_session):
@@ -241,7 +239,7 @@ class TestSelfQuotaEndpoint:
         db_session.add(account)
         db_session.commit()
         with pytest.raises(HTTPException) as exc:
-            asyncio.run(update_own_quota(
+            update_own_quota(
                 request=_admin_request(9), total_storage=9_999, db=db_session,
-            ))
+            )
         assert exc.value.status_code == 400

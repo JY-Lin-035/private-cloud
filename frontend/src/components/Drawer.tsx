@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Menu, Cloud, Settings, LogOut, Share2, User, Trash2, FolderInput, FolderTree, Users, Sliders, Megaphone, Shield } from 'lucide-react';
-import Dashboard from '../pages/Dashboard/Dashboard';
+const Dashboard = lazy(() => import('../pages/Dashboard/Dashboard'));
 import { purgeMediaCache } from '../utils/mediaCache';
 import { authApi } from '../api/authApi';
 
@@ -230,7 +230,9 @@ function Drawer() {
                 </li>
               </ul>
             </div>
-            <Dashboard layoutClass="mt-auto" />
+            <Suspense fallback={<div className="mt-auto p-6 text-xs text-gray-400">載入儲存圖表…</div>}>
+              <Dashboard layoutClass="mt-auto" />
+            </Suspense>
           </div>
         </div>
       </div>
