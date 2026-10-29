@@ -7,8 +7,9 @@
 const swUrl = new URL(self.location.href);
 const API_BASE = swUrl.searchParams.get('api') || '';
 const MEDIA_PREFIX = '/__media/';
-const ROOT = 'meow-media';
-const SW_BUILD = 'p10-mediaonly-18';
+const ROOT = 'meow-media-2';
+const LEGACY_ROOTS = ['meow-media'];
+const SW_BUILD = 'p11-coherent-19';
 
 function trace0(k, stage) {
   broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` });
@@ -31,7 +32,8 @@ function keyFor(pathname, search) {
   const ch = q.get('c') || '';
   const ptk = q.get('ptk') || '';
   if (!/^[A-Za-z0-9._-]{1,80}$/.test(uid) || !/^[0-9a-fA-F-]{36}$/.test(uuid)) return null;
-  const file = `${uuid}@${v}${ch ? '.' + ch : ''}.bin`;
+  const mimeTag = mime ? '.' + mime.replace(/[^a-z0-9]+/gi, '').slice(0, 16) : '';
+  const file = `${uuid}@${v}${ch ? '.' + ch : ''}${mimeTag}.bin`;
   return { uid, uuid, file, v, mime, ch, ptk };
 }
 
@@ -70,7 +72,7 @@ function pickHeaders(r) {
 
 function rangeResponse(file, rangeHeader, k) {
   const size = file.size;
-  const type = file.type || (k && k.mime) || 'application/octet-stream';
+  const type = (k && k.mime) || file.type || 'application/octet-stream';
   const base = { 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
   if (!rangeHeader) {
     return new Response(file, { status: 200, headers: { ...base, 'Content-Length': String(size), 'Content-Type': type } });
@@ -89,21 +91,23 @@ function rangeResponse(file, rangeHeader, k) {
 
 // Background cache warm: single-slot queue + pacing so it never starves
 // playback or other API traffic through the (tunnel-bottlenecked) uplink.
-const warmState = { running: false, pending: null, ctrl: null };
+const warmState = { running: false, pending: null, ctrl: null, runningUuid: null };
 
 function abortWarmFor(uuid) {
-  if (warmState.ctrl && warmState.running && warmState.pendingUuid === uuid) {
+  if (warmState.ctrl && warmState.runningUuid === uuid) {
     try { warmState.ctrl.abort(); } catch { /* noop */ }
   }
+  if (warmState.pending && warmState.pendingUuid === uuid) { warmState.pending = null; warmState.pendingUuid = null; }
 }
 
 async function warm(k) {
   if (warmState.running) { warmState.pending = k; warmState.pendingUuid = k.uuid; return; }
   warmState.running = true;
-  warmState.pendingUuid = k.uuid;
+  warmState.runningUuid = k.uuid;
   try { await doWarm(k); }
   finally {
     warmState.running = false;
+    warmState.runningUuid = null;
     const next = warmState.pending;
     warmState.pending = null; warmState.pendingUuid = null;
     if (next) warm(next).catch(() => {});
@@ -117,29 +121,20 @@ async function doWarm(k) {
     warmState.ctrl = ctrl;
     const full = await fetch(`${API_BASE}/api/files/stream?uuid=${k.uuid}`, { credentials: 'include', signal: ctrl.signal });
     if (!full.ok || !full.body) { trace0(k, 'fetch' + full.status); return; }
+    try { await navigator.storage.persist(); } catch { /* opt-in */ }
     const dir = await dirFor(k, true);
     const wipName = k.file + '.wip';
     const tmpH = await dir.getFileHandle(wipName, { create: true });
     try {
+      let total = 0;
       const w = await tmpH.createWritable();
       const reader = full.body.getReader();
-      let sinceCheck = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         await w.write(value);
-        sinceCheck += value ? value.byteLength : 0;
-        if (sinceCheck >= 262144) {           // throttle ~1.25MB/s; yield bandwidth to live traffic
-          sinceCheck = 0;
-          await new Promise(r => setTimeout(r, 200));
-          const est = await navigator.storage.estimate();
-          if (est.quota && est.usage > est.quota * 0.92) {
-            await w.abort().catch(() => {});
-            await dir.removeFile(wipName).catch(() => {});
-            broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: '空間接近上限，停止快取' });
-            return;
-          }
-        }
+        total += value ? value.byteLength : 0;
+        await new Promise(r => setTimeout(r, 40)); // gentle pacing between chunks
       }
       await w.close();
       // atomic publish wip -> final (fallback copy if moveEntry unsupported)
@@ -148,12 +143,14 @@ async function doWarm(k) {
         const finalH = await dir.getFileHandle(k.file, { create: true });
         const w2 = await finalH.createWritable();
         await (await tmpH.getFile()).stream().pipeTo(w2);
-        await dir.removeFile(wipName).catch(() => {});
+        await dir.removeEntry(wipName).catch(() => {});
       }
       broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid });
     } catch (err) {
-      await dir.removeFile(wipName).catch(() => {});
-      trace0(k, 'write:' + (err && err.name ? err.name : 'err'));
+      await dir.removeEntry(wipName).catch(() => {});
+      const name = err && err.name ? err.name : 'err';
+      broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid,
+        reason: name === 'QuotaExceededError' ? '裝置空間不足，無法快取（仍可串流播放）' : '寫入失敗:' + name });
     } finally { warmState.ctrl = null; }
   } catch (e) {
     warmState.ctrl = null;
@@ -163,7 +160,12 @@ async function doWarm(k) {
 }
 
 self.addEventListener('install', (e) => e.waitUntil(self.skipWaiting()));
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (e) => e.waitUntil((async () => {
+  for (const legacy of LEGACY_ROOTS) {
+    try { const base = await navigator.storage.getDirectory(); await base.removeEntry(legacy, { recursive: true }); } catch { /* none */ }
+  }
+  await self.clients.claim();
+})()));
 
 self.addEventListener('message', (e) => {
   const d = e.data || {};
@@ -197,7 +199,7 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     let hit = null;
     try { hit = await cachedFile(k); } catch { /* miss */ }
-    if (hit) return rangeResponse(hit, e.request.headers.get('range'), k);
+    if (hit) { broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid }); return rangeResponse(hit, e.request.headers.get('range'), k); }
     abortWarmFor(k.uuid);
     warm(k).catch(() => {});
     try {

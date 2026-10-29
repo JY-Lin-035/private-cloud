@@ -53,7 +53,7 @@ export async function registerMediaSW(): Promise<boolean> {
   inflight = (async () => {
     try {
       const url = `/meow-sw.js?api=${encodeURIComponent(API_BASE_URL)}&s=${__BUILD_TS__}`;
-      await navigator.serviceWorker.register(url, { scope: '/' });
+      await navigator.serviceWorker.register(url, { scope: '/', updateViaCache: 'none' });
       await navigator.serviceWorker.ready;
       navigator.serviceWorker.addEventListener('message', (e) => {
         const d = e.data as CacheEv;

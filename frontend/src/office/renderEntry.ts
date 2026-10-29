@@ -5,6 +5,13 @@ import JSZip from 'jszip'
 import mammoth from 'mammoth/mammoth.browser'
 import { init as initPptx } from 'pptx-preview'
 import DOMPurify from 'dompurify'
+import { getDocument } from 'pdfjs-dist'
+// Sandboxed (opaque-origin) frames cannot load blob/module workers under strict
+// CSP. Bundle the worker into this script and hand it to pdf.js via the
+// documented `globalThis.pdfjsWorker` hook -> pdf.js runs a main-thread fake
+// worker, no Worker() and no dynamic import ever happens.
+import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs'
+;(globalThis as unknown as { pdfjsWorker: unknown }).pdfjsWorker = pdfjsWorker
 
 const PURIFY = {
   USE_PROFILES: { html: true },
@@ -70,24 +77,70 @@ async function renderOdf(bytes: ArrayBuffer, stage: HTMLElement, kind: 'odp' | '
   }
 }
 
+async function renderPdf(bytes: ArrayBuffer, stage: HTMLElement): Promise<number> {
+  const doc = await getDocument({ data: new Uint8Array(bytes), disableFontFace: true } as any).promise
+  const pages = Math.min(doc.numPages, 40)
+  const targetW = Math.max(320, stage.clientWidth - 32)
+  for (let i = 1; i <= pages; i++) {
+    const page = await doc.getPage(i)
+    const vp0 = page.getViewport({ scale: 1 })
+    const scale = Math.min(2.5, targetW / vp0.width)
+    const vp = page.getViewport({ scale })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.floor(vp.width)
+    canvas.height = Math.floor(vp.height)
+    canvas.className = 'pdf-page'
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 不可用')
+    await page.render({ canvasContext: ctx, viewport: vp, canvas } as any).promise
+    const img = document.createElement('img')
+    img.src = canvas.toDataURL('image/jpeg', 0.82)
+    img.alt = `第 ${i} 頁`
+    stage.appendChild(img)
+  }
+  if (doc.numPages > pages) {
+    stage.appendChild(el('p', 'pdf-more', `僅預覽前 ${pages} 頁（共 ${doc.numPages} 頁），完整內容請下載查看`))
+  }
+  return pages
+}
+
 const stage = document.getElementById('stage')
 
 function parent_() { return window.parent }
 
 if (stage) {
   parent_().postMessage({ type: 'office-ready' }, '*')
+  const lastJob = { kind: '', bytes: null as ArrayBuffer | null, width: 0, height: 0 }
+
+  async function runRender(): Promise<number> {
+    if (!stage || !lastJob.bytes || !lastJob.kind) return 0
+    stage.innerHTML = ''
+    if (lastJob.kind === 'docx') { await renderDocx(lastJob.bytes, stage); return 0 }
+    if (lastJob.kind === 'pptx') { await renderPptx(lastJob.bytes, stage, lastJob.width, lastJob.height); return 0 }
+    if (lastJob.kind === 'odp' || lastJob.kind === 'odt') { await renderOdf(lastJob.bytes, stage, lastJob.kind as 'odp' | 'odt'); return 0 }
+    if (lastJob.kind === 'pdf') return renderPdf(lastJob.bytes, stage)
+    throw new Error('不支援的類型')
+  }
+
   window.addEventListener('message', async (ev) => {
     const d = ev.data
-    if (!d || d.type !== 'office-render' || !stage) return
+    if (!d || !stage) return
     try {
-      stage.innerHTML = ''
-      const bytes: ArrayBuffer = d.bytes
-      if (d.kind === 'docx') await renderDocx(bytes, stage)
-      else if (d.kind === 'pptx') await renderPptx(bytes, stage, d.width || stage.clientWidth, d.height || 540)
-      else if (d.kind === 'odp' || d.kind === 'odt') await renderOdf(bytes, stage, d.kind)
-      else throw new Error('不支援的類型')
-      parent_().postMessage({ type: 'office-ok', chars: stage.textContent?.length || 0,
-        sample: (stage.textContent || '').trim().slice(0, 60) }, '*')
+      if (d.type === 'office-render') {
+        lastJob.kind = d.kind
+        lastJob.bytes = d.bytes
+        lastJob.width = d.width || stage.clientWidth || 900
+        lastJob.height = d.height || 560
+        const pages = await runRender()
+        parent_().postMessage({ type: 'office-ok', kind: d.kind, pages,
+          chars: stage.textContent?.length || 0,
+          sample: (stage.textContent || '').trim().slice(0, 60) }, '*')
+      } else if (d.type === 'office-resize') {
+        if (!lastJob.bytes || (d.width === lastJob.width && d.height === lastJob.height)) return
+        lastJob.width = d.width; lastJob.height = d.height
+        if (lastJob.kind === 'pptx') { await runRender() } // pptx needs remount on size change; others reflow
+        parent_().postMessage({ type: 'office-ok', kind: lastJob.kind, chars: stage.textContent?.length || 0 }, '*')
+      }
     } catch (e) {
       parent_().postMessage({ type: 'office-err', msg: String((e as Error)?.message || e) }, '*')
     }

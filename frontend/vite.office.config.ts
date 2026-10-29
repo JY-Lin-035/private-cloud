@@ -4,6 +4,7 @@ import { defineConfig } from 'vite'
 // under public/, or vite would copy public/ into itself). The main build then
 // ships it via rollupOptions input -> dist/office/.
 export default defineConfig({
+  publicDir: false,
   define: {
     'process.env.NODE_ENV': '"production"',
     'process.version': '""',

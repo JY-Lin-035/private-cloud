@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build --config vite.office.config.ts && cp office-host/render.js public/office/render.js && tsc -b && vite build",
+    "build": "node scripts/gen-build.mjs && vite build --config vite.office.config.ts && cp office-host/render.js public/office/render.js && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -27,6 +27,7 @@
     "mammoth": "^1.13.0",
     "marked": "^18.1.2",
     "monaco-editor": "^0.55.1",
+    "pdfjs-dist": "^6.4.299",
     "pptx-preview": "^1.0.7",
     "react": "^19.2.5",
     "react-apexcharts": "^2.1.0",

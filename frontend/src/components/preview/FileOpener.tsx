@@ -30,10 +30,14 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
   const dirty = text !== baseline;
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  useEffect(() => {
+    (window as unknown as { __appDirty?: boolean }).__appDirty = dirty;
+  }, [dirty]);
+  useEffect(() => () => { (window as unknown as { __appDirty?: boolean }).__appDirty = false; }, []);
 
   const isMedia = isStreamable(filename);
   const localCat = classify(filename);
-  const bypassContent = isMedia || localCat === 'office' || localCat === 'office-legacy';
+  const bypassContent = isMedia || localCat === 'office' || localCat === 'office-legacy' || localCat === 'pdf';
 
   useEffect(() => {
     let live = true;
@@ -141,8 +145,11 @@ function FileOpener({ uuid, filename, onClose, onSaved }: Props) {
     if (category === 'json') {
       return <JsonPane filename={filename} value={text} onChange={setText} onSave={saveStable} />;
     }
-    if (['image', 'video', 'audio', 'pdf'].includes(category)) {
-      return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} size={meta?.size || 0} />;
+    if (category === 'pdf') {
+      return <OfficeFrame uuid={uuid} filename={filename} size={meta?.size || 0} />;
+    }
+    if (['image', 'video', 'audio'].includes(category)) {
+      return <MediaPane uuid={uuid} filename={filename} updatedAt={updatedAt || 'v1'} />;
     }
     if ((category === 'html' || category === 'svg') && viewMode === 'preview') {
       return <SandboxPane uuid={uuid} filename={filename} />;

@@ -7,14 +7,12 @@ interface Props {
   uuid: string;
   filename: string;
   updatedAt: string;
-  size: number;
 }
 
 /** Media/image/pdf inline player backed by the /__media service worker cache. */
-function MediaPane({ uuid, filename, updatedAt, size }: Props) {
+function MediaPane({ uuid, filename, updatedAt }: Props) {
   const cat = classify(filename);
-  const isMobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
-  const pdfFallback = cat === 'pdf' && isMobile;
+
   const [cacheState, setCacheState] = useState<'idle' | 'warming' | 'cached' | 'skip'>('idle');
   const [skipReason, setSkipReason] = useState('');
   const [unsupported, setUnsupported] = useState(false);
@@ -31,11 +29,6 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
     return off;
   }, [uuid]);
 
-  useEffect(() => {
-    // re-purge when pane mounts for a session that may have changed account
-    if (size > 0 && (cacheState === 'idle')) void 0;
-  }, [size, cacheState]);
-
   const MIME: Record<string, string> = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
     m4v: 'video/mp4', ogv: 'video/ogg', mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
     m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac', opus: 'audio/ogg',
@@ -45,29 +38,9 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
   const [src, setSrc] = useState<string>('');
   useEffect(() => {
     if (unsupported) { setSrc(`${API_BASE_URL}/api/files/stream?uuid=${encodeURIComponent(uuid)}`); }
-    else { void mediaSrc(uuid, updatedAt, mime).then(setSrc); }
+    else { void mediaSrc(uuid, updatedAt, mime).then((s) => { setCacheState((c) => (c === 'idle' ? 'warming' : c)); setSrc(s); }); }
   }, [unsupported, uuid, updatedAt, mime]);
   if (!swReady) return <div className="h-full flex items-center justify-center text-gray-400">初始化媒體快取…</div>;
-  if (pdfFallback) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 text-gray-300 p-8 text-center bg-gray-900">
-        <div className="text-5xl">📄</div>
-        <p className="text-lg">此瀏覽器無法內嵌預覽 PDF</p>
-        <p className="text-sm break-all max-w-md text-gray-500">{filename}</p>
-        <div className="flex gap-3 mt-2">
-          <button type="button" className="px-4 py-2 rounded bg-blue-600 text-white text-sm"
-            onClick={() => window.open(src || '', '_blank', 'noopener')}>新視窗開啟</button>
-          <button type="button" className="px-4 py-2 rounded bg-gray-700 text-white text-sm"
-            onClick={() => fetch(src, { credentials: 'include' }).then(async (r) => {
-              const b = await r.blob(); const u = URL.createObjectURL(b);
-              const a = document.createElement('a'); a.href = u; a.download = filename;
-              document.body.appendChild(a); a.click(); a.remove();
-              setTimeout(() => URL.revokeObjectURL(u), 30000);
-            })}>下載檔案</button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div ref={ref} className="h-full flex flex-col bg-black">
@@ -76,8 +49,9 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
         <div className="flex-1" />
         {!unsupported && cat === 'video' && (
           cacheState === 'cached' ? <span className="text-green-400">✓ 已存本地快取</span>
-          : cacheState === 'skip' ? <span className="text-amber-400">空間不足，僅串流</span>
-          : <span className="text-gray-400">播放中背景快取…{skipReason ? `(${skipReason})` : ''}</span>
+          : cacheState === 'skip' ? <span className="text-amber-400" title={skipReason}>{skipReason || '僅串流播放'}</span>
+          : cacheState === 'warming' ? <span className="text-gray-400">背景快取中…{skipReason ? `(${skipReason})` : ''}</span>
+          : <span className="text-gray-400">載入中…</span>
         )}
         {!unsupported && cat === 'video' && (
           <button type="button" className="px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600"
@@ -86,17 +60,15 @@ function MediaPane({ uuid, filename, updatedAt, size }: Props) {
       </div>
       <div className="flex-1 min-h-0 flex items-center justify-center">
         {cat === 'video' && (
-          <video controls preload="metadata" src={src} className="max-h-full max-w-full" />
+          <video controls preload="metadata" src={src} className="w-full h-full object-contain" />
         )}
         {cat === 'audio' && (
           <audio controls src={src} className="w-full max-w-2xl px-6" />
         )}
         {cat === 'image' && (
-          <img src={src} alt={filename} className="max-h-full max-w-full object-contain" />
+          <img src={src} alt={filename} className="w-full h-full object-contain" />
         )}
-        {cat === 'pdf' && (
-          <iframe title={filename} src={src} className="w-full h-full bg-white" />
-        )}
+
       </div>
     </div>
   );

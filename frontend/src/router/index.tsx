@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
+import RouteError from '../components/RouteError';
 import Nav from '../components/Nav';
 import Footer from '../components/Footer';
 import Home from '../pages/Home/Home';
@@ -18,6 +19,7 @@ import CollabEditor from '../pages/Collaboration/CollabEditor';
 
 const router = createBrowserRouter([
   {
+    errorElement: <RouteError />,
     path: '/',
     element: (
       <>
@@ -31,6 +33,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/login',
     element: (
       <>
@@ -44,6 +47,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/forget-password',
     element: (
       <>
@@ -57,6 +61,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/file-list/:folderUuid?',
     element: (
       <>
@@ -70,6 +75,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/share-list',
     element: (
       <>
@@ -83,6 +89,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/share/:link',
     element: (
       <>
@@ -96,6 +103,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/shared-with-me',
     element: (
       <>
@@ -109,6 +117,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/trash',
     element: (
       <>
@@ -122,6 +131,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/collaboration',
     element: (
       <>
@@ -135,6 +145,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/collab/edit/:fileUuid',
     element: (
       <>
@@ -148,6 +159,7 @@ const router = createBrowserRouter([
     ),
   },
   {
+    errorElement: <RouteError />,
     path: '/setting/account',
     element: (
       <>

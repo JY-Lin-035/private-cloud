@@ -902,7 +902,7 @@ function FileList({ layoutClass = "" }: { layoutClass?: string }) {
                   </td>
                   <td className="p-2 text-xs sm:text-sm md:text-base text-center border border-white break-words whitespace-normal"
                     onDoubleClick={(e) => e.stopPropagation()}>
-                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-4 lg:gap-6 xl:gap-10">
+                    <span className="flex justify-center gap-1 sm:gap-2 md:gap-3 lg:gap-4">
                       {item.type === 'file' && (
                         <Download
                           className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-green-600 cursor-pointer"
