@@ -242,7 +242,11 @@ export function useYCollab(
         if (cancelled) return;
         // 401/403/404 from the ticket endpoint = not logged in, revoked, or
         // file gone: retrying cannot help and only hammers the API.
-        const status = (e as { response?: { status?: number } })?.response?.status;
+        // The shared axios interceptor rejects with `Error & {status}` (no
+        // `.response`), so read `.status` first and keep `.response.status`
+        // only as a defensive fallback.
+        const err = e as { status?: number; response?: { status?: number } };
+        const status = err?.status ?? err?.response?.status;
         if (status === 401 || status === 403 || status === 404) return;
         attempt += 1;
         if (attempt >= MAX_CONNECT_ATTEMPTS) return;

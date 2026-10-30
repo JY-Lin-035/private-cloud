@@ -459,7 +459,9 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
                     }, exclude=connection_id)
 
             elif msg_type == "y_projection":
-                if not await asyncio.to_thread(_perm_ok, file_uuid, user_id):
+                # Projection rewrites the canonical content that autosave
+                # persists, so treat it as a disk-touching op.
+                if not await asyncio.to_thread(_perm_ok, file_uuid, user_id, True):
                     await websocket.close(code=4403)
                     break
                 content = data.get("content")
@@ -513,15 +515,20 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
                     break
                 snapshot_id = data.get("version_id")
                 if snapshot_id:
-                    prev_content = redis.get(_get_content_key(file_uuid))
+                    content_key = _get_content_key(file_uuid)
+                    prev_content = redis.get(content_key)
                     content = await asyncio.to_thread(switch_to_snapshot, file_uuid, snapshot_id, redis)
                     if content is not None and content_size_ok(content):
                         _set_collab_content(redis, file_uuid, content)
                         if not await asyncio.to_thread(persist_content, file_uuid, content):
-                            # Disk write failed (quota/size/gone): roll the
-                            # Redis view back so it never diverges from disk.
-                            if prev_content is not None:
-                                _set_collab_content(redis, file_uuid, prev_content)
+                            # Disk write failed (quota/size/gone): restore the
+                            # Redis view UNCONDITIONALLY so it never diverges
+                            # from disk (empty/None prev must still be restored:
+                            # plain redis writes bypass the setter's guards).
+                            if prev_content is None:
+                                redis.delete(content_key)
+                            else:
+                                redis.set(content_key, prev_content)
                             await websocket.send_json({
                                 "type": "switch_version_failed",
                                 "version_id": snapshot_id,
