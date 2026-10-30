@@ -35,3 +35,6 @@ merge_filelist.py
 
 frontend/.buildid
 frontend/public/version.json
+
+frontend/.dist-stale-rooted/
+dist-stale*/
