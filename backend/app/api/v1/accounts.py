@@ -100,10 +100,10 @@ def login(
         response.set_cookie(
             key="session",
             value=result['token'],
-            max_age=30 * 60,  # 30 minutes
+            max_age=settings.TOKEN_EXPIRE_TIME * 60,
             path="/",  # Important: cookie available site-wide
             httponly=True,
-            samesite="lax",
+            samesite=settings.COOKIE_SAMESITE,
             secure=True
         )
         

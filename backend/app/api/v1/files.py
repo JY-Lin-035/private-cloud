@@ -4,7 +4,7 @@ import secrets
 from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from redis import Redis
 from app.schemas.file import (
@@ -529,8 +529,8 @@ async def recalculate_storage(
 
 
 class BatchDeleteRequest(BaseModel):
-    folders: list[str] = []
-    files: list[str] = []
+    folders: list[str] = Field(default_factory=list, max_length=2000)
+    files: list[str] = Field(default_factory=list, max_length=2000)
     mode: str  # soft | permanent | restore
 
 
@@ -545,14 +545,14 @@ async def batch_delete(
 
 
 class FileMoveRequest(BaseModel):
-    file_uuids: list[str]
+    file_uuids: list[str] = Field(max_length=2000)
     target_folder_uuid: Optional[str] = None
     target_path: Optional[str] = None
 
 
 class BulkDownloadRequest(BaseModel):
-    file_uuids: list[str] = []
-    folder_uuids: list[str] = []
+    file_uuids: list[str] = Field(default_factory=list, max_length=2000)
+    folder_uuids: list[str] = Field(default_factory=list, max_length=400)
 
 
 @router.post("/move")

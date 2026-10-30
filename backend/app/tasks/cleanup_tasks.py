@@ -287,7 +287,8 @@ def cleanup_stale_tus_uploads(self):
         base = settings.STORAGE_BASE_PATH
         if not os.path.isabs(base):
             base = os.path.join(os.getcwd(), base)
-        tus_dir = os.path.join(base, "tus_uploads")
+        from app.constants import StorageLimits
+        tus_dir = os.path.join(base, StorageLimits.TUS_TEMP_DIR_NAME)
         removed = 0
         if os.path.isdir(tus_dir):
             cutoff = time.time() - max_age
@@ -296,7 +297,18 @@ def cleanup_stale_tus_uploads(self):
                 try:
                     if not os.path.isdir(path):
                         continue
-                    if os.path.getmtime(path) < cutoff:
+                    # Age on the newest file inside, NOT the directory mtime:
+                    # appending chunks to upload.bin does not refresh the dir
+                    # mtime, so a >24h slow-but-active upload would otherwise
+                    # be deleted mid-flight.
+                    newest = os.path.getmtime(path)
+                    for root, _dirs, files in os.walk(path):
+                        for fn in files:
+                            try:
+                                newest = max(newest, os.path.getmtime(os.path.join(root, fn)))
+                            except OSError:
+                                continue
+                    if newest < cutoff:
                         shutil.rmtree(path, ignore_errors=True)
                         removed += 1
                 except OSError:

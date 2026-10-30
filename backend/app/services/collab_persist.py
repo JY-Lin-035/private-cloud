@@ -5,6 +5,7 @@ scheduler go through here, so collaborative writes can never bypass
 per-file / total-quota limits or the accounting kept in `accounts.used_size`.
 """
 import os
+import uuid as uuid_lib
 from datetime import datetime
 
 from sqlalchemy import select
@@ -44,11 +45,20 @@ def persist_content(file_uuid: str, content: str) -> bool:
     data = content.encode("utf-8")
     db: Session = SessionLocal()
     try:
+        # Cheap pre-read just to find the owning account.
         f = db.execute(select(File).where(File.uuid == file_uuid)).scalar_one_or_none()
         if f is None or f.deleted_at is not None:
             return False
+        # Serialize ALL quota accounting on the account row first, then
+        # re-read the File row under that lock (same account->file lock order
+        # as upload finalize, so the two paths cannot deadlock each other).
+        # Reading f.size before the lock let concurrent autosave + WS saves
+        # compute deltas from stale sizes and drift used_size permanently.
         acct = db.query(Account).filter(Account.id == f.owner_id).with_for_update().first()
         if acct is None:
+            return False
+        db.refresh(f)
+        if f is None or f.deleted_at is not None:
             return False
 
         path = _storage_path(f)
@@ -57,7 +67,7 @@ def persist_content(file_uuid: str, content: str) -> bool:
             with open(path, "rb") as fh:
                 if fh.read() == data:
                     return True
-        except (FileNotFoundError, OSError):
+        except OSError:
             pass
 
         delta = len(data) - (f.size or 0)
@@ -67,7 +77,8 @@ def persist_content(file_uuid: str, content: str) -> bool:
             if (acct.used_size or 0) + delta > (acct.total_file_size or 0):
                 return False
 
-        tmp = path + ".tmp"
+        # Unique temp name: never share path+".tmp" between writers.
+        tmp = f"{path}.{os.getpid()}.{uuid_lib.uuid4().hex}.tmp"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp, "wb") as fh:
@@ -77,8 +88,7 @@ def persist_content(file_uuid: str, content: str) -> bool:
             os.replace(tmp, path)
         except OSError:
             try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
+                os.remove(tmp)
             except OSError:
                 pass
             return False
