@@ -14,6 +14,11 @@ from app.utils.security import hash_password, verify_password, generate_session_
 from app.config import settings
 from app.constants import StorageLimits, Identity, HTTPStatus, AccountDefaults
 
+# Constant Argon2 hash used to burn the same verification time on logins for
+# nonexistent accounts as on wrong passwords, so response timing cannot be
+# used to enumerate usernames. Computed once at import.
+_TIMING_PLACEHOLDER_HASH = hash_password("not-a-real-password-timing-equalizer")
+
 
 class AccountService:
     def __init__(self, db: Session, redis_client: Redis):
@@ -80,6 +85,8 @@ class AccountService:
             account = self.account_repo.get_by_name(username)
             
             if not account:
+                # Same Argon2 cost as the wrong-password path (timing oracle).
+                verify_password(password, _TIMING_PLACEHOLDER_HASH)
                 return {'error': '使用者名稱或密碼錯誤', 'stateCode': HTTPStatus.UNAUTHORIZED}
             
             if not verify_password(password, account.password):

@@ -10,10 +10,11 @@ from app.schemas.account import (
 from app.services.account_service import AccountService
 from app.services.email_service import EmailService
 from app.tasks.email_tasks import celery_app
-from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user, get_email_service, get_account_service
+from app.api.dependencies import get_db, get_redis, get_current_user_id, get_current_user, get_email_service
 from app.api.rate_limit import rate_limit
 from app.config import settings
 from app.utils import logger as log
+from app.utils.session_auth import verify_session_value
 from app.models.account import Account
 from app.constants import Identity
 from sqlalchemy import select, func
@@ -270,43 +271,19 @@ def reset_password(
 
 @router.get("/checkSession")
 def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
-    """Check if user session is valid and return user data. Returns anonymous if not logged in."""
+    """Read-only session probe used by the SPA bootstrap.
+
+    Deliberately does NOT extend the session TTL (a background check must
+    not keep an otherwise idle session alive — same policy as the
+    middleware's no-renew list) and verifies the cookie constant-time via
+    the shared session_auth helper instead of duplicating the logic here.
+    """
     try:
-        session_token = request.cookies.get('session')
-        if not session_token:
-            return {"authenticated": False}
-        
-        # Validate session format
-        if '|' not in session_token:
-            return {"authenticated": False}
-        
-        user_id_str, tok_value = session_token.split('|', 1)
-        try:
-            user_id = int(user_id_str)
-        except ValueError:
-            return {"authenticated": False}
-        
-        # Check Redis
-        stored_token = redis_client.get(f"session:{user_id}")
-        if not stored_token:
-            return {"authenticated": False}
-        if isinstance(stored_token, bytes):
-            stored_token = stored_token.decode()
-        if stored_token != session_token:
+        user_dict = verify_session_value(redis_client, request.cookies.get('session'))
+        if not user_dict:
             return {"authenticated": False}
 
-        user_data = redis_client.get(f"session_data:{user_id}")
-        if not user_data:
-            return {"authenticated": False}
-        if isinstance(user_data, bytes):
-            user_data = user_data.decode()
-        user_dict = json.loads(user_data)
-
-        # Extend session
-        redis_client.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-        redis_client.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-
-        logger.info(f"Check session valid, user_id: {user_id}, identity: {user_dict.get('identity')}")
+        logger.info(f"Check session valid, user_id: {user_dict.get('user_id')}, identity: {user_dict.get('identity')}")
         return {
             "authenticated": True,
             "id": user_dict.get("user_id"),

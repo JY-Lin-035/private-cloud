@@ -5,8 +5,6 @@ from typing import Optional
 from app.config import settings
 from app.database import SessionLocal
 from app.services.email_service import EmailService
-from app.services.account_service import AccountService
-from app.repositories.account_repository import AccountRepository
 from app.tasks.email_tasks import celery_app
 
 
@@ -63,16 +61,6 @@ def require_admin(request: Request) -> dict:
             pass
         raise HTTPException(status_code=403, detail="Admin only")
     return request.state.user
-
-
-def get_account_service(db: Session = Depends(get_db)):
-    """Get account service instance."""
-    account_repo = AccountRepository(db)
-    account_service = AccountService(account_repo)
-    try:
-        yield account_service
-    finally:
-        pass
 
 
 def get_current_user_id_optional(request: Request) -> Optional[int]:

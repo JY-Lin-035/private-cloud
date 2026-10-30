@@ -31,10 +31,8 @@ router = APIRouter(prefix="/api/files", tags=["preview"])
 logger = log.get_logger("preview_api.log")
 
 PV_TTL = 600
-ALLOWED_ORIGINS = {
-    "https://meowcloud.jun.org.uk",
-    "https://meowcloud-api.jun.org.uk",
-}
+# Trusted origins come from settings (single source shared with CORS/OriginGuard)
+# so there is no second hardcoded list that can drift.
 
 _SANDBOX_MIME = {"html": "text/html", "htm": "text/html", "xhtml": "application/xhtml+xml", "svg": "image/svg+xml"}
 
@@ -58,7 +56,7 @@ async def issue_preview_token(
 ):
     _require_preview_flag()
     origin = http_request.headers.get("origin")
-    if origin and origin not in ALLOWED_ORIGINS:
+    if origin and origin not in settings.allowed_origins:
         raise HTTPException(status_code=403, detail="來源不受信任")
     f = db.execute(select(File).where(File.uuid == request.uuid, File.owner_id == user_id)).scalar_one_or_none()
     if f is None or f.deleted_at is not None or ext_of(f.name) not in SANDBOX_EXTS:

@@ -30,31 +30,29 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         endpoint = request.url.path
         key = f"rate_limit:{client_ip}:{endpoint}"
         
-        # Get current count
-        current = redis_client.get(key)
-        if current is None:
-            current = 0
-        else:
-            current = int(current.decode())
+        # Atomic fixed-window: INCR and only (re)arm the TTL when the key has
+        # none. Setting EXPIRE on every hit would let a persistent attacker
+        # slide the window open forever (permanent 429 for the whole bucket),
+        # and get-then-incr raced under concurrency.
+        pipe = redis_client.pipeline()
+        pipe.incr(key)
+        pipe.ttl(key)
+        count, ttl = pipe.execute()
+        if ttl is not None and ttl < 0:
+            redis_client.expire(key, window_seconds)
         
-        # Check if limit exceeded
-        if current >= max_requests:
+        # Check if limit exceeded (count is post-increment)
+        if count > max_requests:
             try:
                 from app.services import security_engine
                 security_engine.record_event(
                     "rate_limit", client_ip, None, endpoint,
-                    f"限流 {max_requests}/{window_seconds}s 觸發（第 {current + 1} 次）")
+                    f"限流 {max_requests}/{window_seconds}s 觸發（第 {count} 次）")
             except Exception:
                 pass
             raise HTTPException(
                 status_code=429,
                 detail="請求過多，請稍後再試"
             )
-        
-        # Increment counter with expiration
-        pipe = redis_client.pipeline()
-        pipe.incr(key)
-        pipe.expire(key, window_seconds)
-        pipe.execute()
     
     return check_rate_limit

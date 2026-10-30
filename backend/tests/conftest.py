@@ -1,6 +1,14 @@
 
 """Private-Cloud Shared Test Fixtures"""
 
+import os
+
+# Hard isolation: every lazy Redis client built from settings.REDIS_URL
+# (security_engine, dependencies, collab_events, celery broker, app.main
+# scheduler) must land on DB 15 — never the production DB 0. Env vars win
+# over .env in pydantic-settings, and this runs before any app import below.
+os.environ.setdefault("REDIS_DB", "15")
+
 from datetime import datetime
 
 import pytest
@@ -58,7 +66,7 @@ def mock_redis(mocker):
     pipe = mocker.MagicMock()
     pipe.incr.return_value = pipe
     pipe.expire.return_value = pipe
-    pipe.execute.return_value = [1]
+    pipe.execute.return_value = [1, -1]
     redis_mock.pipeline.return_value = pipe
     return redis_mock
 
@@ -147,3 +155,26 @@ def _isolate_security_engine(monkeypatch):
     monkeypatch.setattr(security_engine, "record_event_async", _noop_async)
     monkeypatch.setattr(security_engine, "_send_alert", _noop)
     monkeypatch.setattr(security_engine, "flood_exceeded", lambda ip: False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_direct_side_effects(monkeypatch):
+    """Patch the paths that bypass security_engine entirely.
+
+    - routes calling utils.security_log.write_event directly (accounts,
+      settings, ipcontrol) — ipcontrol binds write_event at module level,
+      so the module attribute must be patched per-importer.
+    - collab_events.publish_revoke, which opens its own Redis client and
+      PUBLISHes to the real broker; user ids 1..N in tests overlap with
+      production accounts and would kick real collaborators.
+    """
+    from app.utils import security_log
+    from app.api.v1 import ipcontrol
+    from app.services import collab_events
+
+    def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(security_log, "write_event", _noop)
+    monkeypatch.setattr(ipcontrol, "write_event", _noop, raising=False)
+    monkeypatch.setattr(collab_events, "publish_revoke", _noop)
