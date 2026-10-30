@@ -1,7 +1,7 @@
 from redis import Redis
 from app.services import batch_ops
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.schemas.folder import (
     CreateFolderRequest, RenameFolderRequest, DeleteFolderRequest, RestoreFolderRequest,
@@ -229,7 +229,7 @@ async def list_trash(
 
 
 class FolderMoveRequest(BaseModel):
-    folder_uuids: list[str]
+    folder_uuids: list[str] = Field(max_length=2000)
     target_folder_uuid: str | None = None
     target_path: str | None = None
 

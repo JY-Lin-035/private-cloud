@@ -111,6 +111,10 @@ export function useYCollab(
 
     let attempt = 0;
     let reconnectTimer: number | null = null;
+    // A persistent handshake reject surfaces as close code 1006 (the server's
+    // 4401/4403 are sent pre-accept and lost), so also cap consecutive attempts
+    // to avoid an endless ticket-fetch storm when access is truly gone.
+    const MAX_CONNECT_ATTEMPTS = 12;
 
     const connect = async () => {
       if (cancelled) return;
@@ -220,6 +224,7 @@ export function useYCollab(
           // 4401/4403 = auth/permission failure: reconnecting cannot help.
           if (ev.code === 4401 || ev.code === 4403) return;
           attempt += 1;
+          if (attempt >= MAX_CONNECT_ATTEMPTS) return;
           const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5));
           reconnectTimer = window.setTimeout(() => {
             reconnectTimer = null;
@@ -235,7 +240,12 @@ export function useYCollab(
         console.error('WebSocket ticket error:', e);
         setIsConnected(false);
         if (cancelled) return;
+        // 401/403/404 from the ticket endpoint = not logged in, revoked, or
+        // file gone: retrying cannot help and only hammers the API.
+        const status = (e as { response?: { status?: number } })?.response?.status;
+        if (status === 401 || status === 403 || status === 404) return;
         attempt += 1;
+        if (attempt >= MAX_CONNECT_ATTEMPTS) return;
         const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5));
         reconnectTimer = window.setTimeout(() => {
           reconnectTimer = null;

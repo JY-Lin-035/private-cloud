@@ -1,13 +1,11 @@
 import os
 import re
 import time
-import json
 import base64
 import asyncio
 import threading
 from typing import Any, Dict, Optional
 from uuid import uuid4
-from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from redis import Redis
@@ -23,7 +21,6 @@ from app.services.snapshot_service import (
     get_snapshots, switch_to_snapshot, save_snapshot, _get_content_key,
 )
 from app.services.collab_persist import persist_content, content_size_ok
-from app.utils.session_auth import parse_session_cookie, verify_session_value
 from app.utils import logger as log
 
 router = APIRouter()
@@ -475,7 +472,8 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
                         _set_y_state(redis, file_uuid, state_update)
 
             elif msg_type in ("persist_text", "save"):
-                if not await asyncio.to_thread(_perm_ok, file_uuid, user_id):
+                # Disk-touching op: never trust the 10s permission cache.
+                if not await asyncio.to_thread(_perm_ok, file_uuid, user_id, True):
                     await websocket.close(code=4403)
                     break
                 content = data.get("content", "")
@@ -509,15 +507,27 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
                 })
 
             elif msg_type == "switch_version":
-                if not await asyncio.to_thread(_perm_ok, file_uuid, user_id):
+                # Disk-touching op: never trust the 10s permission cache.
+                if not await asyncio.to_thread(_perm_ok, file_uuid, user_id, True):
                     await websocket.close(code=4403)
                     break
                 snapshot_id = data.get("version_id")
                 if snapshot_id:
+                    prev_content = redis.get(_get_content_key(file_uuid))
                     content = await asyncio.to_thread(switch_to_snapshot, file_uuid, snapshot_id, redis)
                     if content is not None and content_size_ok(content):
                         _set_collab_content(redis, file_uuid, content)
-                        await asyncio.to_thread(persist_content, file_uuid, content)
+                        if not await asyncio.to_thread(persist_content, file_uuid, content):
+                            # Disk write failed (quota/size/gone): roll the
+                            # Redis view back so it never diverges from disk.
+                            if prev_content is not None:
+                                _set_collab_content(redis, file_uuid, prev_content)
+                            await websocket.send_json({
+                                "type": "switch_version_failed",
+                                "version_id": snapshot_id,
+                                "message": "無法切換：配額不足或檔案已移除",
+                            })
+                            continue
                         snapshots = get_snapshots(file_uuid, redis)
                         await websocket.send_json({
                             "type": "apply_version",

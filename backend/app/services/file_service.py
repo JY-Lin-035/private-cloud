@@ -144,6 +144,30 @@ class FileService:
         with open(self._get_tus_metadata_path(upload_id), 'w', encoding='utf-8') as f:
             json.dump(metadata, f)
 
+    def _sum_inflight_tus_bytes(self, user_id: int) -> int:
+        """Total DECLARED bytes of this user's unfinished tus sessions.
+
+        Used to reserve quota at create time: without this, a user could open
+        N parallel sessions that each individually pass the check and collectively
+        pin far more disk than their plan allows before finalize serializes them.
+        Unreadable/stale entries are skipped; GC reclaims them separately.
+        """
+        total = 0
+        try:
+            tus_dir = os.path.join(self.storage_base_path, StorageLimits.TUS_TEMP_DIR_NAME)
+            for name in os.listdir(tus_dir):
+                meta_path = os.path.join(tus_dir, name, 'upload.meta.json')
+                try:
+                    with open(meta_path, encoding='utf-8') as fh:
+                        m = json.load(fh)
+                    if int(m.get('user_id', -1)) == user_id:
+                        total += max(0, int(m.get('file_size', 0)))
+                except (OSError, ValueError, TypeError):
+                    continue
+        except OSError:
+            pass
+        return total
+
     def create_tus_upload(self, user_id: int, parent_folder_uuid: Optional[str], filename: str, file_size: int) -> Optional[Dict[str, Any]]:
         """Create a new temporary tus upload session."""
         try:
@@ -169,7 +193,10 @@ class FileService:
                 )
             ).scalar_one_or_none()
             old_size = existing.size if existing else 0
-            if (account.used_size or 0) - old_size + file_size > (account.total_file_size or 0):
+            # Count this user's OTHER in-flight tus sessions (the current one has
+            # no meta file yet) so parallel uploads can't collectively over-pin.
+            inflight = self._sum_inflight_tus_bytes(user_id)
+            if (account.used_size or 0) - old_size + inflight + file_size > (account.total_file_size or 0):
                 return {'error': '空間不足，無法上傳', 'stateCode': 413}
 
             if parent_folder_uuid:

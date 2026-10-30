@@ -72,6 +72,23 @@ class Settings(BaseSettings):
     # Allowed browser origins for CORS / Origin checks / WS
     ALLOWED_ORIGINS: str = "https://meowcloud.jun.org.uk,https://meowcloud-api.jun.org.uk"
 
+    # Session cookie SameSite. "lax" is correct for a same-site SPA+API split
+    # (both under one registrable domain). Set to "none" ONLY for a genuine
+    # cross-site deployment (different eTLD+1 for SPA and API); browsers then
+    # also require Secure, which the app always sets.
+    COOKIE_SAMESITE: str = "lax"
+
+    # Behind a non-Cloudflare reverse proxy (own domain / VPS), CF-Connecting-IP
+    # is absent and every request would collapse to the proxy's loopback IP.
+    # When true, fall back to X-Real-IP but ONLY if the direct peer is a
+    # loopback/trusted proxy address (never a client-supplied XFF).
+    TRUST_REAL_IP: bool = False
+    TRUSTED_PROXY_IPS: str = "127.0.0.1,::1"
+
+    @property
+    def trusted_proxy_ips(self) -> set[str]:
+        return {p.strip() for p in self.TRUSTED_PROXY_IPS.split(",") if p.strip()}
+
     @property
     def allowed_origins(self) -> list[str]:
         return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]

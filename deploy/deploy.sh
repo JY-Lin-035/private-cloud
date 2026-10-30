@@ -2,6 +2,10 @@
 # meowcloud one-click deployer
 #   ./deploy.sh              interactive menu
 #   ./deploy.sh --defaults   fully automatic with safe defaults (aborts on existing install unless --force)
+#   ./deploy.sh --force      re-run over an existing install, KEEPING existing secrets
+#   ./deploy.sh --rotate-secrets  with --force: regenerate DB/Redis/ticket secrets
+#                                (requires manually applying DB pw to the running
+#                                 volume; share tickets will be invalidated)
 #   ./deploy.sh --check-only dependency check only
 set -euo pipefail
 
@@ -13,18 +17,35 @@ if [ "$(id -u)" != "0" ]; then
 fi
 MODE=""
 FORCE=0
+ROTATE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --defaults) MODE=defaults ;;
     --custom) MODE=custom ;;
     --check-only) MODE=check ;;
     --force) FORCE=1 ;;
+    --rotate-secrets) ROTATE=1 ;;
     *) echo "unknown option $1"; exit 1 ;;
   esac
   shift
 done
 
 randpw() { openssl rand -hex 32; }
+env_get() { [ -f "$1" ] && grep -m1 "^$2=" "$1" | cut -d= -f2- || true; }
+# Secrets survive re-runs: without --rotate-secrets an existing value in
+# .env is reused verbatim. Regenerating DB/Redis passwords against an
+# ALREADY INITIALISED volume would desync app-vs-server credentials (the
+# mysql image only applies MYSQL_*_PASSWORD to an empty datadir) and
+# silently kill every password-share ticket (SHARE_TICKET_SECRET).
+ask_secret_keep() { local prompt="$1" file="$2" key="$3" cur=""
+  cur="$(env_get "$file" "$key")"
+  if [ "$ROTATE" = 1 ] || [ -z "$cur" ]; then
+    ask_secret "$prompt" "$(randpw)"
+  else
+    echo "  (沿用既有 $key)" >&2
+    printf '%s' "$cur"
+  fi
+}
 ask() { local prompt="$1" dflt="$2" v=""
   if [ "$MODE" = "custom" ]; then read -r -p "$prompt [$dflt]: " v || true; fi
   echo "${v:-$dflt}"
@@ -88,14 +109,18 @@ fi
 # ---------- configuration ----------
 DB_NAME=$(ask "資料庫名稱" "my_database")
 DB_USER=$(ask "資料庫帳號" "mysql")
-DB_PASSWORD=$(ask_secret "資料庫密碼" "$(randpw)")
-MYSQL_ROOT_PASSWORD=$(ask_secret "MySQL root 密碼" "$(randpw)")
-REDIS_PASSWORD=$(ask_secret "Redis 密碼" "$(randpw)")
+DB_PASSWORD=$(ask_secret_keep "資料庫密碼" "$REPO/backend/.env" DB_PASSWORD)
+MYSQL_ROOT_PASSWORD=$(ask_secret_keep "MySQL root 密碼" "$REPO/db/.env" MYSQL_ROOT_PASSWORD)
+REDIS_PASSWORD=$(ask_secret_keep "Redis 密碼" "$REPO/backend/.env" REDIS_PASSWORD)
 BACKEND_PORT=$(ask "後端 port" "8000")
 STATIC_PORT=$(ask "靜態站 port" "5173")
 ADMIN_USERNAME=$(ask "管理員帳號" "meowadmin")
 ADMIN_EMAIL=$(ask "管理員 email" "admin@localhost.local")
 ADMIN_PASSWORD=$(ask_secret "管理密碼" "$(randpw | cut -c1-12)Aa1!@#")
+# Reuse the existing ticket-signing secret across --force re-runs unless
+# --rotate-secrets: regenerating it silently invalidates every in-progress
+# password-protected share session.
+SHARE_TICKET_SECRET=$(ask_secret_keep "分享票券簽密" "$REPO/backend/.env" SHARE_TICKET_SECRET)
 START_DB=$(ask_bool "由本腳本啟動 Docker DB/Redis?")
 DB_HOST=127.0.0.1; DB_PORT=3306; REDIS_HOST=127.0.0.1; REDIS_PORT=6379
 if [ "$MODE" = "custom" ] && ! yesno_or "$START_DB"; then
@@ -118,6 +143,11 @@ if [ "$MODE" = custom ]; then
   WS_PUBLIC=$(ask "公開 WS base URL（Enter=自動依 API 推導）" "${WS_PUBLIC:-}")
 fi
 [ -n "$API_PUBLIC" ] || API_PUBLIC="http://127.0.0.1:$BACKEND_PORT"
+SPA_PUBLIC="${MEOW_SPA_ORIGIN:-}"
+if [ "$MODE" = custom ]; then
+  SPA_PUBLIC=$(ask "公開前端 URL（瀏覽器位址列的那個 origin）" "${SPA_PUBLIC:-http://127.0.0.1:$STATIC_PORT}")
+fi
+[ -n "$SPA_PUBLIC" ] || SPA_PUBLIC="http://127.0.0.1:$STATIC_PORT"
 if [ -z "$WS_PUBLIC" ]; then
   case "$API_PUBLIC" in
     https://*) WS_PUBLIC="wss://${API_PUBLIC#https://}" ;;
@@ -169,7 +199,8 @@ REDIS_HOST=$REDIS_HOST
 REDIS_PORT=$REDIS_PORT
 REDIS_DB=0
 REDIS_PASSWORD=$REDIS_PASSWORD
-SHARE_TICKET_SECRET=$(randpw)
+SHARE_TICKET_SECRET=$SHARE_TICKET_SECRET
+ALLOWED_ORIGINS=$SPA_PUBLIC,$API_PUBLIC
 SMTP_HOST=$SMTP_HOST
 SMTP_PORT=587
 SMTP_USER=$SMTP_USER
@@ -185,6 +216,7 @@ VITE_WS_BASE_URL=$WS_PUBLIC
 EOF
   chmod 600 "$REPO/frontend/.env"
 
+  backup_if_exists "$CREDS"
   cat > "$CREDS" <<EOF
 # meowcloud deploy credentials - generated $(date '+%F %T')
 mysql root : $MYSQL_ROOT_PASSWORD
@@ -249,12 +281,12 @@ log_format cfip '$remote_addr - $remote_user [$time_local] "$request" '
                 '$status $body_bytes_sent "$http_referer" '
                 '"$http_user_agent" "$http_x_forwarded_for" cf=$http_cf_connecting_ip';
 EOF
-  env BACKEND_PORT="$BACKEND_PORT" envsubst '$BACKEND_PORT' <<'EOF' | $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null'
+  env BACKEND_PORT="$BACKEND_PORT" API_PUBLIC="$API_PUBLIC" WS_PUBLIC="$WS_PUBLIC" envsubst '$BACKEND_PORT $API_PUBLIC $WS_PUBLIC' <<'EOF' | $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null'
 add_header X-Content-Type-Options "nosniff" always;
 add_header X-Frame-Options "DENY" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://meowcloud-api.jun.org.uk wss://meowcloud-api.jun.org.uk https://cloudflareinsights.com; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' $API_PUBLIC $WS_PUBLIC https://cloudflareinsights.com; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 EOF
   env BACKEND_PORT="$BACKEND_PORT" STATIC_PORT="$STATIC_PORT" envsubst '$BACKEND_PORT $STATIC_PORT' <<'EOF' | $SUDO tee /etc/nginx/api-gw/spa.conf >'/dev/null'
 upstream meow_backend {

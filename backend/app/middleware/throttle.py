@@ -82,7 +82,8 @@ class ThrottleMiddleware:
                     headers[k.decode().lower()] = v.decode(errors="ignore")
                 except Exception:
                     pass
-            ip = sec.get_client_ip(headers) or (scope.get("client")[0] if scope.get("client") else "")
+            _remote = scope.get("client")[0] if scope.get("client") else None
+            ip = sec.get_client_ip(headers, _remote) or (_remote or "")
             path = scope.get("path", "")
             # A user id is only trusted after the cookie value is verified
             # against Redis; an unauthenticated caller cannot frame another

@@ -63,17 +63,25 @@ def mask_ip(ip):
     return ip[:2] + "…"
 
 
-def get_client_ip(scope_headers):
+def get_client_ip(scope_headers, remote_addr=None):
     """Return the trusted client IP.
 
-    Only Cloudflare's `CF-Connecting-IP` is trusted (the edge overwrites it).
-    `X-Forwarded-For` is deliberately NOT used: Cloudflare appends to any
-    client-supplied value, and Uvicorn's proxy handling can be influenced by it
-    (IP spoofing / framing other users / bypassing per-IP limits).
+    Trust chain:
+      1. Cloudflare's `CF-Connecting-IP` (the edge overwrites it; our only
+         public ingress is the tunnel).
+      2. `X-Real-IP`, but only when TRUST_REAL_IP is enabled AND the socket
+         peer is a configured trusted proxy (non-Cloudflare deployments).
+    `X-Forwarded-For` is deliberately NOT used: proxies append the client's
+    own value at the left, so it is spoofable (framing other users,
+    bypassing per-IP limits).
     """
     cf = scope_headers.get("cf-connecting-ip")
     if cf:
         return cf.split(",")[0].strip() or None
+    if settings.TRUST_REAL_IP and remote_addr and remote_addr in settings.trusted_proxy_ips:
+        real = scope_headers.get("x-real-ip")
+        if real:
+            return real.split(",")[0].strip() or None
     return None
 
 

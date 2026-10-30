@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.services.share_service import ShareService
 from app.services import zip_service
 from app.api.dependencies import get_db, get_current_user_id, get_redis
@@ -222,7 +222,7 @@ async def share_verify_password(
 
 class ShareItemsRequest(BaseModel):
     link: str
-    paths: list[str]
+    paths: list[str] = Field(max_length=2000)
     ticket: Optional[str] = None
     folder_name: Optional[str] = None  # root folder display name -> "<name>-part.zip"
 
