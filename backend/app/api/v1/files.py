@@ -101,11 +101,11 @@ async def tus_create_upload(
         location = str(request.url_for('tus_patch_upload', upload_id=upload_id))
         body = await request.body()
         if body:
-            offset_result = file_service.append_tus_chunk(upload_id, 0, body)
+            offset_result = file_service.append_tus_chunk(upload_id, 0, body, user_id)
             if offset_result and 'error' in offset_result:
                 raise HTTPException(status_code=offset_result['stateCode'], detail=offset_result['error'])
         elif file_size == 0:
-            finalize_result = file_service.finalize_tus_upload(upload_id)
+            finalize_result = file_service.finalize_tus_upload(upload_id, user_id)
             if finalize_result and 'error' in finalize_result:
                 raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
 
@@ -148,7 +148,7 @@ async def tus_patch_upload(
             raise HTTPException(status_code=400, detail='Missing Upload-Offset header')
 
         file_service = FileService(db)
-        result = file_service.append_tus_chunk(upload_id, int(upload_offset), body)
+        result = file_service.append_tus_chunk(upload_id, int(upload_offset), body, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
@@ -158,7 +158,7 @@ async def tus_patch_upload(
             'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
         }
         if result.get('completed'):
-            finalize_result = file_service.finalize_tus_upload(upload_id)
+            finalize_result = file_service.finalize_tus_upload(upload_id, user_id)
             if finalize_result and 'error' in finalize_result:
                 raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
             response_headers['Upload-Complete'] = 'true'
@@ -184,7 +184,7 @@ async def tus_head_upload(
     """Return the current tus offset for a resumable upload."""
     try:
         file_service = FileService(db)
-        result = file_service.get_tus_upload(upload_id)
+        result = file_service.get_tus_upload(upload_id, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
@@ -214,7 +214,7 @@ async def tus_finish_upload(
     """Finalize a tus upload session and persist the final file."""
     try:
         file_service = FileService(db)
-        result = file_service.finalize_tus_upload(upload_id)
+        result = file_service.finalize_tus_upload(upload_id, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
@@ -377,15 +377,25 @@ async def download_file(
 
         if token:
             redis_key = f"download_file_token:{token}"
-            tdata = redis.get(redis_key)
+            try:
+                tdata = redis.getdel(redis_key)
+            except Exception:
+                tdata = redis.get(redis_key)
+                if tdata:
+                    redis.delete(redis_key)
             if not tdata:
                 raise HTTPException(status_code=401, detail="Invalid or expired download token")
-            redis.delete(redis_key)
             tdata_str = tdata.decode() if isinstance(tdata, bytes) else tdata
             parts = tdata_str.split(":")
             if len(parts) != 2:
                 raise HTTPException(status_code=400, detail="Invalid token data")
-            actual_user_id = int(parts[0])
+            try:
+                actual_user_id = int(parts[0])
+            except ValueError:
+                raise HTTPException(status_code=401, detail="Invalid or expired download token")
+            # Token is bound to the exact file it was issued for.
+            if parts[1] != file_uuid:
+                raise HTTPException(status_code=403, detail="Token does not match file")
 
         if actual_user_id is None:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -661,6 +671,7 @@ async def create_text_file(
     else:
         taken = set(db.execute(
             select(FileModel.name).where(
+                FileModel.owner_id == user_id,
                 FileModel.parent_folder_id.is_(None), FileModel.deleted_at.is_(None))
         ).scalars().all())
     name = unique_name(cleaned, taken)

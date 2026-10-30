@@ -146,7 +146,7 @@ class FolderService:
                 'created_at': _fmt_utc8(created_folder.created_at)
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def rename(self, user_id: int, folder_uuid: str, new_name: str) -> Optional[Dict[str, Any]]:
         """Rename a folder."""
@@ -170,7 +170,7 @@ class FolderService:
                 'updated_at': _fmt_utc8(folder.updated_at)
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def delete(self, user_id: int, folder_uuid: str, permanent: bool = False) -> Optional[Dict[str, Any]]:
         """Delete a folder (soft or hard)."""
@@ -188,6 +188,7 @@ class FolderService:
                 return {'error': '系統資料夾無法刪除', 'stateCode': HTTPStatus.FORBIDDEN}
 
             folder_size = folder.size
+            affected_files = self._collect_subtree_file_uuids(folder_uuid)
 
             if permanent:
                 # Hard delete: recursively delete all children and storage files
@@ -208,13 +209,43 @@ class FolderService:
 
                 # Don't update parent folder size for soft delete (items still occupy space)
 
+            try:
+                from app.services import collab_events
+                for fu in affected_files:
+                    collab_events.revoke_file(fu, "folder deleted")
+                if permanent:
+                    from app.services.snapshot_service import purge_file_state
+                    from redis import Redis as _Redis
+                    _r = _Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                    try:
+                        for fu in affected_files:
+                            purge_file_state(fu, _r)
+                    finally:
+                        _r.close()
+            except Exception:
+                pass
+
             return {
                 'uuid': folder_uuid,
                 'size': folder_size,
                 'permanent': permanent
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def _collect_subtree_file_uuids(self, folder_uuid: str) -> set:
+        """All file uuids anywhere under a folder (for collab revocation)."""
+        try:
+            files = set(self.db.execute(
+                select(File.uuid).where(File.parent_folder_id == folder_uuid)
+            ).scalars().all())
+            for child in self.db.execute(
+                select(Folder.uuid).where(Folder.parent_id == folder_uuid)
+            ).scalars().all():
+                files |= self._collect_subtree_file_uuids(child)
+            return files
+        except Exception:
+            return set()
     
     def restore(self, user_id: int, folder_uuid: str) -> Optional[Dict[str, Any]]:
         """Restore a soft-deleted folder."""
@@ -362,7 +393,7 @@ class FolderService:
                     }
                 except Exception as e:
                     self.db.rollback()
-                    return {'error': f'合併失敗: {str(e)}', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+                    return {'error': '合併失敗', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
             
             # No conflict, proceed with normal restore
             # Restore the folder (clear deleted_at)
@@ -430,7 +461,7 @@ class FolderService:
                 'restored': True
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_by_owner(self, user_id: int) -> Dict[str, Any]:
         """Get all folders by owner."""
@@ -451,7 +482,7 @@ class FolderService:
                 ]
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_trash(self, user_id: int) -> Dict[str, Any]:
         """Get soft-deleted folders by owner."""
@@ -477,7 +508,7 @@ class FolderService:
                 'folders': folders_with_path
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _get_folder_path(self, folder_uuid: str, user_id: int) -> str:
         """Get the full path of a folder as a string."""
@@ -538,7 +569,7 @@ class FolderService:
                 created.append(seg)
             return {'uuid': current, 'created': created}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def _ancestor_uuids(self, folder_uuid: str) -> set:
         """Set of uuids from this folder up to the root (inclusive)."""
@@ -604,4 +635,4 @@ class FolderService:
 
             return {'moved': moved, 'renamed': renamed, 'failed': failed, 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

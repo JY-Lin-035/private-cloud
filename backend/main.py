@@ -6,6 +6,7 @@ if __name__ == "__main__":
         app, 
         host="127.0.0.1", 
         port=8000, 
+        proxy_headers=False,
         #ssl_keyfile="key.pem",
         #ssl_certfile="cert.pem"
     )

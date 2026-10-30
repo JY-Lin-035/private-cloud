@@ -89,7 +89,7 @@ class CollaborationService:
                 'stateCode': HTTPStatus.OK
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def remove_collaborator(
         self,
@@ -108,9 +108,18 @@ class CollaborationService:
             if not removed:
                 return {'error': '找不到該共編記錄', 'stateCode': HTTPStatus.NOT_FOUND}
 
+            # Close any live socket for the removed collaborator on this file.
+            try:
+                from app.services import collab_events
+                collab_events.publish_revoke("file_user", file_uuid=file_uuid,
+                                             user_id=collaborator_id,
+                                             reason="collaborator removed")
+            except Exception:
+                pass
+
             return {'message': '已移除共編成員', 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def get_owned_collaborations(self, owner_id: int) -> Optional[Dict[str, Any]]:
         """Get all collaborations initiated by the current user (inviter view)."""
@@ -138,7 +147,7 @@ class CollaborationService:
             items = list(file_groups.values())
             return {'items': items, 'total': len(items), 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def get_my_collaborations(self, collaborator_id: int) -> Optional[Dict[str, Any]]:
         """Get all collaborations where user is invited (invitee view)."""
@@ -160,4 +169,4 @@ class CollaborationService:
                 })
             return {'items': items, 'total': len(items), 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

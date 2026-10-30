@@ -111,7 +111,7 @@ class ShareService:
             return {'list': share_list, 'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error getting share list: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def create_link(self, user_id: int, item_uuid: str, item_type: str, limited_date: Optional[datetime] = None, available_user: Optional[List[int]] = None, password: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Create a share link for a folder or file. Always updates limited_date and available_user.
@@ -176,7 +176,7 @@ class ShareService:
                 
         except Exception as e:
             self.logger.error(f"Error creating share link: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def delete_link(self, user_id: int, item_uuid: str, item_type: str) -> Optional[Dict[str, Any]]:
         """Delete a share link."""
@@ -215,7 +215,7 @@ class ShareService:
             return {'msg': 'success', 'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error deleting share link: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _check_share_access(self, item, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Check if a shared item is accessible. Returns error dict if not, None if OK."""
@@ -263,7 +263,7 @@ class ShareService:
                     'expired': expired, 'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error getting share status: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def verify_share_password(self, share_hash: str, password: str) -> Optional[Dict[str, Any]]:
         """Validate the share password; on success issue a short-lived ticket."""
@@ -288,7 +288,7 @@ class ShareService:
                     'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error verifying share password: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def download(self, share_hash: str, user_id: Optional[int] = None, ticket: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Download a file via share link."""
@@ -341,7 +341,7 @@ class ShareService:
             
         except Exception as e:
             self.logger.error(f"Error downloading file: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _generate_share_hash(self) -> str:
         """Generate a unique share hash."""
@@ -436,7 +436,7 @@ class ShareService:
             }
         except Exception as e:
             self.logger.error(f"Error browsing share: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def collect_shared_items(self, share_hash: str, paths: List[str], ticket: Optional[str]):
         """Resolve public relative paths inside a shared folder into (file_uuids, folder_uuids)."""

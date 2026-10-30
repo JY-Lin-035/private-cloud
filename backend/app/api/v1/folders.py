@@ -164,10 +164,15 @@ async def get_folder_path(
         logger.info(f"Get folder path request received, user_id: {user_id}, folder_uuid: {folder_uuid}")
         
         folder_service = FolderService(db)
+        folder = folder_service.folder_repo.get_by_uuid(folder_uuid)
+        if not folder or folder.owner_id != user_id or folder.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="找不到資料夾")
         path = folder_service.folder_repo.get_folder_path(folder_uuid)
         
         logger.info(f"Folder path retrieved: {len(path)} levels")
         return {"path": path}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Get folder path endpoint error: {e}")
         raise

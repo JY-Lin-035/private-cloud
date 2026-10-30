@@ -193,7 +193,8 @@ async def share_verify_password(
     lockout (10/15min, no bystander punishment) + argon2 verification cost.
     """
     from app.services import security_engine
-    client_ip = request.client.host if request.client else ""
+    from app.utils.client_ip import request_client_ip
+    client_ip = request_client_ip(request)
     lock_key = f"sharePwFail:{body.link}:{client_ip}"
     try:
         failures = int(redis_client.get(lock_key) or 0)

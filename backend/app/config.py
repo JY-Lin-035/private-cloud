@@ -58,6 +58,31 @@ class Settings(BaseSettings):
     # Collaboration snapshots
     SNAPSHOT_INTERVAL: int = 900  # 15 minutes in seconds
 
+    # Collaboration WebSocket auth (short-lived single-use ticket via Sec-WebSocket-Protocol)
+    WS_SUBPROTOCOL: str = "meowcloud-collab.v1"
+    WS_TICKET_TTL_SECONDS: int = 60
+    MAX_COLLAB_CONTENT_BYTES: int = 2 * 1024 * 1024   # 2MB, aligned with MAX_EDIT_BYTES
+    MAX_Y_UPDATE_BYTES: int = 2 * 1024 * 1024        # per y_update payload
+    MAX_ROOM_CONNECTIONS: int = 50                   # concurrent sockets per file room
+    WS_MSG_PER_MIN: int = 1200                       # per-connection message rate (burst-tolerant)
+    COLLAB_STATE_TTL_SECONDS: int = 7 * 24 * 3600    # expire abandoned collab keys
+    COLLAB_UPDATE_BUDGET_BYTES: int = 16 * 1024 * 1024  # per-file y-update log budget
+    MAX_Y_INCREMENTAL_BYTES: int = 2 * 1024 * 1024    # single incremental y_update cap
+
+    # Allowed browser origins for CORS / Origin checks / WS
+    ALLOWED_ORIGINS: str = "https://meowcloud.jun.org.uk,https://meowcloud-api.jun.org.uk"
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    # API docs are off by default. When enabled they are served ONLY for direct
+    # loopback access (no proxy headers) — i.e. local development, never the tunnel.
+    ENABLE_API_DOCS: bool = False
+
+    # TUS temporary uploads older than this are garbage-collected.
+    TUS_TEMP_MAX_AGE_SECONDS: int = 24 * 3600
+
     # Trash cleanup (celery beat)
     TRASH_RETENTION_DAYS: int = 30
     TRASH_CLEANUP_INTERVAL_SECONDS: int = 604800  # 7 days
