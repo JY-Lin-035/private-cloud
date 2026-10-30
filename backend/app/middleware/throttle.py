@@ -63,7 +63,9 @@ class ThrottleMiddleware:
             (b"content-type", b"application/json"),
             (b"content-length", str(len(payload)).encode()),
         ]
-        if origin:
+        # Only echo origins we actually trust (same list as CORS/OriginGuard);
+        # reflecting an arbitrary Origin with credentials is an info oracle.
+        if origin and origin in settings.allowed_origins:
             headers.append(("access-control-allow-origin".encode(), origin.encode()))
             headers.append(("access-control-allow-credentials".encode(), b"true"))
         return headers, payload
