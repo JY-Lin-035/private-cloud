@@ -54,7 +54,8 @@ def require_admin(request: Request) -> dict:
     if request.state.user.get("identity") != Identity.ADMIN:
         try:
             from app.services import security_engine
-            ip = request.client.host if request.client else None
+            from app.utils.client_ip import request_client_ip
+            ip = request_client_ip(request)
             security_engine.record_event(
                 "admin_probe", ip, str(request.state.user.get("username") or request.state.user.get("id")),
                 request.url.path, "非管理員存取 admin 端點")

@@ -24,7 +24,15 @@ html,body,#stage{height:100%}
 .slide-card{border:1px solid #ddd;border-radius:10px;padding:24px 28px;margin:18px 0;min-height:200px;background:#fdfdfd;box-shadow:0 1px 4px rgba(0,0,0,.06)}
 .slide-no{font-size:12px;color:#888;margin-bottom:10px}
 .slide-text{margin:.45em 0;line-height:1.65}.pptx-stage{margin:0 auto;flex:none}`;
-const HOST_SRCDOC = `<!doctype html><html><head><meta charset="utf-8"><style>${HOST_STYLES}</style></head><body><div id="stage"></div><script src="/office/render.js?v=${__BUILD_TS__}"><\/script></body></html>`;
+
+const API_ORIGIN = (() => {
+  try {
+    return new URL(API_BASE_URL, window.location.origin).origin;
+  } catch {
+    return window.location.origin;
+  }
+})();
+const HOST_SRCDOC = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src blob: ${window.location.origin} ${API_ORIGIN}; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'"><style>${HOST_STYLES}</style></head><body><div id="stage"></div><script src="/office/render.js?v=${__BUILD_TS__}"><\/script></body></html>`;
 
 
 

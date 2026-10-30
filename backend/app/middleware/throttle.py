@@ -16,6 +16,7 @@ from urllib.parse import parse_qs
 
 from app.config import settings
 from app.services import security_engine as sec
+from app.utils.session_auth import parse_session_cookie, resolve_session_uid
 
 UPLOAD_PREFIXES = ('/api/files/tus', '/api/files/uploadFile')
 DOWNLOAD_PREFIXES = (
@@ -51,18 +52,9 @@ class ThrottleMiddleware:
         self.app = app
 
     @staticmethod
-    def _uid(headers):
-        cookie = headers.get("cookie") or ""
-        for part in cookie.split(";"):
-            part = part.strip()
-            if part.startswith("session="):
-                val = part[len("session="):]
-                if "|" in val:
-                    try:
-                        return int(val.split("|", 1)[0])
-                    except ValueError:
-                        return None
-        return None
+    def _session_cookie(headers):
+        """Return the raw session cookie value (unverified)."""
+        return parse_session_cookie(headers.get("cookie"))
 
     @staticmethod
     def _json_429(origin):
@@ -90,7 +82,16 @@ class ThrottleMiddleware:
                     pass
             ip = sec.get_client_ip(headers) or (scope.get("client")[0] if scope.get("client") else "")
             path = scope.get("path", "")
-            uid = self._uid(headers)
+            # A user id is only trusted after the cookie value is verified
+            # against Redis; an unauthenticated caller cannot frame another
+            # account by sending a forged `session=42|...` prefix.
+            uid = None
+            raw_session = self._session_cookie(headers)
+            if raw_session:
+                try:
+                    uid = await asyncio.to_thread(resolve_session_uid, sec._client(), raw_session)
+                except Exception:
+                    uid = None
             is_upload = path.startswith(UPLOAD_PREFIXES)
             is_download = path.startswith(DOWNLOAD_PREFIXES)
             is_share = path.startswith(SHARE_PREFIX)

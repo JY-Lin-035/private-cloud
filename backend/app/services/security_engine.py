@@ -64,13 +64,16 @@ def mask_ip(ip):
 
 
 def get_client_ip(scope_headers):
-    """scope_headers: dict of lowercase header name -> str (ASGI)."""
+    """Return the trusted client IP.
+
+    Only Cloudflare's `CF-Connecting-IP` is trusted (the edge overwrites it).
+    `X-Forwarded-For` is deliberately NOT used: Cloudflare appends to any
+    client-supplied value, and Uvicorn's proxy handling can be influenced by it
+    (IP spoofing / framing other users / bypassing per-IP limits).
+    """
     cf = scope_headers.get("cf-connecting-ip")
     if cf:
-        return cf.split(",")[0].strip()
-    xff = scope_headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+        return cf.split(",")[0].strip() or None
     return None
 
 
@@ -358,6 +361,11 @@ def _disable_account(username):
         r = _client()
         r.delete(f"session:{uid}")
         r.delete(f"session_data:{uid}")
+        try:
+            from app.services import collab_events
+            collab_events.revoke_user(uid, "account disabled")
+        except Exception:
+            pass
         write_event("account_disabled", None, username, None, "累積違規達頂端處置")
         invalidate_rules_cache()
         return f"，並停用帳號 {username}"

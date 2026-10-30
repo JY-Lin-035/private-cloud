@@ -3,7 +3,6 @@ import hashlib
 import hmac
 import time
 from passlib.context import CryptContext
-from itsdangerous import URLSafeTimedSerializer
 from app.config import settings
 
 # Use Argon2id to match Laravel's default hashing driver
@@ -16,7 +15,6 @@ pwd_context = CryptContext(
     argon2__hash_len=32,
     argon2__salt_len=16
 )
-serializer = URLSafeTimedSerializer(settings.APP_URL)
 
 
 def hash_password(password: str) -> str:

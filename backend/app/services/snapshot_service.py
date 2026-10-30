@@ -38,6 +38,22 @@ def _get_file_path(file_uuid: str) -> Optional[str]:
         db.close()
 
 
+COLLAB_STATE_PREFIXES = (
+    "collab_content:", "collab_ybase:", "collab_yupdates:",
+    "collab_yversion:", "collab_ystate:", "collab_snapshot:",
+    "collab_ybytes:",
+)
+
+
+def purge_file_state(file_uuid: str, redis: Redis) -> None:
+    """Drop every collaboration Redis key for a file (deletion / hard cleanup)."""
+    try:
+        for prefix in COLLAB_STATE_PREFIXES:
+            redis.delete(f"{prefix}{file_uuid}")
+    except Exception:
+        pass
+
+
 def _normalize_snapshots(snapshots: List[Dict]) -> List[Dict]:
     by_id = {}
     for snapshot in snapshots:
@@ -76,7 +92,12 @@ def save_snapshot(file_uuid: str, redis: Redis):
 
     snapshots = _normalize_snapshots(snapshots)
 
-    redis.set(_get_snapshot_key(file_uuid), json.dumps(snapshots))
+    key = _get_snapshot_key(file_uuid)
+    redis.set(key, json.dumps(snapshots))
+    try:
+        redis.expire(key, settings.COLLAB_STATE_TTL_SECONDS)
+    except Exception:
+        pass
 
 
 def get_snapshots(file_uuid: str, redis: Redis) -> List[Dict]:
@@ -101,17 +122,17 @@ def switch_to_snapshot(file_uuid: str, snapshot_id: int | str, redis: Redis) -> 
 
 
 def auto_save_to_disk(file_uuid: str, redis: Redis):
-    """Save latest content from Redis to disk (called every 30 seconds)."""
+    """Save latest content from Redis to disk (called every 30 seconds).
+
+    Routed through the quota-aware writer so autosave cannot bypass per-file
+    or total-quota limits (and keeps used_size accounting correct).
+    """
     content = redis.get(_get_content_key(file_uuid))
     if not content or not content.strip():
         return
 
-    file_path = _get_file_path(file_uuid)
-    if not file_path:
-        return
-
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        from app.services.collab_persist import persist_content
+        persist_content(file_uuid, content)
     except Exception:
         pass

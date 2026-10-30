@@ -23,10 +23,19 @@ from app.api.v1 import ipcontrol
 
 from app.middleware.session_middleware import SessionMiddleware
 from app.middleware.throttle import ThrottleMiddleware
+from app.middleware.origin_guard import OriginGuardMiddleware
 from app.services.snapshot_service import auto_save_to_disk, save_snapshot
+from app.services import collab_events
 
-# Create FastAPI app
-app = FastAPI(title="File Management Backend", version="1.0.0")
+# API docs are disabled by default. When ENABLE_API_DOCS is set they are
+# registered separately below and restricted to direct loopback access.
+app = FastAPI(
+    title="File Management Backend",
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 # Logger
 logger = log.get_logger("main.log")
@@ -49,14 +58,10 @@ redis_client = Redis.from_url(
 # CORS failures and the frontend 401 interceptor never fires.
 app.add_middleware(SessionMiddleware, redis_client=redis_client)
 app.add_middleware(ThrottleMiddleware)
+app.add_middleware(OriginGuardMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        # Backend
-        "https://meowcloud-api.jun.org.uk",
-        # Frontend
-        "https://meowcloud.jun.org.uk",
-    ],
+    allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,6 +77,39 @@ app.add_middleware(
         "ETag",
     ],
 )
+
+
+# ---------------------------------------------------------------- optional docs
+def _docs_local_only(request: Request):
+    """Allow API docs only for direct loopback access (never through a proxy).
+
+    Cloudflare/nginx always add a proxy header, so remote callers are rejected
+    even though Uvicorn sees them from 127.0.0.1.
+    """
+    from fastapi import HTTPException
+    hdrs = {k.lower() for k in request.headers.keys()}
+    if hdrs & {"cf-connecting-ip", "x-forwarded-for", "x-real-ip"}:
+        raise HTTPException(status_code=404)
+    host = request.client.host if request.client else ""
+    if host not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=404)
+
+
+if settings.ENABLE_API_DOCS:
+    from fastapi import Depends
+    from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+
+    @app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(_docs_local_only)])
+    async def _openapi_json():
+        return JSONResponse(app.openapi())
+
+    @app.get("/docs", include_in_schema=False, dependencies=[Depends(_docs_local_only)])
+    async def _swagger_ui():
+        return get_swagger_ui_html(openapi_url="/openapi.json", title="MeowCloud API")
+
+    @app.get("/redoc", include_in_schema=False, dependencies=[Depends(_docs_local_only)])
+    async def _redoc_ui():
+        return get_redoc_html(openapi_url="/openapi.json", title="MeowCloud API")
 
 
 # Background scheduler for auto-save and snapshots
@@ -93,6 +131,13 @@ def _scheduler():
             pass
 
 threading.Thread(target=_scheduler, daemon=True).start()
+
+
+@app.on_event("startup")
+async def _startup_collab_bus():
+    import asyncio
+    collab_events.set_loop(asyncio.get_running_loop())
+    collab_events.start()
 
 
 # Global exception handler for debugging
@@ -158,4 +203,7 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Do not trust X-Forwarded-For: real client IP comes from CF-Connecting-IP
+    # via security_engine.get_client_ip(). Keeping proxy_headers off prevents a
+    # spoofed XFF from influencing request.client.host.
+    uvicorn.run(app, host="127.0.0.1", port=8000, proxy_headers=False)

@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 import os
+import shutil
+import time
 import platform
 import logging
 
@@ -47,6 +49,11 @@ celery_app.conf.update(
             'schedule': settings.STORAGE_RECALCULATION_PERIOD,
             'options': {'queue': 'cleanup'},
         },
+        'cleanup-stale-tus-uploads': {
+            'task': 'app.tasks.cleanup_tasks.cleanup_stale_tus_uploads',
+            'schedule': 3600,
+            'options': {'queue': 'cleanup'},
+        },
     },
 )
 
@@ -84,11 +91,28 @@ def _purge_folder_subtree(db, file_repo, folder_uuid: str) -> tuple[int, int]:
         path = _file_storage_path(child_file)
         if os.path.exists(path):
             os.remove(path)
+        _purge_collab(child_file.uuid)
         file_repo.hard_delete(child_file.uuid)
         files_removed += 1
         bytes_freed += child_file.size or 0
 
     return files_removed, bytes_freed
+
+
+def _purge_collab(file_uuid: str) -> None:
+    """Drop collaboration Redis state and close any live socket for a file."""
+    try:
+        from redis import Redis
+        from app.services import collab_events
+        from app.services.snapshot_service import purge_file_state
+        collab_events.revoke_file(file_uuid, "retention purge")
+        r = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            purge_file_state(file_uuid, r)
+        finally:
+            r.close()
+    except Exception:
+        pass
 
 
 @celery_app.task(bind=True, max_retries=3)
@@ -145,6 +169,7 @@ def cleanup_soft_deleted_items(self):
                     os.remove(file_path)
                     logger.info(f"Deleted file from storage: {file_path}")
 
+                _purge_collab(file.uuid)
                 file_repo.hard_delete(file.uuid)
                 total_files_deleted += 1
                 total_size_freed += file.size or 0
@@ -251,4 +276,33 @@ def recalculate_all_users_storage(self):
             
     except Exception as e:
         logger.error(f"Storage recalculation task failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task(bind=True, max_retries=3)
+def cleanup_stale_tus_uploads(self):
+    """Remove abandoned tus temp upload directories past the max age."""
+    try:
+        max_age = settings.TUS_TEMP_MAX_AGE_SECONDS
+        base = settings.STORAGE_BASE_PATH
+        if not os.path.isabs(base):
+            base = os.path.join(os.getcwd(), base)
+        tus_dir = os.path.join(base, "tus_uploads")
+        removed = 0
+        if os.path.isdir(tus_dir):
+            cutoff = time.time() - max_age
+            for name in os.listdir(tus_dir):
+                path = os.path.join(tus_dir, name)
+                try:
+                    if not os.path.isdir(path):
+                        continue
+                    if os.path.getmtime(path) < cutoff:
+                        shutil.rmtree(path, ignore_errors=True)
+                        removed += 1
+                except OSError:
+                    continue
+        logger.info(f"Stale tus cleanup removed {removed} directories")
+        return {"status": "success", "removed": removed}
+    except Exception as e:
+        logger.error(f"Stale tus cleanup failed: {str(e)}")
         return {"status": "error", "error": str(e)}

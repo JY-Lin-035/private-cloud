@@ -72,7 +72,7 @@ class AccountService:
             
             return None
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def login(self, username: str, password: str, email_service=None) -> Optional[Dict[str, Any]]:
         """Login user and create session."""
@@ -80,10 +80,10 @@ class AccountService:
             account = self.account_repo.get_by_name(username)
             
             if not account:
-                return {'error': '使用者名稱不存在', 'stateCode': HTTPStatus.UNAUTHORIZED}
+                return {'error': '使用者名稱或密碼錯誤', 'stateCode': HTTPStatus.UNAUTHORIZED}
             
             if not verify_password(password, account.password):
-                return {'error': '密碼錯誤!', 'stateCode': HTTPStatus.UNAUTHORIZED}
+                return {'error': '使用者名稱或密碼錯誤', 'stateCode': HTTPStatus.UNAUTHORIZED}
             
             if not account.email_verified_at:
                 # Re-send verification email like Laravel does
@@ -130,19 +130,29 @@ class AccountService:
                 'stateCode': HTTPStatus.OK
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def sign_out(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Sign out user by deleting session from Redis."""
         try:
             self.redis.delete(f"session:{user_id}")
             self.redis.delete(f"session_data:{user_id}")
+            try:
+                from app.services import collab_events
+                collab_events.revoke_user(user_id, "session ended")
+            except Exception:
+                pass
             return None
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def modify_email(self, user_id: int, new_email: str, check_email: str, code: str) -> Optional[Dict[str, Any]]:
-        """Modify user email with verification code."""
+        """Modify user email with verification code.
+
+        The code is issued for the *new* address by get_code(mode="mail"), so it
+        must be read from `mailCode:{new_email}`. `check_email` is the current
+        address and must match the account (proof of identity).
+        """
         try:
             account = self.account_repo.get_by_id(user_id)
             
@@ -153,23 +163,31 @@ class AccountService:
             if formatted_check_email != account.email:
                 return {'error': '目前電子信箱錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Verify code from Redis
-            stored_code = self.redis.get(f"mailCode:{formatted_check_email}")
-            if not stored_code or stored_code.decode() != code:
+            formatted_new_email = format_email(new_email)
+            if formatted_new_email != account.email and self.account_repo.email_exists(formatted_new_email):
+                return {'error': '此電子信箱地址已被使用', 'stateCode': HTTPStatus.CONFLICT}
+            
+            # Verify code issued for the NEW address
+            stored_code = self.redis.get(f"mailCode:{formatted_new_email}")
+            if not stored_code:
+                return {'error': '驗證碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
+            stored_str = stored_code.decode() if isinstance(stored_code, bytes) else stored_code
+            if stored_str != code:
                 return {'error': '驗證碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
             
-            # Delete code from Redis
-            self.redis.delete(f"mailCode:{formatted_check_email}")
+            self.redis.delete(f"mailCode:{formatted_new_email}")
             
-            # Update email
-            formatted_new_email = format_email(new_email)
             account.email = formatted_new_email
             account.email_verified_at = datetime.utcnow()
-            self.account_repo.update(account)
+            try:
+                self.account_repo.update(account)
+            except Exception:
+                self.db.rollback()
+                return {'error': '此電子信箱地址已被使用', 'stateCode': HTTPStatus.CONFLICT}
             
             return {'email': mask_email(formatted_new_email), 'stateCode': HTTPStatus.OK}
-        except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+        except Exception:
+            return {'error': '信箱變更失敗', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def modify_password(self, user_id: int, current_password: str, new_password: str) -> Optional[Dict[str, Any]]:
         """Modify user password."""
@@ -190,38 +208,40 @@ class AccountService:
             
             return {'message': 'success', 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_code(self, email: str, mode: str) -> Optional[Dict[str, Any]]:
-        """Generate and send verification code."""
+        """Generate a verification code.
+
+        Responses are intentionally uniform for existent and non-existent
+        addresses (prevents account enumeration). The plaintext code is returned
+        ONLY so the API layer can e-mail it; it is never placed in the HTTP body.
+        """
         try:
             formatted_email = format_email(email)
             account = self.account_repo.get_by_email(formatted_email)
             
-            if mode == 'pw' and not account:
-                return {'error': '該信箱地址尚未註冊', 'stateCode': HTTPStatus.NOT_FOUND}
+            if mode not in ('pw', 'mail'):
+                return {'message': '若符合條件，通知已寄出', 'stateCode': HTTPStatus.OK}
             
-            if mode == 'mail' and account:
-                return {'error': '該信箱地址已註冊', 'stateCode': HTTPStatus.CONFLICT}
+            if mode == 'pw':
+                generic = {'message': '若此信箱已註冊，將寄出重設通知', 'stateCode': HTTPStatus.OK}
+                if not account:
+                    return generic
+            else:  # mail change: the NEW address must not already be registered
+                generic = {'message': '若可變更，將寄出驗證通知', 'stateCode': HTTPStatus.OK}
+                if account:
+                    return generic
             
-            if mode not in ['pw', 'mail']:
-                return {'error': 'Error', 'stateCode': HTTPStatus.NOT_FOUND}
-            
-            # Generate verification code
             code = generate_verification_code()
-            
-            # Store code in Redis with expiration
             self.redis.setex(
                 f"{mode}Code:{formatted_email}",
                 settings.RESET_PW_CODE_EXPIRE_TIME * 60,
                 code
             )
-            
-            # Queue email (to be implemented in email service)
-            
-            return {'message': '請至信箱查看通知', 'stateCode': HTTPStatus.OK}
-        except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {**generic, 'code': code}
+        except Exception:
+            return {'message': '若符合條件，通知已寄出', 'stateCode': HTTPStatus.OK}
     
     def reset_password(self, email: str, code: str, new_password: str) -> Optional[Dict[str, Any]]:
         """Reset password with verification code."""
@@ -229,13 +249,18 @@ class AccountService:
             formatted_email = format_email(email)
             account = self.account_repo.get_by_email(formatted_email)
             
+            # Uniform response: never reveal whether the address is registered.
+            invalid = {'error': '驗證碼錯誤或已失效', 'stateCode': HTTPStatus.FORBIDDEN}
             if not account:
-                return {'error': '該信箱地址尚未註冊', 'stateCode': HTTPStatus.NOT_FOUND}
+                return invalid
             
-            # Verify code from Redis
+            # Verify code from Redis (constant-ish; missing account handled above)
             stored_code = self.redis.get(f"pwCode:{formatted_email}")
-            if not stored_code or stored_code.decode() != code:
-                return {'error': '驗證碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
+            if not stored_code:
+                return invalid
+            stored_str = stored_code.decode() if isinstance(stored_code, bytes) else stored_code
+            if stored_str != code:
+                return invalid
             
             # Delete code from Redis
             self.redis.delete(f"pwCode:{formatted_email}")
@@ -249,7 +274,7 @@ class AccountService:
             
             return {'message': 'success', 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def verify_email(self, user_id: int, hash: str, signature: str = None) -> Optional[Dict[str, Any]]:
         """Verify email with signed URL (Laravel style)."""
@@ -273,4 +298,4 @@ class AccountService:
             
             return {'message': 'Email verified successfully.', 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

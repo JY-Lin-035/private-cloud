@@ -79,10 +79,10 @@ for f in "$REPO/backend/.env" "$REPO/db/.env" "$REPO/frontend/.env"; do
   [ -f "$f" ] && EXISTS=1
 done
 if [ "$EXISTS" = 1 ] && [ "$FORCE" = 0 ]; then
-  if [ "$MODE" = "defaults" ]; then
-    echo "偵測到既有部署（.env 已存在）。使用互動模式或加 --force 覆寫。"
-    exit 1
-  fi
+  echo "偵測到既有部署（.env 已存在）。"
+  echo "為避免覆寫既有密碼／SHARE_TICKET_SECRET（會中斷服務與分享連結），已中止。"
+  echo "如確定要重新產生設定，請加 --force。"
+  exit 1
 fi
 
 # ---------- configuration ----------
@@ -106,6 +106,25 @@ if [ "$MODE" = "custom" ] && ! yesno_or "$START_DB"; then
 fi
 INSTALL_NGINX=$(ask_bool "安裝 nginx 靜態站?")
 INSTALL_SYSTEMD=$(ask_bool "安裝 systemd 自啟動?")
+
+# Public URLs the browser will use for the API / WebSocket. Defaults are
+# loopback (local-only install). Behind a tunnel/domain set these via env or
+# the custom menu, otherwise the built SPA would try to reach the visitor's
+# own localhost.
+API_PUBLIC="${MEOW_API_BASE_URL:-}"
+WS_PUBLIC="${MEOW_WS_BASE_URL:-}"
+if [ "$MODE" = custom ]; then
+  API_PUBLIC=$(ask "公開 API base URL" "${API_PUBLIC:-http://127.0.0.1:$BACKEND_PORT}")
+  WS_PUBLIC=$(ask "公開 WS base URL（Enter=自動依 API 推導）" "${WS_PUBLIC:-}")
+fi
+[ -n "$API_PUBLIC" ] || API_PUBLIC="http://127.0.0.1:$BACKEND_PORT"
+if [ -z "$WS_PUBLIC" ]; then
+  case "$API_PUBLIC" in
+    https://*) WS_PUBLIC="wss://${API_PUBLIC#https://}" ;;
+    http://*)  WS_PUBLIC="ws://${API_PUBLIC#http://}" ;;
+    *)         WS_PUBLIC="$API_PUBLIC" ;;
+  esac
+fi
 SMTP_HOST=""; SMTP_USER=""; SMTP_PASSWORD=""; SMTP_FROM=""
 if [ "$MODE" = custom ]; then
   read -r -p "SMTP host（Enter 跳過）: " SMTP_HOST || true
@@ -140,7 +159,7 @@ EOF
 
   backup_if_exists "$REPO/backend/.env"
   cat > "$REPO/backend/.env" <<EOF
-APP_URL=http://127.0.0.1:$BACKEND_PORT
+APP_URL=$API_PUBLIC
 DB_HOST=$DB_HOST
 DB_PORT=$DB_PORT
 DB_NAME=$DB_NAME
@@ -161,8 +180,8 @@ EOF
 
   backup_if_exists "$REPO/frontend/.env"
   cat > "$REPO/frontend/.env" <<EOF
-VITE_API_BASE_URL=http://127.0.0.1:$BACKEND_PORT
-VITE_WS_BASE_URL=ws://127.0.0.1:$BACKEND_PORT
+VITE_API_BASE_URL=$API_PUBLIC
+VITE_WS_BASE_URL=$WS_PUBLIC
 EOF
   chmod 600 "$REPO/frontend/.env"
 
@@ -277,6 +296,7 @@ server {
     }
 
     location /api/ {
+        client_max_body_size 64m;
         proxy_pass http://meow_backend;
         proxy_http_version 1.1;
         proxy_set_header Connection "";

@@ -23,8 +23,8 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         redis_client: Redis = Depends(get_redis)
     ):
         """Check rate limit using Redis."""
-        # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        from app.utils.client_ip import request_client_ip
+        client_ip = request_client_ip(request)
         
         # Generate key for this IP and endpoint
         endpoint = request.url.path

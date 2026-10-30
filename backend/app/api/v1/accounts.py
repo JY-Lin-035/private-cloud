@@ -36,7 +36,7 @@ def register(
     if not is_feature_enabled("enable_verification_email"):
         raise HTTPException(status_code=403, detail="郵件驗證服務暫時無法使用，目前無法註冊。請稍後再試或聯絡管理員。")
     try:
-        logger.info(f"Register request received, username: {request.username}, email: {request.email}")
+        logger.info("Register request received")
         
         account_service = AccountService(db, redis_client)
         
@@ -72,28 +72,28 @@ def login(
 ):
     """Login user."""
     try:
-        logger.info(f"Login request received, username: {request.username}")
+        logger.info("Login request received")
         
         account_service = AccountService(db, redis_client)
         
         result = account_service.login(request.username, request.password, email_service)
-        logger.info(f"Login result: {result}")
         
         if result and 'error' in result:
             logger.error(f"Login error: {result['error']}, stateCode: {result['stateCode']}")
             try:
                 from app.services import security_engine
+                from app.utils.client_ip import request_client_ip
                 if result.get('stateCode') == 401:
                     security_engine.record_event(
-                        "login_fail", http_request.client.host if http_request.client else None,
+                        "login_fail", request_client_ip(http_request),
                         request.username, None, str(result.get('error', '')))
             except Exception:
                 pass
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         response = Response(
-            content='{"message": "登入成功", "email": "' + result['email'] + '"}', 
-            media_type="application/json", 
+            content=json.dumps({"message": "登入成功", "email": result['email']}),
+            media_type="application/json",
         )
 
         response.set_cookie(
@@ -102,7 +102,7 @@ def login(
             max_age=30 * 60,  # 30 minutes
             path="/",  # Important: cookie available site-wide
             httponly=True,
-            samesite="none",
+            samesite="lax",
             secure=True
         )
         
@@ -129,11 +129,17 @@ def sign_out(
         account_service = AccountService(db, redis_client)
         
         result = account_service.sign_out(user_id)
-        logger.info(f"Sign out result: {result}")
+        logger.info(f"Sign out result: {result.get('error') if isinstance(result, dict) else 'ok'}")
         
         if result and 'error' in result:
             logger.error(f"Sign out error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+
+        try:
+            from app.services import collab_events
+            collab_events.revoke_user(user_id, "sign out")
+        except Exception:
+            pass
         
         response = Response(status_code=200)
         response.delete_cookie(key="session", path="/")
@@ -156,32 +162,26 @@ def get_code(
     if not is_feature_enabled("enable_auth_code_email"):
         raise HTTPException(status_code=403, detail="驗證碼郵件服務暫時關閉，密碼重設／信箱變更暫時不可用。請稍後再試或聯絡管理員。")
     try:
-        logger.info(f"Get code request received, email: {request.email}, mode: {request.mode}")
+        logger.info(f"Get code processing mode={request.mode}")
         
         account_service = AccountService(db, redis_client)
         email_service = EmailService(celery_app)
         
         result = account_service.get_code(request.email, request.mode)
-        logger.info(f"Get code result: {result}")
+        logger.info(f"Get code processing mode={request.mode}")
         
         if result and 'error' in result:
             logger.error(f"Get code error: {result['error']}, stateCode: {result['stateCode']}")
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
-        # Queue code email
-        from app.utils.security import generate_verification_code
-        code = generate_verification_code()
-        redis_client.setex(
-            f"{request.mode}Code:{request.email}",
-            5 * 60,  # 5 minutes
-            code
-        )
+        # The service generated and stored the code; e-mail the same one.
+        code = result.get('code') if isinstance(result, dict) else None
+        if code:
+            mode_titles = {'pw': '密碼重置通知', 'mail': '信箱變更驗證通知'}
+            email_service.send_code_email(request.email, code, mode_titles.get(request.mode, '驗證碼通知'))
         
-        mode_titles = {'pw': '密碼重置通知', 'mail': '信箱變更驗證通知'}
-        email_service.send_code_email(request.email, code, mode_titles.get(request.mode, '驗證碼通知'))
-        
-        logger.info("Verification code sent")
-        return {"message": "請至信箱查看通知"}
+        logger.info("Verification code processed")
+        return {"message": result.get('message', '若此信箱符合條件，通知已寄出')}
     except Exception as e:
         logger.error(f"Get code endpoint error: {e}")
         raise
@@ -322,83 +322,45 @@ def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
 @router.post("/admin/recalculate-user-storage")
 def recalculate_user_storage(
     username: str,
-    user_id: int = Depends(get_current_user_id),
+    request: Request,
     db: Session = Depends(get_db),
-    account_service: AccountService = Depends(get_account_service)
 ):
     """Recalculate storage usage for a specific user (admin only)."""
-    try:
-        # Check if user is admin (identity == 1)
-        account = account_service.get_by_id(user_id)
-        if not account or account.identity != 1:
-            raise HTTPException(status_code=403, detail="Admin access required")
-        
-        # Get target user by username
-        target_user = account_service.get_by_username(username)
-        if not target_user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Recalculate storage for the target user
-        from app.services.file_service import FileService
-        from app.services.folder_service import FolderService
-        from app.repositories.file_repository import FileRepository
-        from app.repositories.folder_repository import FolderRepository
-        from app.models.file import File
-        from app.models.folder import Folder
-        from sqlalchemy import select
-        import os
-        
-        file_repo = FileRepository(db)
-        folder_repo = FolderRepository(db)
-        file_service = FileService(db, file_repo, folder_repo)
-        folder_service = FolderService(db, folder_repo, account_repo)
-        
-        logger.info(f"Starting storage recalculation for user: {username}")
-        
-        # Get all folders for the user
-        folders = db.execute(
-            select(Folder).where(Folder.owner_id == target_user.id)
+    _admin_required(request)
+    from app.models.file import File
+    from app.models.folder import Folder
+    from sqlalchemy import select
+
+    target_user = db.query(Account).filter(Account.name == username.strip()).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    folders = db.execute(
+        select(Folder).where(Folder.owner_id == target_user.id)
+    ).scalars().all()
+
+    total_size = 0
+    for folder in folders:
+        files = db.execute(
+            select(File).where(
+                File.parent_folder_id == folder.uuid,
+                File.deleted_at.is_(None),
+            )
         ).scalars().all()
-        
-        total_size = 0
-        
-        # Recalculate each folder size
-        for folder in folders:
-            # Calculate actual size from files in this folder
-            files = db.execute(
-                select(File).where(
-                    File.parent_folder_id == folder.uuid,
-                    File.deleted_at.is_(None)
-                )
-            ).scalars().all()
-            
-            actual_size = sum(file.size for file in files)
-            
-            # Update folder size
-            folder.size = actual_size
-            total_size += actual_size
-        
-            logger.info(f"Updated folder {folder.name}: {actual_size} bytes")
-        
-        # Update account used size
-        target_user.used_size = total_size
-        
-        db.commit()
-        
-        logger.info(f"Storage recalculation completed for user {username}: {total_size} bytes")
-        
-        return {
-            "message": "Storage recalculation completed",
-            "username": username,
-            "total_size": total_size,
-            "folders_updated": len(folders)
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Storage recalculation error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        actual_size = sum(f.size for f in files)
+        folder.size = actual_size
+        total_size += actual_size
+
+    target_user.used_size = total_size
+    db.commit()
+
+    logger.info(f"Storage recalculation completed for user {username}: {total_size} bytes")
+    return {
+        "message": "Storage recalculation completed",
+        "username": username,
+        "total_size": total_size,
+        "folders_updated": len(folders),
+    }
 
 def _admin_required(request) -> dict:
     if not hasattr(request.state, 'user'):
@@ -487,6 +449,11 @@ def admin_force_logout(
         raise HTTPException(status_code=403, detail="Cannot force logout admin")
     redis_client.delete(f"session:{user_id}")
     redis_client.delete(f"session_data:{user_id}")
+    try:
+        from app.services import collab_events
+        collab_events.revoke_user(user_id, "force logout")
+    except Exception:
+        pass
     return {"message": "User logged out successfully"}
 
 
@@ -508,8 +475,14 @@ def admin_toggle_enable(
     if not account.enable:
         redis_client.delete(f"session:{user_id}")
         redis_client.delete(f"session_data:{user_id}")
+        try:
+            from app.services import collab_events
+            collab_events.revoke_user(user_id, "account disabled")
+        except Exception:
+            pass
         from app.utils.security_log import write_event
-        write_event("account_suspend", request.client.host if request.client else None,
+        from app.utils.client_ip import request_client_ip
+        write_event("account_suspend", request_client_ip(request),
                     str(getattr(request.state, "user_id", "?")), account.name, "admin 開關停用，session 已失效")
     return {"enabled": account.enable}
 

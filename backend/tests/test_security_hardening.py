@@ -1,0 +1,349 @@
+"""Security regression tests for the hardening changes.
+
+Covers: WS ticket issuance/authz, TUS upload ownership, folder-path IDOR,
+email-change flow, uniform auth errors, session public-path exact matching,
+Origin guard, and trusted client-IP extraction.
+"""
+import asyncio
+import re
+from datetime import datetime
+from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+@pytest.fixture
+def db_session():
+    from app.models.base import Base
+    eng = create_engine("sqlite://", echo=False)
+    Base.metadata.create_all(bind=eng)
+    session = sessionmaker(bind=eng)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+def _mk_account(db, name, email, password_hash="x", identity=0, enable=True,
+                total=10 * 1024 * 1024, used=0, signal=5 * 1024 * 1024):
+    from app.models.account import Account
+    a = Account(
+        name=name, password=password_hash, email=email,
+        signal_file_size=signal, total_file_size=total, used_size=used,
+        identity=identity, enable=enable, email_verified_at=datetime.utcnow(),
+    )
+    db.add(a)
+    db.commit()
+    db.refresh(a)
+    return a
+
+
+def _mk_file(db, owner_id, uuid_val, name="a.txt"):
+    from app.models.file import File
+    f = File(uuid=uuid_val, owner_id=owner_id, parent_folder_id=None,
+             name=name, size=0, mime_type="text/plain", storage_path="/tmp/x")
+    db.add(f)
+    db.commit()
+    db.refresh(f)
+    return f
+
+
+# ---------------------------------------------------------------- WS ticket
+
+class TestWsTicket:
+    def test_owner_gets_ticket(self, db_session):
+        from app.api.v1.collaboration import issue_ws_ticket
+        from app.schemas.collaboration import WsTicketRequest
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        f = _mk_file(db_session, owner.id, "11111111-1111-1111-1111-111111111111")
+        redis = MagicMock()
+        out = issue_ws_ticket(WsTicketRequest(file_uuid=f.uuid), db_session, redis, owner.id)
+        assert re.fullmatch(r"[A-Za-z0-9_-]{43}", out["ticket"])
+        redis.setex.assert_called_once()
+        key, ttl, val = redis.setex.call_args[0]
+        assert key == f"wsTicket:{out['ticket']}"
+        assert ttl == 60
+        assert val == f"{owner.id}:{f.uuid}"
+
+    def test_stranger_forbidden(self, db_session):
+        from fastapi import HTTPException
+        from app.api.v1.collaboration import issue_ws_ticket
+        from app.schemas.collaboration import WsTicketRequest
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        other = _mk_account(db_session, "other", "e@x.com")
+        f = _mk_file(db_session, owner.id, "22222222-2222-2222-2222-222222222222")
+        with pytest.raises(HTTPException) as e:
+            issue_ws_ticket(WsTicketRequest(file_uuid=f.uuid), db_session, MagicMock(), other.id)
+        assert e.value.status_code == 403
+
+    def test_collaborator_gets_ticket(self, db_session):
+        from app.api.v1.collaboration import issue_ws_ticket
+        from app.schemas.collaboration import WsTicketRequest
+        from app.models.collaboration import Collaboration
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        mate = _mk_account(db_session, "mate", "m@x.com")
+        f = _mk_file(db_session, owner.id, "33333333-3333-3333-3333-333333333333")
+        db_session.add(Collaboration(file_uuid=f.uuid, owner_id=owner.id,
+                                     collaborator_id=mate.id, permission="editor"))
+        db_session.commit()
+        out = issue_ws_ticket(WsTicketRequest(file_uuid=f.uuid), db_session, MagicMock(), mate.id)
+        assert out["ticket"]
+
+    def test_deleted_file_404(self, db_session):
+        from fastapi import HTTPException
+        from app.api.v1.collaboration import issue_ws_ticket
+        from app.schemas.collaboration import WsTicketRequest
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        f = _mk_file(db_session, owner.id, "44444444-4444-4444-4444-444444444444")
+        f.deleted_at = datetime.utcnow()
+        db_session.commit()
+        with pytest.raises(HTTPException) as e:
+            issue_ws_ticket(WsTicketRequest(file_uuid=f.uuid), db_session, MagicMock(), owner.id)
+        assert e.value.status_code == 404
+
+
+class TestWsProtocol:
+    def test_subprotocol_constant(self):
+        from app.api.v1.collab_ws import WS_SUBPROTOCOL
+        assert WS_SUBPROTOCOL == "meowcloud-collab.v1"
+        assert re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", WS_SUBPROTOCOL)
+
+    def test_b64_len_rejects_garbage_and_oversize(self):
+        from app.api.v1.collab_ws import _b64_len
+        assert _b64_len("not base64!!") is None
+        assert _b64_len("aGVsbG8=") == 5
+        assert _b64_len("A" * (3 * 1024 * 1024)) is None  # over encoded cap
+
+
+# ---------------------------------------------------------------- TUS ownership
+
+class TestTusOwnership:
+    def test_cross_user_denied(self, db_session, tmp_path, monkeypatch):
+        from app.config import settings
+        from app.services.file_service import FileService
+        monkeypatch.setattr(settings, "STORAGE_BASE_PATH", str(tmp_path))
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        other = _mk_account(db_session, "other", "e@x.com")
+        svc = FileService(db_session)
+        created = svc.create_tus_upload(owner.id, None, "t.txt", 4)
+        uid = created["upload_id"]
+
+        assert svc.get_tus_upload(uid, other.id)["stateCode"] == 404
+        assert svc.append_tus_chunk(uid, 0, b"ab", other.id)["stateCode"] == 404
+        assert svc.finalize_tus_upload(uid, other.id)["stateCode"] == 404
+
+        # owner works
+        assert svc.append_tus_chunk(uid, 0, b"ab", owner.id)["offset"] == 2
+        assert svc.get_tus_upload(uid, owner.id)["offset"] == 2
+
+    def test_chunk_clamped_to_declared_length(self, db_session, tmp_path, monkeypatch):
+        from app.config import settings
+        from app.services.file_service import FileService
+        monkeypatch.setattr(settings, "STORAGE_BASE_PATH", str(tmp_path))
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        svc = FileService(db_session)
+        uid = svc.create_tus_upload(owner.id, None, "t.txt", 3)["upload_id"]
+        r = svc.append_tus_chunk(uid, 0, b"abcdefgh", owner.id)
+        assert r["offset"] == 3  # cannot exceed declared Upload-Length
+
+
+# ---------------------------------------------------------------- folder path
+
+class TestFolderPathIdor:
+    def test_other_users_folder_is_hidden(self, db_session):
+        from fastapi import HTTPException
+        from app.api.v1.folders import get_folder_path
+        from app.models.folder import Folder
+        owner = _mk_account(db_session, "owner", "o@x.com")
+        other = _mk_account(db_session, "other", "e@x.com")
+        folder = Folder(uuid="55555555-5555-5555-5555-555555555555", owner_id=owner.id,
+                        parent_id=None, name="secret", size=0)
+        db_session.add(folder)
+        db_session.commit()
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(get_folder_path(folder_uuid=folder.uuid, db=db_session, user_id=other.id))
+        assert e.value.status_code == 404
+
+
+# ---------------------------------------------------------------- email flow
+
+class TestEmailChange:
+    def test_code_read_from_new_address(self, db_session):
+        from app.services.account_service import AccountService
+        acct = _mk_account(db_session, "u", "old@x.com", password_hash="x")
+        redis = MagicMock()
+        redis.get.return_value = b"newcode"
+        svc = AccountService(db_session, redis)
+        res = svc.modify_email(acct.id, "new@x.com", "old@x.com", "newcode")
+        assert res["stateCode"] == 200
+        db_session.refresh(acct)
+        assert acct.email == "new@x.com"
+        redis.get.assert_any_call("mailCode:new@x.com")
+
+    def test_wrong_code_rejected(self, db_session):
+        from app.services.account_service import AccountService
+        acct = _mk_account(db_session, "u2", "old2@x.com", password_hash="x")
+        redis = MagicMock()
+        redis.get.return_value = b"right"
+        svc = AccountService(db_session, redis)
+        res = svc.modify_email(acct.id, "new2@x.com", "old2@x.com", "wrong")
+        assert res["stateCode"] == 403
+
+    def test_duplicate_new_email_rejected(self, db_session):
+        from app.services.account_service import AccountService
+        a = _mk_account(db_session, "a", "a@x.com", password_hash="x")
+        _mk_account(db_session, "b", "b@x.com", password_hash="x")
+        redis = MagicMock()
+        redis.get.return_value = b"code"
+        svc = AccountService(db_session, redis)
+        res = svc.modify_email(a.id, "b@x.com", "a@x.com", "code")
+        assert res["stateCode"] == 409
+
+
+class TestUniformAuthErrors:
+    def test_login_messages_identical(self, db_session):
+        from app.services.account_service import AccountService
+        from app.utils.security import hash_password
+        _mk_account(db_session, "real", "r@x.com", password_hash=hash_password("Correct#Pass1!"))
+        svc = AccountService(db_session, MagicMock())
+        missing = svc.login("nope", "whatever")
+        wrong = svc.login("real", "badpass")
+        assert missing["stateCode"] == wrong["stateCode"] == 401
+        assert missing["error"] == wrong["error"]
+
+    def test_get_code_uniform_message(self, db_session):
+        from app.services.account_service import AccountService
+        _mk_account(db_session, "real", "r2@x.com")
+        redis = MagicMock()
+        svc = AccountService(db_session, redis)
+        exists = svc.get_code("r2@x.com", "pw")
+        missing = svc.get_code("ghost@x.com", "pw")
+        assert exists["message"] == missing["message"]
+        assert "code" in exists and "code" not in missing
+
+
+# ---------------------------------------------------------------- middleware
+
+class TestSessionPublicPaths:
+    def _m(self):
+        from app.middleware.session_middleware import SessionMiddleware
+        return SessionMiddleware.__new__(SessionMiddleware)
+
+    def test_exact_paths(self):
+        m = self._m()
+        assert m._is_public("/api/files/download")
+        assert m._is_public("/api/files/raw")
+        assert m._is_public("/api/share/verifyPassword")
+        assert m._is_public("/api/email/verify/1/abc")
+        # must NOT be public
+        assert not m._is_public("/api/files/downloadToken")
+        assert not m._is_public("/api/files/downloadBulk")
+        assert not m._is_public("/api/files/downloadXxx")
+        assert not m._is_public("/api/accounts/admin/users")
+
+
+class TestOriginGuard:
+    def test_origin_rules(self):
+        from app.middleware.origin_guard import _origin_ok, _has_session_cookie
+        assert _origin_ok("https://meowcloud.jun.org.uk")
+        assert _origin_ok("https://meowcloud-api.jun.org.uk")
+        assert _origin_ok("https://meowcloud.jun.org.uk/some/path")  # referer
+        assert not _origin_ok("https://evil.example")
+        assert not _origin_ok(None)
+        assert _has_session_cookie({"cookie": "a=1; session=2|tok"})
+        assert not _has_session_cookie({"cookie": "a=1"})
+
+    def _run(self, method, headers):
+        from app.middleware.origin_guard import OriginGuardMiddleware
+
+        async def app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        mw = OriginGuardMiddleware(app)
+        scope = {
+            "type": "http",
+            "method": method,
+            "path": "/api/x",
+            "headers": [(k.encode(), v.encode()) for k, v in headers.items()],
+        }
+        out = {}
+
+        async def receive():
+            return {"type": "http.request"}
+
+        async def send(message):
+            if message["type"] == "http.response.start":
+                out["status"] = message["status"]
+
+        asyncio.run(mw(scope, receive, send))
+        return out["status"]
+
+    def test_blocks_evil_origin_with_session(self):
+        assert self._run("POST", {"cookie": "session=2|tok", "origin": "https://evil.example"}) == 403
+
+    def test_blocks_missing_origin_with_session(self):
+        assert self._run("POST", {"cookie": "session=2|tok"}) == 403
+
+    def test_allows_trusted_origin(self):
+        assert self._run("POST", {"cookie": "session=2|tok",
+                                  "origin": "https://meowcloud.jun.org.uk"}) == 200
+
+    def test_allows_no_cookie(self):
+        assert self._run("POST", {"origin": "https://evil.example"}) == 200
+
+    def test_get_never_blocked(self):
+        assert self._run("GET", {"cookie": "session=2|tok", "origin": "https://evil.example"}) == 200
+
+
+class TestClientIp:
+    def test_cf_only(self):
+        from app.services.security_engine import get_client_ip
+        assert get_client_ip({"cf-connecting-ip": "203.0.113.9"}) == "203.0.113.9"
+        assert get_client_ip({"x-forwarded-for": "1.2.3.4"}) is None
+
+    def test_session_cookie_helpers(self):
+        from app.utils.session_auth import parse_session_cookie, split_session_value
+        assert parse_session_cookie("a=1; session=7|tok") == "7|tok"
+        assert split_session_value("7|tok") == (7, "7|tok")
+        assert split_session_value("bad") is None
+
+
+class TestDownloadTokenBinding:
+    def test_token_for_other_file_rejected(self):
+        from fastapi import HTTPException
+        from app.api.v1.files import download_file
+        redis = MagicMock()
+        redis.exists.return_value = False
+        redis.getdel.return_value = "1:some-other-file"
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(download_file(file_uuid="target-file", token="tok",
+                                      db=MagicMock(), redis=redis, user_id=None))
+        assert e.value.status_code == 403
+
+    def test_malformed_user_id_rejected(self):
+        from fastapi import HTTPException
+        from app.api.v1.files import download_file
+        redis = MagicMock()
+        redis.exists.return_value = False
+        redis.getdel.return_value = "notint:target-file"
+        with pytest.raises(HTTPException) as e:
+            asyncio.run(download_file(file_uuid="target-file", token="tok",
+                                      db=MagicMock(), redis=redis, user_id=None))
+        assert e.value.status_code == 401
+
+
+class TestResetUniform:
+    def test_reset_errors_identical(self, db_session):
+        from app.services.account_service import AccountService
+        from app.utils.security import hash_password
+        _mk_account(db_session, "res", "res@x.com", password_hash=hash_password("P@ssw0rd!abc"))
+        redis = MagicMock()
+        redis.get.return_value = b"rightcode"
+        svc = AccountService(db_session, redis)
+        ghost = svc.reset_password("ghost@x.com", "whatever", "NewP@ss1!xyz")
+        wrong = svc.reset_password("res@x.com", "wrongcode", "NewP@ss1!xyz")
+        assert ghost["stateCode"] == wrong["stateCode"] == 403
+        assert ghost["error"] == wrong["error"]

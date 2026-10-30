@@ -163,6 +163,12 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                     ).values(deleted_at=now))
                     n_folders += res.rowcount or 0
                 db.commit()
+                try:
+                    from app.services import collab_events
+                    for uuid in fuuids:
+                        collab_events.revoke_file(uuid, "file trashed")
+                except Exception:
+                    pass
 
             elif mode == "permanent":
                 doomed_files = top_files + descendants
@@ -206,6 +212,14 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                             os.remove(p)
                     except OSError:
                         pass
+                try:
+                    from app.services import collab_events
+                    from app.services.snapshot_service import purge_file_state
+                    for uuid in seen:
+                        collab_events.revoke_file(uuid, "file deleted")
+                        purge_file_state(uuid, r)
+                except Exception:
+                    pass
 
             else:  # restore
                 restore_folders = subtree_uuids
@@ -217,6 +231,7 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                 for pid in pids:
                     if not pid:
                         names = set(db.execute(select(File.name).where(
+                            File.owner_id == user_id,
                             File.parent_folder_id.is_(None), File.deleted_at.is_(None))).scalars().all())
                         names |= set(db.execute(select(Folder.name).where(
                             Folder.parent_id.is_(None), Folder.deleted_at.is_(None),

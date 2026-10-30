@@ -26,8 +26,8 @@ class TestTusEmptyResponses:
         async def no_finalize(self, upload_id):
             return {'ok': True}
 
-        monkeypatch.setattr(fs_mod.FileService, 'append_tus_chunk', lambda self, u, o, c: fake_append(self, u, o, c))
-        monkeypatch.setattr(fs_mod.FileService, 'finalize_tus_upload', lambda self, u: {'ok': True})
+        monkeypatch.setattr(fs_mod.FileService, 'append_tus_chunk', lambda self, u, o, c, user_id=None: fake_append(self, u, o, c))
+        monkeypatch.setattr(fs_mod.FileService, 'finalize_tus_upload', lambda self, u, user_id=None: {'ok': True})
 
         headers = {
             'Tus-Resumable': '1.0.0',

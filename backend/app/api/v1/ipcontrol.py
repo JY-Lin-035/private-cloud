@@ -264,6 +264,11 @@ async def admin_suspend_account(payload: SuspendRequest, request: Request, db: S
         r.delete(f"session_data:{account.id}")
     except Exception:
         pass
+    try:
+        from app.services import collab_events
+        collab_events.revoke_user(account.id, "account suspended")
+    except Exception:
+        pass
     write_event("account_suspend", None, admin.get("username"), account.name, "由 IP Management 停用")
     return {"suspended": account.name}
 
