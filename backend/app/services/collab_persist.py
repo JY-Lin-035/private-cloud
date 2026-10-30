@@ -45,19 +45,24 @@ def persist_content(file_uuid: str, content: str) -> bool:
     data = content.encode("utf-8")
     db: Session = SessionLocal()
     try:
-        # Cheap pre-read just to find the owning account.
-        f = db.execute(select(File).where(File.uuid == file_uuid)).scalar_one_or_none()
-        if f is None or f.deleted_at is not None:
+        # Cheap pre-read only to locate the owning account. NOTE: under MySQL
+        # REPEATABLE READ this establishes the txn snapshot, so every value we
+        # actually *use* below must come from LOCKING reads (FOR UPDATE reads
+        # the latest committed row regardless of the snapshot).
+        owner_id = db.execute(
+            select(File.owner_id).where(File.uuid == file_uuid)
+        ).scalar_one_or_none()
+        if owner_id is None:
             return False
         # Serialize ALL quota accounting on the account row first, then
         # re-read the File row under that lock (same account->file lock order
         # as upload finalize, so the two paths cannot deadlock each other).
-        # Reading f.size before the lock let concurrent autosave + WS saves
-        # compute deltas from stale sizes and drift used_size permanently.
-        acct = db.query(Account).filter(Account.id == f.owner_id).with_for_update().first()
+        acct = db.query(Account).filter(Account.id == owner_id).with_for_update().first()
         if acct is None:
             return False
-        db.refresh(f)
+        f = db.execute(
+            select(File).where(File.uuid == file_uuid).with_for_update()
+        ).scalar_one_or_none()
         if f is None or f.deleted_at is not None:
             return False
 

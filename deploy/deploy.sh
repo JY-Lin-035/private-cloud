@@ -105,6 +105,12 @@ if [ "$EXISTS" = 1 ] && [ "$FORCE" = 0 ]; then
   echo "如確定要重新產生設定，請加 --force。"
   exit 1
 fi
+if [ "$EXISTS" = 1 ] && [ "$ROTATE" = 1 ]; then
+  echo "⚠ --rotate-secrets：將重發 DB/Redis 密碼與分享簽密。"
+  echo "  既有 MySQL/Redis volume 不會自動套用新密碼（image 只在空資料目錄時生效），"
+  echo "  必須手動 ALTER USER / 改 redis.conf，否則後端將無法連線；"
+  echo "  SHARE_TICKET_SECRET 輪換也會使驗證中的分享密碼票券全部失效。"
+fi
 
 # ---------- configuration ----------
 DB_NAME=$(ask "資料庫名稱" "my_database")

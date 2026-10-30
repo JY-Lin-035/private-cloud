@@ -5,9 +5,10 @@ import os
 
 # Hard isolation: every lazy Redis client built from settings.REDIS_URL
 # (security_engine, dependencies, collab_events, celery broker, app.main
-# scheduler) must land on DB 15 — never the production DB 0. Env vars win
-# over .env in pydantic-settings, and this runs before any app import below.
-os.environ.setdefault("REDIS_DB", "15")
+# scheduler) must land on DB 15 — never the production DB 0. FORCED (not
+# setdefault) so an exported REDIS_DB in the caller's shell can never
+# silently point tests back at production.
+os.environ["REDIS_DB"] = "15"
 
 from datetime import datetime
 

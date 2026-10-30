@@ -289,9 +289,9 @@ def cleanup_stale_tus_uploads(self):
             base = os.path.join(os.getcwd(), base)
         from app.constants import StorageLimits
         tus_dir = os.path.join(base, StorageLimits.TUS_TEMP_DIR_NAME)
+        cutoff = time.time() - max_age
         removed = 0
         if os.path.isdir(tus_dir):
-            cutoff = time.time() - max_age
             for name in os.listdir(tus_dir):
                 path = os.path.join(tus_dir, name)
                 try:
@@ -313,8 +313,25 @@ def cleanup_stale_tus_uploads(self):
                         removed += 1
                 except OSError:
                     continue
-        logger.info(f"Stale tus cleanup removed {removed} directories")
-        return {"status": "success", "removed": removed}
+        # GC orphaned collab temp files (<uuid>.<pid>.<hex>.tmp in the storage
+        # root) left behind by crashed persist writes. Real blobs never carry
+        # the .tmp suffix.
+        pruned = 0
+        try:
+            for name in os.listdir(base):
+                if not name.endswith(".tmp"):
+                    continue
+                fp = os.path.join(base, name)
+                try:
+                    if os.path.isfile(fp) and os.path.getmtime(fp) < cutoff:
+                        os.remove(fp)
+                        pruned += 1
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        logger.info(f"Stale tus cleanup removed {removed} dirs, pruned {pruned} orphan tmp files")
+        return {"status": "success", "removed": removed, "pruned_tmp": pruned}
     except Exception as e:
         logger.error(f"Stale tus cleanup failed: {str(e)}")
         return {"status": "error", "error": str(e)}
