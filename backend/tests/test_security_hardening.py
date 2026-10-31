@@ -537,3 +537,34 @@ class TestLoginCsrfGuard:
     def test_unrelated_path_no_cookie_unchecked(self):
         st = self._run(self._scope("/api/share/downloadFile", origin="https://evil.test"))
         assert st["passed_app"]
+
+
+class TestQuotaRecursiveFolderSize:
+    """F1: recalc must set folder.size to the RECURSIVE subtree total,
+    matching _update_parent_folder_size bookkeeping (permanent folder-delete
+    subtracts folder.size from used_size on that basis)."""
+
+    def test_parent_folder_size_includes_nested_children(self, db_session, sample_account, sample_home_folder):
+        import uuid as _u
+        from datetime import datetime
+        from app.models.file import File
+        from app.models.folder import Folder
+        from app.services.quota import recalc_user_storage
+        sub = Folder(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                     parent_id=sample_home_folder.uuid, name="sub", size=0)
+        db_session.add(sub); db_session.flush()
+        db_session.add_all([
+            File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                 parent_folder_id=sample_home_folder.uuid, name="root.txt",
+                 size=100, mime_type="text/plain", storage_path="a"),
+            File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                 parent_folder_id=sub.uuid, name="deep.txt",
+                 size=900, mime_type="text/plain", storage_path="b",
+                 deleted_at=datetime.utcnow()),  # trashed child must still count
+        ])
+        db_session.commit()
+        used, n = recalc_user_storage(db_session, sample_account)
+        db_session.refresh(sample_home_folder); db_session.refresh(sub)
+        assert used == 1000
+        assert sub.size == 900
+        assert sample_home_folder.size == 1000  # recursive: own 100 + sub 900

@@ -318,9 +318,9 @@ class FileService:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def finalize_tus_upload(self, upload_id: str, requesting_user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Finalize a tus upload by moving the temp file into persistent storage."""
         if not self._tus_id_ok(upload_id):
             return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
-        """Finalize a tus upload by moving the temp file into persistent storage."""
         try:
             upload_path = self._get_tus_upload_path(upload_id)
             metadata_path = self._get_tus_metadata_path(upload_id)

@@ -428,7 +428,7 @@ async def download_file(
         logger.info(f"Download file request received, user_id: {actual_user_id}, file_uuid: {file_uuid}")
 
         result = file_service.download(actual_user_id, file_uuid)
-        logger.info(f"Download file result: {result}")
+        logger.info(f"Download by user {actual_user_id}: status={(result or {}).get('stateCode', '?') if isinstance(result, dict) else '?'}")
 
         if result and 'error' in result:
             logger.error(f"Download error: {result['error']}")
@@ -533,7 +533,7 @@ async def recalculate_storage(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
-    """Recalculate used storage from actual non-deleted files."""
+    """Recalculate used storage from every file byte still on disk (trash included)."""
     try:
         logger.info(f"Recalculate storage request received, user_id: {user_id}")
 
