@@ -14,7 +14,7 @@ from app.api.dependencies import get_db, get_redis, get_current_user_id, get_cur
 from app.api.rate_limit import rate_limit
 from app.config import settings
 from app.utils import logger as log
-from app.utils.session_auth import verify_session_value
+from app.utils.session_auth import verify_session_value, parse_session_cookie
 from app.models.account import Account
 from app.constants import Identity
 from sqlalchemy import select, func
@@ -279,7 +279,7 @@ def check_session(request: Request, redis_client: Redis = Depends(get_redis)):
     the shared session_auth helper instead of duplicating the logic here.
     """
     try:
-        user_dict = verify_session_value(redis_client, request.cookies.get('session'))
+        user_dict = verify_session_value(redis_client, parse_session_cookie(request.headers.get('cookie')))
         if not user_dict:
             return {"authenticated": False}
 
