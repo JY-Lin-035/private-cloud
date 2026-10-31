@@ -219,6 +219,24 @@ class ShareService:
     
     def _check_share_access(self, item, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Check if a shared item is accessible. Returns error dict if not, None if OK."""
+        # Trashed items are NOT accessible via share links (defence-in-depth:
+        # share hash is not cleared when a parent folder is soft-deleted, and
+        # historical rows may predate share-clearing). Restoring the item
+        # re-enables the link again, which is the intended UX.
+        if getattr(item, "deleted_at", None) is not None:
+            return {'error': '分享的項目不存在或已被移除', 'stateCode': HTTPStatus.NOT_FOUND}
+
+        # Check available_user whitelist: an item restricted to specific users
+        # must NEVER be served to anonymous callers (user_id None) either —
+        # public endpoints do not pass a user_id, so a set whitelist is denied.
+        if item.available_user:
+            try:
+                allowed_users = json.loads(item.available_user)
+            except (json.JSONDecodeError, TypeError):
+                allowed_users = []
+            if allowed_users and user_id not in allowed_users:
+                return {'error': '您沒有權限存取此分享連結', 'stateCode': HTTPStatus.FORBIDDEN}
+
         # Check limited_date (expiration)
         if item.limited_date:
             now = datetime.utcnow()

@@ -294,7 +294,7 @@ async def get_file_list(
         file_service = FileService(db)
         
         result = file_service.get_file_list(user_id, parent_folder_uuid)
-        logger.info(f"Get file list result: {result}")
+        logger.info(f"Get file list ok for user {user_id}")
         
         if result and 'error' in result:
             logger.error(f"Get file list error: {result['error']}, stateCode: {result['stateCode']}")

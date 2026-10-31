@@ -225,7 +225,7 @@ def recalculate_all_users_storage(self):
             total_folders_updated = 0
             
             for user in all_users:
-                logger.info(f"Processing user: {user.username}")
+                logger.info(f"Processing user: {user.name}")
                 
                 # Get all folders for the user
                 folders = db.execute(
@@ -256,7 +256,7 @@ def recalculate_all_users_storage(self):
                 total_users_processed += 1
                 total_folders_updated += len(folders)
                 
-                logger.info(f"Updated user {user.username}: {user_total_size} bytes, {len(folders)} folders")
+                logger.info(f"Updated user {user.name}: {user_total_size} bytes, {len(folders)} folders")
             
             db.commit()
             

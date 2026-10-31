@@ -1,5 +1,6 @@
 import uuid
 import os
+import re
 import json
 import mimetypes
 from datetime import datetime, timezone, timedelta
@@ -130,6 +131,12 @@ class FileService:
         """Return the temporary tus upload directory for an upload id."""
         return os.path.join(self.storage_base_path, StorageLimits.TUS_TEMP_DIR_NAME, upload_id)
 
+    @staticmethod
+    def _tus_id_ok(upload_id: str) -> bool:
+        # tus ids are always server-generated uuid4 strings; anything else
+        # (e.g. '..', '%2e', traversal) is rejected before touching the path.
+        return bool(upload_id) and bool(re.fullmatch(r"[0-9a-fA-F-]{36}", upload_id))
+
     def _get_tus_upload_path(self, upload_id: str) -> str:
         """Return the temporary tus upload binary path."""
         return os.path.join(self._get_tus_upload_dir(upload_id), 'upload.bin')
@@ -233,6 +240,8 @@ class FileService:
 
     def get_tus_upload(self, upload_id: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Read current tus upload progress information."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
         try:
             upload_path = self._get_tus_upload_path(upload_id)
             metadata_path = self._get_tus_metadata_path(upload_id)
@@ -261,6 +270,8 @@ class FileService:
     def append_tus_chunk(self, upload_id: str, upload_offset: int, chunk: bytes,
                          user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Append one chunk to a temporary tus upload."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
         try:
             upload_path = self._get_tus_upload_path(upload_id)
             metadata_path = self._get_tus_metadata_path(upload_id)
@@ -307,6 +318,8 @@ class FileService:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def finalize_tus_upload(self, upload_id: str, requesting_user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
         """Finalize a tus upload by moving the temp file into persistent storage."""
         try:
             upload_path = self._get_tus_upload_path(upload_id)
@@ -741,18 +754,23 @@ class FileService:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def recalculate_used_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Recalculate used storage from actual non-deleted files."""
+        """Recalculate used storage from files that still occupy disk.
+
+        Includes SOFT-DELETED (trashed) files on purpose: trash items remain
+        on disk until GC and, by the delete path's own semantics, keep
+        counting against the quota. Excluding them here would let a user
+        free quota while data still occupies disk (upload -> trash ->
+        recalculate -> repeat == unbounded disk growth).
+        """
         try:
             account = self.account_repo.get_by_id(user_id)
 
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
-            # Get all non-deleted files for the user
             files = self.db.execute(
                 select(File).where(
-                    File.owner_id == user_id,
-                    File.deleted_at.is_(None)
+                    File.owner_id == user_id
                 )
             ).scalars().all()
 

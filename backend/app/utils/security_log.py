@@ -32,5 +32,15 @@ def get_security_logger() -> logging.Logger:
     return _logger
 
 
+def _clean(v) -> str:
+    """Neutralise attacker-controlled separators/CR-LF before logging.
+
+    The log is pipe-delimited audit data; a username/detail containing
+    newlines or '|' could forge or shift audit rows.
+    """
+    s = "-" if v is None else str(v)
+    return s.replace("\r", " ").replace("\n", " ").replace("|", "/")[:300]
+
+
 def write_event(kind: str, ip: str, actor: str, target: str, detail: str) -> None:
-    get_security_logger().info(f"{kind} | {ip or '-'} | {actor or '-'} | {target or '-'} | {detail}")
+    get_security_logger().info(" | ".join([_clean(kind), _clean(ip), _clean(actor), _clean(target), _clean(detail)]))
