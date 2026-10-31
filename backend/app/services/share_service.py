@@ -146,7 +146,7 @@ class ShareService:
                     item.share_password = hash_password(password) if password else None
                 self.folder_repo.update(item)
                 
-                self.logger.info(f"Folder share updated: uuid={item.uuid}, shared={item.shared}, limited_date={item.limited_date}")
+                self.logger.info(f"Folder share updated: uuid={item.uuid}, limited_date={item.limited_date}")
                 
                 return {'url': item.shared, 'stateCode': HTTPStatus.OK}
             
@@ -167,7 +167,7 @@ class ShareService:
                     item.share_password = hash_password(password) if password else None
                 self.file_repo.update(item)
                 
-                self.logger.info(f"File share updated: uuid={item.uuid}, shared={item.shared}, limited_date={item.limited_date}")
+                self.logger.info(f"File share updated: uuid={item.uuid}, limited_date={item.limited_date}")
                 
                 return {'url': item.shared, 'stateCode': HTTPStatus.OK}
             
@@ -237,25 +237,14 @@ class ShareService:
             if allowed_users and user_id not in allowed_users:
                 return {'error': '您沒有權限存取此分享連結', 'stateCode': HTTPStatus.FORBIDDEN}
 
-        # Check limited_date (expiration)
+        # Check limited_date (expiration; stored in local Taipei time UTC+8)
         if item.limited_date:
             now = datetime.utcnow()
-            # limited_date is stored in local time (Taipei, UTC+8), so we need to compare with local time
             now_local = now + timedelta(hours=8)
             if now_local > item.limited_date:
-                self.logger.warning(f"Share link expired for item {item.uuid}, limited_date: {item.limited_date}, now_local: {now_local}")
+                self.logger.warning(f"Share link expired for item {item.uuid}")
                 return {'error': '分享連結已過期', 'stateCode': HTTPStatus.FORBIDDEN}
-        
-        # Check available_user (allowed user list)
-        if item.available_user and user_id is not None:
-            try:
-                allowed_users = json.loads(item.available_user)
-                if allowed_users and user_id not in allowed_users:
-                    self.logger.warning(f"User {user_id} not in available_user list for item {item.uuid}")
-                    return {'error': '您沒有權限存取此分享連結', 'stateCode': HTTPStatus.FORBIDDEN}
-            except (json.JSONDecodeError, TypeError):
-                self.logger.error(f"Failed to parse available_user for item {item.uuid}: {item.available_user}")
-        
+
         return None
     
     def get_share_status(self, share_hash: str) -> Optional[Dict[str, Any]]:
@@ -299,7 +288,7 @@ class ShareService:
             if access_error:
                 return access_error
             if not verify_password(password, item.share_password):
-                self.logger.info(f"Share password verify failed for link {share_hash}")
+                self.logger.info(f"Share password verify failed for link {share_hash[:6]}…")
                 return {'error': '密碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
             return {'ticket': issue_ticket(share_hash),
                     'expires_in': settings.SHARE_TICKET_TTL_SECONDS,
@@ -327,10 +316,10 @@ class ShareService:
                 
                 file_path = Path(os.path.join(self.storage_base_path, file.uuid))
                 if not file_path.exists() or not file_path.is_file():
-                    self.logger.warning(f"File not found: {file_path}")
+                    self.logger.warning("Shared file payload missing")
                     return {'error': '檔案不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
-                self.logger.info(f"File found: {file_path} filename: {file.name}")
+                self.logger.info(f"Share file resolved for download: {file.uuid}")
                 return {
                     'real_path': str(file_path),
                     'filename': file.name,
@@ -354,7 +343,7 @@ class ShareService:
                 
                 return {'error': '資料夾分享不支援下載', 'stateCode': HTTPStatus.BAD_REQUEST}
             
-            self.logger.warning(f"Share link not found: {share_hash}")
+            self.logger.warning(f"Share link not found: {share_hash[:6]}…")
             return {'error': '分享連結不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
         except Exception as e:
