@@ -1,10 +1,40 @@
 import traceback as tb
 import threading
 import time
+import logging
+import re as _re
 from redis import Redis
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+
+
+# --- credential masking in the uvicorn access log -------------------------
+# Request lines carry bearer-style query params (?link=<32-hex share token>,
+# ?token=/?ptk= one-time tokens). The share link is a LONG-LIVED credential
+# and must never land in access logs in full.
+class _AccessLogSecretFilter(logging.Filter):
+    _PATTERN = _re.compile(r"((?:link|token|ptk)=)([0-9A-Za-z_-]{6})[0-9A-Za-z_-]+")
+
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+            red = self._PATTERN.sub(r"\1\2…", msg)
+            if red != msg:
+                record.msg = red
+                record.args = ()
+        except Exception:
+            pass
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_AccessLogSecretFilter())
+
+
+def _attach_access_log_filter():
+    lg = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _AccessLogSecretFilter) for f in lg.filters):
+        lg.addFilter(_AccessLogSecretFilter())
 
 
 from app.config import settings
@@ -136,6 +166,7 @@ threading.Thread(target=_scheduler, daemon=True).start()
 @app.on_event("startup")
 async def _startup_collab_bus():
     import asyncio
+    _attach_access_log_filter()  # re-attach after uvicorn's dictConfig
     collab_events.set_loop(asyncio.get_running_loop())
     collab_events.start()
 
