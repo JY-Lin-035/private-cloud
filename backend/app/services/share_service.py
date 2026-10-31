@@ -262,12 +262,12 @@ class ShareService:
         """Public metadata about a share link: existence, password and expiry state."""
         try:
             item = self.db.execute(
-                select(File).where(File.shared == share_hash)
+                select(File).where(File.shared == share_hash, File.deleted_at.is_(None))
             ).scalar_one_or_none()
             item_type = 'file'
             if not item:
                 item = self.db.execute(
-                    select(Folder).where(Folder.shared == share_hash)
+                    select(Folder).where(Folder.shared == share_hash, Folder.deleted_at.is_(None))
                 ).scalar_one_or_none()
                 item_type = 'folder'
             if not item:
