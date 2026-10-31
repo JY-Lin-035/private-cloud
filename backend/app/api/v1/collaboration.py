@@ -49,7 +49,7 @@ def issue_ws_ticket(
     return {"ticket": token, "expires_in": settings.WS_TICKET_TTL_SECONDS}
 
 
-@router.post("/addCollaborator")
+@router.post("/addCollaborator", dependencies=[Depends(rate_limit(15, 60))])
 def add_collaborator(
     request: CollaborationAddRequest,
     db: Session = Depends(get_db),

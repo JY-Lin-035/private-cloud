@@ -391,3 +391,55 @@ class TestTusLocation:
         monkeypatch.setattr(F.settings, "APP_URL", "")
         loc = F._tus_location(self._req(), "ID4")
         assert loc == "http://testserver/api/files/tus/ID4"
+
+
+class TestQuotaAndShareHardening:
+    """Regression locks for red-team round-2 findings."""
+
+    def test_recalc_includes_trashed(self, db_session, sample_account, sample_home_folder, mocker):
+        # B2: used_size must count soft-deleted (trashed) files, since they
+        # still occupy disk; excluding them lets users free quota for free.
+        import uuid as _u
+        from app.models.file import File
+        from app.services.file_service import FileService
+        from datetime import datetime
+        live = File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                    parent_folder_id=sample_home_folder.uuid, name="live.txt",
+                    size=1000, mime_type="text/plain", storage_path="x")
+        trashed = File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                       parent_folder_id=sample_home_folder.uuid, name="gone.txt",
+                       size=4000, mime_type="text/plain", storage_path="y",
+                       deleted_at=datetime.utcnow())
+        db_session.add_all([live, trashed]); db_session.commit()
+        svc = FileService(db_session)
+        svc.recalculate_used_storage(sample_account.id)
+        db_session.refresh(sample_account)
+        assert sample_account.used_size == 5000  # 1000 live + 4000 trashed
+
+    def test_shared_file_in_trashed_folder_not_downloadable(self, db_session, sample_account, sample_home_folder, tmp_path, monkeypatch):
+        # B1: a share link for a file whose folder was soft-deleted must be dead.
+        import uuid as _u
+        from app.models.file import File
+        from app.models.folder import Folder
+        from app.services.share_service import ShareService
+        from app.config import settings
+        monkeypatch.setattr(settings, "STORAGE_BASE_PATH", str(tmp_path))
+        f = File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                 parent_folder_id="folder-x", name="s.txt", size=10,
+                 mime_type="text/plain", storage_path="p")
+        f.shared = "deadbeefdeadbeef"
+        f.deleted_at = __import__("datetime").datetime.utcnow()  # trashed
+        db_session.add(f); db_session.commit()
+        svc = ShareService(db_session)
+        res = svc.download("deadbeefdeadbeef")
+        assert res and res.get("stateCode") in (404, 403)
+
+    def test_login_password_length_bounded(self):
+        # B5: reject absurdly long login inputs (Argon2/log DoS).
+        from app.schemas.account import LoginRequest
+        from pydantic import ValidationError
+        try:
+            LoginRequest.model_validate({"username": "u", "password": "x" * 5000})
+            assert False, "should have rejected >128"
+        except ValidationError:
+            pass

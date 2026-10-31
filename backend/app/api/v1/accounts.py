@@ -318,10 +318,11 @@ def recalculate_user_storage(
 
     total_size = 0
     for folder in folders:
+        # Include soft-deleted files: they still occupy disk and count toward
+        # quota by design, so recalculation must not free quota for trashed data.
         files = db.execute(
             select(File).where(
                 File.parent_folder_id == folder.uuid,
-                File.deleted_at.is_(None),
             )
         ).scalars().all()
         actual_size = sum(f.size for f in files)
@@ -340,11 +341,10 @@ def recalculate_user_storage(
     }
 
 def _admin_required(request) -> dict:
-    if not hasattr(request.state, 'user'):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    if request.state.user.get("identity") != Identity.ADMIN:
-        raise HTTPException(status_code=403, detail="Admin only")
-    return request.state.user
+    # Delegate to the single require_admin dependency so admin gating (and its
+    # admin_probe scoring) has exactly one implementation.
+    from app.api.dependencies import require_admin
+    return require_admin(request)
 
 
 @router.get("/admin/users")

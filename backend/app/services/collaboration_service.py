@@ -6,6 +6,7 @@ from app.models.file import File
 from app.models.collaboration import Collaboration
 from app.repositories.collaboration_repository import CollaborationRepository
 from app.repositories.file_repository import FileRepository
+from app.utils.email_utils import mask_email
 from app.repositories.account_repository import AccountRepository
 from app.constants import HTTPStatus
 
@@ -82,7 +83,7 @@ class CollaborationService:
                     'file_uuid': collab.file_uuid,
                     'collaborator_id': collab.collaborator_id,
                     'collaborator_name': collaborator.name,
-                    'collaborator_email': collaborator.email,
+                    'collaborator_email': mask_email(collaborator.email),
                     'permission': collab.permission,
                     'created_at': collab.created_at.isoformat()
                 },

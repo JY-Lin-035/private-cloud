@@ -14,6 +14,11 @@ from app.constants import HTTPStatus
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/share", tags=["share"])
+
+
+def _m(token: str) -> str:
+    """Bearer share links are credentials: never log them in full."""
+    return (token or "")[:6] + "…"
 logger = log.get_logger("share_api.log")
 
 
@@ -45,7 +50,7 @@ async def get_share_list(
         share_service = ShareService(db)
         
         result = share_service.get_list(user_id)
-        logger.info(f"Get share list result: {result}")
+        logger.info(f"Get share list ok for user_id {user_id}")
         
         if result and 'error' in result:
             logger.error(f"Get share list error {result['error']}, stateCode: {result['stateCode']}")
@@ -85,7 +90,7 @@ async def create_share_link(
         share_service = ShareService(db)
         
         result = share_service.create_link(user_id, request.item_uuid, request.item_type, limited_date=parsed_limited_date, password=request.password)
-        logger.info(f"Create share link result: {result}")
+        logger.info(f"Create share link ok for user_id {user_id}, item {request.item_uuid}")
         
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
@@ -140,7 +145,7 @@ async def download_shared_file(
 ):
     """Download a file via share link (no authentication required)."""
     global logger
-    logger.info(f"Download shared file request received, link: {link}")
+    logger.info(f"Download shared file request received, link: {_m(link)}")
     try:        
         share_service = ShareService(db)
         
@@ -216,7 +221,7 @@ async def share_verify_password(
                                                f"錯密碼（第 {attempts} 次）")
         raise HTTPException(status_code=result['stateCode'], detail=result['error'])
     redis_client.delete(lock_key)
-    logger.info(f"Share password verified, ticket issued for link: {body.link}")
+    logger.info(f"Share password verified, ticket issued for link: {_m(body.link)}")
     return {'ticket': result['ticket'], 'expires_in': result['expires_in']}
 
 
