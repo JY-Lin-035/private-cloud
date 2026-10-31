@@ -30,6 +30,6 @@ class Collaboration(BaseModel):
     permission = Column(String(20), nullable=False, server_default="editor")
 
     # Relationships
-    file = relationship("File", backref="collaborations")
+    file = relationship("File", backref="collaborations")  # NOTE: File rows are removed via explicit Collaboration cleanup in file_service/folder_service hard-delete (DS3 E1)
     owner = relationship("Account", foreign_keys=[owner_id], backref="owned_collaborations")
     collaborator = relationship("Account", foreign_keys=[collaborator_id], backref="collaborations")

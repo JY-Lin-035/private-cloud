@@ -83,9 +83,14 @@ async def create_share_link(
                 # Also handle ISO format: "2026-07-17T09:00:00.000Z"
                 cleaned = request.limited_date.replace('Z', '+00:00')
                 parsed_limited_date = datetime.fromisoformat(cleaned)
+                if parsed_limited_date.year > 2038 or parsed_limited_date.year < 1970:
+                    raise ValueError('out of supported range')
                 logger.info(f"Parsed limited_date: {parsed_limited_date}")
-            except Exception as e:
-                logger.error(f"Failed to parse limited_date '{request.limited_date}': {e}")
+            except Exception:
+                # DS3 A9/A10: never silently fall through to a PERMANENT link
+                # when the caller asked for an expiry (and >2038 breaks MySQL
+                # TIMESTAMP at insert with a 500).
+                raise HTTPException(status_code=400, detail='到期日期格式不正確或超出支援範圍')
         
         share_service = ShareService(db)
         

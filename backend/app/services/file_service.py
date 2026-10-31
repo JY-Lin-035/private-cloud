@@ -570,15 +570,21 @@ class FileService:
                 file.shared = None
 
             if permanent:
-                # Hard delete: remove from storage and database
-                file_path = os.path.join(self.storage_base_path, file.uuid)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                self.file_repo.hard_delete(file_uuid)
-
-                # Update account used storage only on hard delete
+                # DS3 E1: commit the DB row removal FIRST (hard_delete also
+                # clears collaborations + commits); only unlink the blob once
+                # the row is gone, so a failure can't leave bytes-orphaned or
+                # a row-ghost with stuck quota.
+                removed = self.file_repo.hard_delete(file_uuid)
+                if not removed:
+                    return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
                 account.used_size = max(0, account.used_size - file_size)
                 self.account_repo.update(account)
+                file_path = os.path.join(self.storage_base_path, file.uuid)
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except OSError:
+                    pass
             else:
                 # Soft delete
                 self.file_repo.soft_delete(file_uuid)
@@ -631,6 +637,7 @@ class FileService:
                     aseen.add(anc.uuid)
                     if anc.deleted_at is not None:
                         anc.deleted_at = None
+                        self.folder_service._heal_name_conflict(anc)
                         self.db.add(anc)
                     anc = self.folder_repo.get_by_uuid(anc.parent_id) if anc.parent_id else None
                 self.db.flush()
@@ -725,8 +732,9 @@ class FileService:
             current_folder = self.db.execute(
                 select(Folder).where(Folder.uuid == folder_uuid)
             ).scalar_one_or_none()
-            
-            while current_folder:
+            seen = set()
+            while current_folder and current_folder.uuid not in seen:
+                seen.add(current_folder.uuid)
                 path_parts.append(current_folder.name)
                 if current_folder.parent_id:
                     current_folder = self.db.execute(

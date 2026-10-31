@@ -109,13 +109,14 @@ class FolderService:
         parent_ids = [folder_uuid] + order
         for pid in parent_ids:
             for cf in self.db.execute(select(File).where(File.parent_folder_id == pid)).scalars().all():
-                fp = os.path.join(self.storage_base_path, cf.uuid)
-                try:
-                    if os.path.exists(fp):
-                        os.remove(fp)
-                except OSError:
-                    pass
-                file_repo.hard_delete(cf.uuid)
+                # row (with collab cascade) first, blob after (DS3 E1)
+                if file_repo.hard_delete(cf.uuid):
+                    fp = os.path.join(self.storage_base_path, cf.uuid)
+                    try:
+                        if os.path.exists(fp):
+                            os.remove(fp)
+                    except OSError:
+                        pass
 
         # Delete descendant folders (deepest-first is irrelevant for hard rows)
         for kid in order:
@@ -323,6 +324,7 @@ class FolderService:
                     break
                 if p.deleted_at is not None:
                     p.deleted_at = None
+                    self._heal_name_conflict(p)
                     self.folder_repo.update(p)
                 anc = p.parent_id
 
@@ -669,6 +671,48 @@ class FolderService:
             chain.add(cur.uuid)
             cur = self.folder_repo.get_by_uuid(cur.parent_id) if cur.parent_id else None
         return chain
+
+    def _heal_name_conflict(self, folder) -> str | None:
+        """If a live sibling shares a collation-equal name, rename the given
+        folder before it re-enters the visible tree (DS3: restore-ancestor and
+        batch-restore paths skipped this and minted CI duplicates).
+        Comparison is done by the DB itself (utf8mb4 CI) — the only true source.
+        Returns the new name or None."""
+        from app.utils.pathing import unique_name
+        conflict = self.db.execute(
+            select(Folder.uuid).where(
+                Folder.owner_id == folder.owner_id,
+                (Folder.parent_id == folder.parent_id) if folder.parent_id else Folder.parent_id.is_(None),
+                Folder.name == folder.name,
+                Folder.deleted_at.is_(None),
+                Folder.uuid != folder.uuid,
+            ).limit(1)
+        ).scalars().first()
+        if not conflict:
+            return None
+        for _ in range(64):
+            siblings = set(self.db.execute(
+                select(Folder.name).where(
+                    Folder.owner_id == folder.owner_id,
+                    (Folder.parent_id == folder.parent_id) if folder.parent_id else Folder.parent_id.is_(None),
+                    Folder.deleted_at.is_(None),
+                    Folder.uuid != folder.uuid,
+                )
+            ).scalars().all())
+            cand = unique_name(folder.name, siblings)
+            still = self.db.execute(
+                select(Folder.uuid).where(
+                    Folder.owner_id == folder.owner_id,
+                    (Folder.parent_id == folder.parent_id) if folder.parent_id else Folder.parent_id.is_(None),
+                    Folder.name == cand,
+                    Folder.deleted_at.is_(None),
+                    Folder.uuid != folder.uuid,
+                ).limit(1)
+            ).scalars().first()
+            folder.name = cand
+            if not still:
+                return cand
+        return None
 
     def _subtree_height(self, folder_uuid: str, budget: int = 2000) -> int:
         """Max depth (in folders) of the subtree rooted at uuid; capped scan."""

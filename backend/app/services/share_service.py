@@ -397,6 +397,10 @@ class ShareService:
         if not sub:
             return []
         segments = [s for s in sub.replace('\\', '/').split('/') if s not in ('', '.')]
+        # DS3 B4 (HIGH): unbounded segment count made downloadItems/browse a
+        # linear DB-query amplification vector on a single-worker event loop.
+        if len(segments) > 64:
+            return None
         if any(s == '..' or len(s) > 255 for s in segments):
             return None
         return segments
@@ -459,10 +463,14 @@ class ShareService:
         if err:
             return None, None, None, err
         file_uuids, folder_uuids = [], []
+        budget = 4096  # total path segments resolved in one request (DS3 B4)
         for p in paths[:1000]:
             segments = self._split_public_path(p)
             if segments is None or not segments:
                 continue
+            budget -= len(segments)
+            if budget <= 0:
+                break
             parent = self._walk_shared(folder, segments[:-1])
             if not parent:
                 continue

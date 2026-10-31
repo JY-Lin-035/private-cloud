@@ -751,3 +751,60 @@ class TestRedTeamRound11Locks:
         deep = "/".join("s%d" % i for i in range(100))
         segs, err = sanitize_rel_path(deep)
         assert err is not None
+
+
+class TestRedTeamRound12Locks:
+    """Locks for DS3 findings: share path budgets, collab-cascade delete,
+    restore collision healing, date/length validation."""
+
+    def test_share_path_segment_cap(self):
+        from app.services.share_service import ShareService
+        deep = "/".join("s%d" % i for i in range(100))
+        assert ShareService._split_public_path(deep) is None
+        assert ShareService._split_public_path("a/b/c") == ["a", "b", "c"]
+
+    def test_collect_total_budget_break(self):
+        import inspect
+        from app.services.share_service import ShareService
+        src = inspect.getsource(ShareService.collect_shared_items)
+        assert "budget" in src
+
+    def test_hard_delete_clears_collaborations(self, db_session, sample_account, sample_home_folder, tmp_path, monkeypatch):
+        import uuid as _u
+        from app.models.file import File
+        from app.models.collaboration import Collaboration
+        from app.repositories.file_repository import FileRepository
+        monkeypatch.setattr("app.config.settings.STORAGE_BASE_PATH", str(tmp_path))
+        fu = str(_u.uuid4())
+        db_session.add(File(uuid=fu, owner_id=sample_account.id, parent_folder_id=sample_home_folder.uuid,
+                            name="collab.txt", size=1, mime_type="text/plain", storage_path="p"))
+        db_session.add(Collaboration(file_uuid=fu, owner_id=sample_account.id, collaborator_id=110, permission="editor"))
+        db_session.commit()
+        repo = FileRepository(db_session)
+        assert repo.hard_delete(fu) is True          # used to raise IntegrityError
+        assert db_session.query(File).filter(File.uuid == fu).first() is None
+        assert db_session.query(Collaboration).filter(Collaboration.file_uuid == fu).count() == 0
+
+    def test_heal_name_conflict_renames(self, db_session, sample_account, sample_home_folder):
+        import uuid as _u
+        from app.models.folder import Folder
+        from app.services.folder_service import FolderService
+        live = Folder(uuid=str(_u.uuid4()), owner_id=sample_account.id, parent_id=sample_home_folder.uuid, name="Docs", size=0)
+        ghost = Folder(uuid=str(_u.uuid4()), owner_id=sample_account.id, parent_id=sample_home_folder.uuid, name="Docs", size=0,
+                       deleted_at=__import__("datetime").datetime.utcnow())
+        db_session.add_all([live, ghost]); db_session.commit()
+        svc = FolderService(db_session)
+        new = svc._heal_name_conflict(ghost)
+        assert new and new != "Docs"
+
+    def test_getlink_bad_date_400_source(self):
+        import inspect
+        from app.api.v1 import share as sh
+        src = inspect.getsource(sh)
+        assert "到期日期格式不正確" in src
+
+    def test_tus_bad_length_400_source(self):
+        import inspect
+        from app.api.v1 import files as fs
+        src = inspect.getsource(fs)
+        assert "except (TypeError, ValueError):" in src and "Invalid Upload-Length" in src

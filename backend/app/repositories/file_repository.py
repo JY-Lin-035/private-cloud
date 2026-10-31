@@ -127,6 +127,12 @@ class FileRepository(BaseRepository[File]):
         stmt = select(File).where(File.uuid == file_uuid)
         file = self.db.execute(stmt).scalar_one_or_none()
         if file:
+            # DS3 E1: File.collaborations backref has no cascade; deleting the
+            # File row would null-out a NOT NULL FK -> IntegrityError -> 500,
+            # leaving a ghost row and stuck quota. Remove collab rows first.
+            from app.models.collaboration import Collaboration
+            self.db.query(Collaboration).filter(
+                Collaboration.file_uuid == file_uuid).delete(synchronize_session=False)
             self.db.delete(file)
             self.db.commit()
             return True

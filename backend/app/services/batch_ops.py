@@ -281,6 +281,16 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                         f.name = unique_name(f.name, taken)
                         taken.add(f.name)
                     f.deleted_at = None
+                # DS3 E3: boundary folders (parent stays live) need CI-collision
+                # healing before bulk-clearing deleted_at, else restore mints
+                # collation-duplicate folder names.
+                from app.services.folder_service import FolderService
+                _fs = FolderService(db)
+                rset = set(restore_folders)
+                for chunk in _chunks(restore_folders):
+                    for b in db.execute(select(Folder).where(Folder.uuid.in_(chunk))).scalars().all():
+                        if b.parent_id not in rset:
+                            _fs._heal_name_conflict(b)
                 db.flush()
                 for chunk in _chunks(restore_folders):
                     db.execute(update(Folder).where(
