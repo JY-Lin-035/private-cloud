@@ -635,3 +635,78 @@ class TestAccessLogCredentialFilter:
                     "1.1", 200)
         rec = self._run_filter(rec)
         assert "ababab…" in rec.args[2] and "ab" * 32 not in rec.args[2]
+
+
+class TestRedTeamRound10Fixes:
+    """Locks for deep-pentest round: F2 cross-tenant, cookie dupes, depth,
+    restore-parent, tus abort, ticket password-epoch."""
+
+    def test_f2_resolve_rejects_foreign_base(self, db_session, sample_account, sample_home_folder):
+        import uuid as _u
+        from app.models.account import Account
+        from app.models.folder import Folder
+        from app.services.folder_service import FolderService
+        other = Account(name="other99", password="x", email="o@x.cc", signal_file_size=10**8,
+                        total_file_size=10**8, used_size=0, identity=0, enable=True)
+        db_session.add(other); db_session.flush()
+        of = Folder(uuid=str(_u.uuid4()), owner_id=other.id, parent_id=None, name="Home", size=0, is_system=True)
+        db_session.add(of); db_session.commit()
+        svc = FolderService(db_session)
+        res = svc.resolve_or_create_path(sample_account.id, of.uuid, "evil")
+        assert res.get("stateCode") in (403, 400), res
+
+    def test_duplicate_session_cookie_rejected(self):
+        from app.utils.session_auth import parse_session_cookie
+        assert parse_session_cookie("session=1|a; session=2|b") is None
+        assert parse_session_cookie("session=1|a") == "1|a"
+
+    def test_depth_cap_blocks_65th_level(self, db_session, sample_account, sample_home_folder):
+        from app.services.folder_service import FolderService
+        svc = FolderService(db_session)
+        parent = sample_home_folder.uuid
+        for i in range(63):
+            r = svc.create(sample_account.id, parent, f"L{i}")
+            assert 'error' not in r, (i, r)
+            parent = r['uuid']
+        r = svc.create(sample_account.id, parent, "too-deep")
+        assert r.get("stateCode") == 400, r
+
+    def test_restore_file_into_trashed_parent_conflicts(self, db_session, sample_account, sample_home_folder, tmp_path, monkeypatch):
+        import uuid as _u
+        from datetime import datetime
+        from app.models.file import File
+        from app.models.folder import Folder
+        from app.services.file_service import FileService
+        monkeypatch.setattr("app.config.settings.STORAGE_BASE_PATH", str(tmp_path))
+        sub = Folder(uuid=str(_u.uuid4()), owner_id=sample_account.id, parent_id=sample_home_folder.uuid, name="sub", size=0, deleted_at=datetime.utcnow())
+        f = File(uuid=str(_u.uuid4()), owner_id=sample_account.id, parent_folder_id=sub.uuid, name="x.txt", size=1, mime_type="text/plain", storage_path="p", deleted_at=datetime.utcnow())
+        db_session.add_all([sub, f]); db_session.commit()
+        svc = FileService(db_session)
+        r = svc.restore(sample_account.id, f.uuid)
+        assert r.get("stateCode") == 409, r
+
+    def test_rename_system_folder_forbidden(self, db_session, sample_account, sample_home_folder):
+        from app.services.folder_service import FolderService
+        svc = FolderService(db_session)
+        r = svc.rename(sample_account.id, sample_home_folder.uuid, "Hacked")
+        assert r.get("stateCode") == 403, r
+
+    def test_tus_abort_owner_check(self, db_session, sample_account, sample_home_folder, tmp_path, monkeypatch):
+        from app.services.file_service import FileService
+        monkeypatch.setattr("app.config.settings.STORAGE_BASE_PATH", str(tmp_path))
+        svc = FileService(db_session)
+        r = svc.create_tus_upload(sample_account.id, sample_home_folder.uuid, "a.bin", 10)
+        uid = r["upload_id"]
+        bad = svc.abort_tus_upload(uid, sample_account.id + 999)
+        assert bad.get("stateCode") == 404
+        ok = svc.abort_tus_upload(uid, sample_account.id)
+        assert ok.get("ok") is True
+        import os
+        assert not os.path.exists(os.path.join(str(tmp_path), "tus_uploads", uid))
+
+    def test_ticket_invalidated_on_password_rotation(self):
+        from app.utils.share_ticket import issue_ticket, verify_ticket
+        t = issue_ticket("hash123", "argon-old-prefix")
+        assert verify_ticket("hash123", t, "argon-old-prefix")
+        assert not verify_ticket("hash123", t, "argon-NEW-prefix"), "rotating password must kill tickets"
+        assert not verify_ticket("hash123", t), "no-marker verify must fail for marker'd ticket"

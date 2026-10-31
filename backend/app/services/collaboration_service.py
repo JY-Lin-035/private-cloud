@@ -164,7 +164,7 @@ class CollaborationService:
                     'file_name': file.name if file else '未知檔案',
                     'owner_id': c.owner_id,
                     'owner_name': owner.name if owner else '未知',
-                    'owner_email': owner.email if owner else '未知',
+                    'owner_email': mask_email(owner.email) if owner else '未知',
                     'permission': c.permission,
                     'created_at': (c.created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
                 })

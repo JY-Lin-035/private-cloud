@@ -68,6 +68,23 @@ def _tus_location(request: Request, upload_id: str) -> str:
     return f"{base}/api/files/tus/{upload_id}"
 
 
+async def _read_body_capped(request: Request, cap: int) -> bytes:
+    """Stream the request body but abort (413) once it exceeds cap bytes.
+
+    Red-team F7: unbounded request.body() buffering let an authenticated user
+    pin arbitrary amounts of server RAM while declaring Upload-Length=1.
+    """
+    cap = max(int(cap), 0) + 1024 * 1024
+    got = 0
+    chunks = []
+    async for ch in request.stream():
+        got += len(ch)
+        if got > cap:
+            raise HTTPException(status_code=413, detail='上傳內容超過宣告大小')
+        chunks.append(ch)
+    return b''.join(chunks)
+
+
 @router.options("/tus")
 async def tus_options():
     """Return tus handshake headers for browser clients."""
@@ -80,7 +97,7 @@ async def tus_options():
     )
 
 
-@router.post("/tus")
+@router.post("/tus", dependencies=[Depends(rate_limit(30, 300))])
 async def tus_create_upload(
     request: Request,
     upload_metadata: str = Header(None, alias='Upload-Metadata'),
@@ -124,7 +141,7 @@ async def tus_create_upload(
 
         upload_id = result['upload_id']
         location = str(_tus_location(request, upload_id))
-        body = await request.body()
+        body = await _read_body_capped(request, file_size)
         if body:
             offset_result = file_service.append_tus_chunk(upload_id, 0, body, user_id)
             if offset_result and 'error' in offset_result:
@@ -166,13 +183,22 @@ async def tus_patch_upload(
     try:
         if not tus_resumable:
             raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
-
-        body = await request.body()
-
         if not upload_offset:
             raise HTTPException(status_code=400, detail='Missing Upload-Offset header')
 
         file_service = FileService(db)
+        # Owner/progress check happens BEFORE buffering the body so a forged
+        # or oversized PATCH cannot pin memory (red-team F7/F4).
+        progress = file_service.get_tus_upload(upload_id, user_id)
+        if not progress or 'error' in progress:
+            code = (progress or {}).get('stateCode', 404)
+            raise HTTPException(status_code=code, detail=(progress or {}).get('error', 'Upload not found'))
+        try:
+            cur_off = int(upload_offset)
+        except ValueError:
+            raise HTTPException(status_code=400, detail='Invalid Upload-Offset')
+        remaining = max(int(progress.get('file_size', 0)) - cur_off, 0)
+        body = await _read_body_capped(request, remaining)
         result = file_service.append_tus_chunk(upload_id, int(upload_offset), body, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
@@ -228,6 +254,20 @@ async def tus_head_upload(
     except Exception as e:
         logger.error(f"Tus head upload endpoint error: {e}")
         raise
+
+
+@router.delete("/tus/{upload_id}", status_code=204)
+async def tus_abort_upload(
+    upload_id: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Abort an in-flight tus upload and release its quota reservation."""
+    file_service = FileService(db)
+    result = file_service.abort_tus_upload(upload_id, user_id)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    return Response(status_code=204)
 
 
 @router.post("/tus/{upload_id}/finish")

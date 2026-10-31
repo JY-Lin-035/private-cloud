@@ -35,19 +35,34 @@ class FolderService:
         _, error = validate_display_name(name)
         return error is None
     
-    def _update_parent_folder_size(self, folder_uuid: str, size_delta: int):
-        """Recursively update parent folder sizes."""
-        folder = self.folder_repo.get_by_uuid(folder_uuid)
-        if not folder:
+    def _update_parent_folder_size(self, folder_uuid: str, size_delta: int, owner_id: Optional[int] = None):
+        """Propagate a size delta up the ancestor chain (iterative, capped).
+
+        Iteration (not recursion) removes the RecursionError DoS at extreme
+        depths; the hop cap plus owner-stickiness means a corrupted or
+        cross-owner chain can never loop forever or charge a foreign tree.
+        """
+        if not folder_uuid:
             return
-        
-        # Update current folder size
-        folder.size = max(0, folder.size + size_delta)
-        self.folder_repo.update(folder)
-        
-        # Recursively update parent
-        if folder.parent_id:
-            self._update_parent_folder_size(folder.parent_id, size_delta)
+        seen = set()
+        cur_uuid = folder_uuid
+        hops = 0
+        chain_owner = owner_id
+        while cur_uuid and hops < 64:
+            if cur_uuid in seen:  # cycle guard
+                return
+            seen.add(cur_uuid)
+            folder = self.folder_repo.get_by_uuid(cur_uuid)
+            if not folder:
+                return
+            if chain_owner is None:
+                chain_owner = folder.owner_id  # anchor propagation to this tree's owner
+            if folder.owner_id != chain_owner:
+                return  # never mutate another owner's chain
+            folder.size = max(0, (folder.size or 0) + size_delta)
+            self.folder_repo.update(folder)
+            cur_uuid = folder.parent_id
+            hops += 1
     
     def _soft_delete_children(self, folder_uuid: str):
         """Recursively soft delete all children (folders and files)."""
@@ -111,8 +126,11 @@ class FolderService:
                 parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
                 if not parent_folder or parent_folder.owner_id != user_id:
                     return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+                if len(self._ancestor_chain(parent_folder)) + 1 > self.MAX_FOLDER_DEPTH:
+                    return {'error': '資料夾深度過深', 'stateCode': HTTPStatus.BAD_REQUEST}
             
             # Check for duplicate folder name in same parent directory
+            # (DB collation is case-insensitive; .first() tolerates legacy dupes)
             existing_folder = self.db.execute(
                 select(Folder).where(
                     Folder.owner_id == user_id,
@@ -120,7 +138,7 @@ class FolderService:
                     Folder.name == name,
                     Folder.deleted_at.is_(None)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
             
             if existing_folder:
                 return {'error': '資料夾已存在', 'stateCode': HTTPStatus.BAD_REQUEST}
@@ -159,7 +177,24 @@ class FolderService:
             folder = self.folder_repo.get_by_uuid(folder_uuid)
             if not folder or folder.owner_id != user_id:
                 return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
-            
+
+            if folder.is_system:
+                return {'error': '系統資料夾不可重命名', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            # Case-insensitive sibling collision guard (MySQL CI collation +
+            # red-team F3): renaming onto a sibling that differs only by case
+            # creates ambiguous rows that later blow up as 500s.
+            siblings = self.db.execute(
+                select(Folder.name).where(
+                    Folder.parent_id == folder.parent_id,
+                    Folder.owner_id == user_id,
+                    Folder.deleted_at.is_(None),
+                    Folder.uuid != folder.uuid,
+                )
+            ).scalars().all()
+            if new_name.casefold() in {s.casefold() for s in siblings}:
+                return {'error': '同名(不分大小寫)的資料夾已存在', 'stateCode': HTTPStatus.CONFLICT}
+
             # Update name
             folder.name = new_name
             self.folder_repo.update(folder)
@@ -259,6 +294,13 @@ class FolderService:
             
             if not folder.deleted_at:
                 return {'error': 'Folder not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
+
+            # Red-team F5: restoring under a parent that is still trashed would
+            # create an invisible orphan (in no tree, in no trash view).
+            if folder.parent_id:
+                parent = self.folder_repo.get_by_uuid(folder.parent_id)
+                if parent and parent.deleted_at is not None:
+                    return {'error': '父資料夾仍在垃圾桶中，請先還原父資料夾', 'stateCode': HTTPStatus.CONFLICT}
             
             # Recursive function to restore all children under folder_uuid
             def restore_all_children_recursive(parent_uuid: str):
@@ -533,6 +575,21 @@ class FolderService:
         except Exception:
             return 'Unknown'
 
+    MAX_FOLDER_DEPTH = 64
+
+    def _ancestor_chain(self, folder) -> list:
+        """Return [folder, parent, ...] bounded; [] on cycle/missing."""
+        chain = []
+        seen = set()
+        cur = folder
+        while cur and len(chain) < self.MAX_FOLDER_DEPTH + 8:
+            if cur.uuid in seen:
+                break
+            seen.add(cur.uuid)
+            chain.append(cur)
+            cur = self.folder_repo.get_by_uuid(cur.parent_id) if cur.parent_id else None
+        return chain
+
     def resolve_or_create_path(self, user_id: int, base_folder_uuid: Optional[str], rel_path: str) -> Dict[str, Any]:
         """Resolve a relative path under base (or Home), creating missing folders."""
         try:
@@ -540,8 +597,6 @@ class FolderService:
             segments, err = sanitize_rel_path(rel_path)
             if err:
                 return {'error': err, 'stateCode': HTTPStatus.BAD_REQUEST}
-            if not segments:
-                return {'uuid': base_folder_uuid, 'created': []}
 
             current = base_folder_uuid
             if not current:
@@ -549,6 +604,19 @@ class FolderService:
                 if not home:
                     return {'error': '找不到 Home 資料夾', 'stateCode': HTTPStatus.NOT_FOUND}
                 current = home.uuid
+            else:
+                # Security (red-team F2): the mount base must belong to the
+                # caller and be alive; otherwise a user could plant folders
+                # inside another user's tree by supplying its UUID.
+                base = self.folder_repo.get_by_uuid(current)
+                if not base or base.owner_id != user_id or base.deleted_at is not None:
+                    return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+                chain = self._ancestor_chain(base)
+                if len(chain) + len(segments) > self.MAX_FOLDER_DEPTH:
+                    return {'error': '資料夾深度過深', 'stateCode': HTTPStatus.BAD_REQUEST}
+
+            if not segments:
+                return {'uuid': current, 'created': []}
 
             created = []
             for seg in segments:

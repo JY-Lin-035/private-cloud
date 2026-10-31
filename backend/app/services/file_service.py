@@ -69,6 +69,8 @@ class FileService:
                     return {"error": "Folder not found", "stateCode": HTTPStatus.NOT_FOUND}
                 if folder.owner_id != user_id:
                     return {"error": "Forbidden", "stateCode": HTTPStatus.FORBIDDEN}
+                if folder.deleted_at is not None:
+                    return {"error": "Folder not found", "stateCode": HTTPStatus.NOT_FOUND}
             files = self.file_repo.get_by_folder(parent_folder_uuid) if parent_folder_uuid else []
             folders = self.folder_repo.get_by_parent(parent_folder_uuid) if parent_folder_uuid else self.folder_repo.get_by_owner(user_id)
             
@@ -198,7 +200,7 @@ class FileService:
                     File.name == filename,
                     File.deleted_at.is_(None),
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
             old_size = existing.size if existing else 0
             # Count this user's OTHER in-flight tus sessions (the current one has
             # no meta file yet) so parallel uploads can't collectively over-pin.
@@ -317,6 +319,25 @@ class FileService:
         except Exception as e:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
+    def abort_tus_upload(self, upload_id: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Delete an in-flight tus session (owner-checked) to release quota."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+        try:
+            import shutil
+            dir_path = self._get_tus_upload_dir(upload_id)
+            meta_path = self._get_tus_metadata_path(upload_id)
+            if not os.path.exists(meta_path):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            if user_id is not None and int(metadata.get('user_id', 0)) != int(user_id):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+            shutil.rmtree(dir_path, ignore_errors=True)
+            return {'ok': True}
+        except Exception:
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
     def finalize_tus_upload(self, upload_id: str, requesting_user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Finalize a tus upload by moving the temp file into persistent storage."""
         if not self._tus_id_ok(upload_id):
@@ -355,7 +376,7 @@ class FileService:
                     File.name == filename,
                     File.deleted_at.is_(None)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             old_file_size = existing_file.size if existing_file else 0
             projected = (account.used_size or 0) - old_file_size + file_size
@@ -438,7 +459,7 @@ class FileService:
                     File.name == filename,
                     File.deleted_at.is_(None)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
 
             old_file_size = existing_file.size if existing_file else 0
             if (account.used_size or 0) - old_file_size + file_size > (account.total_file_size or 0):
@@ -600,6 +621,12 @@ class FileService:
             
             if not file.deleted_at:
                 return {'error': 'File not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
+
+            # Red-team F5: refuse to restore into a folder that is still trashed.
+            if file.parent_folder_id:
+                _pf = self.folder_repo.get_by_uuid(file.parent_folder_id)
+                if _pf and _pf.deleted_at is not None:
+                    return {'error': '父資料夾仍在垃圾桶中，請先還原父資料夾', 'stateCode': HTTPStatus.CONFLICT}
             
             # Check for name conflict with existing files in the same folder
             if file.parent_folder_id:

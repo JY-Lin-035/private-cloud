@@ -13,11 +13,18 @@ def _signer() -> TimestampSigner:
     return TimestampSigner(secret_key=secret, salt="meow-share-ticket")
 
 
-def issue_ticket(share_hash: str) -> str:
-    return _signer().sign(share_hash).decode()
+def _payload(share_hash: str, pwd_marker: str) -> str:
+    return f"{share_hash}|{pwd_marker}"
 
 
-def verify_ticket(share_hash: str, ticket: str | None) -> bool:
+def issue_ticket(share_hash: str, pwd_marker: str = "") -> str:
+    """pwd_marker ties the ticket to the CURRENT share password hash prefix,
+    so rotating/removing the password instantly invalidates issued tickets
+    (red-team F9: revocation-by-password-change must actually revoke)."""
+    return _signer().sign(_payload(share_hash, pwd_marker)).decode()
+
+
+def verify_ticket(share_hash: str, ticket: str | None, pwd_marker: str = "") -> bool:
     if not ticket:
         return False
     try:
@@ -26,4 +33,4 @@ def verify_ticket(share_hash: str, ticket: str | None) -> bool:
         return False
     if isinstance(signed, bytes):
         signed = signed.decode()
-    return signed == share_hash
+    return signed == _payload(share_hash, pwd_marker)
