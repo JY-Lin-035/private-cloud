@@ -290,7 +290,7 @@ class ShareService:
             if not verify_password(password, item.share_password):
                 self.logger.info(f"Share password verify failed for link {share_hash[:6]}…")
                 return {'error': '密碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
-            return {'ticket': issue_ticket(share_hash),
+            return {'ticket': issue_ticket(share_hash, (item.share_password or '')[:16]),
                     'expires_in': settings.SHARE_TICKET_TTL_SECONDS,
                     'stateCode': HTTPStatus.OK}
         except Exception as e:
@@ -311,7 +311,7 @@ class ShareService:
                 if access_error:
                     return access_error
                 
-                if file.share_password and not verify_ticket(share_hash, ticket):
+                if file.share_password and not verify_ticket(share_hash, ticket, (file.share_password or '')[:16]):
                     return {'error': '此分享需要密碼', 'stateCode': 428}
                 
                 file_path = Path(os.path.join(self.storage_base_path, file.uuid))
@@ -338,7 +338,7 @@ class ShareService:
                 if access_error:
                     return access_error
                 
-                if folder.share_password and not verify_ticket(share_hash, ticket):
+                if folder.share_password and not verify_ticket(share_hash, ticket, (folder.share_password or '')[:16]):
                     return {'error': '此分享需要密碼', 'stateCode': 428}
                 
                 return {'error': '資料夾分享不支援下載', 'stateCode': HTTPStatus.BAD_REQUEST}
@@ -379,7 +379,7 @@ class ShareService:
         access_error = self._check_share_access(folder)
         if access_error:
             return None, access_error
-        if folder.share_password and not verify_ticket(share_hash, ticket):
+        if folder.share_password and not verify_ticket(share_hash, ticket, (folder.share_password or '')[:16]):
             return None, {'error': '此分享需要密碼', 'stateCode': 428}
         return folder, None
 
