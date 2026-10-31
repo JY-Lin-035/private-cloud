@@ -11,18 +11,41 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # --- credential masking in the uvicorn access log -------------------------
 # Request lines carry bearer-style query params (?link=<32-hex share token>,
-# ?token=/?ptk= one-time tokens). The share link is a LONG-LIVED credential
-# and must never land in access logs in full.
+# ?ticket=<signed share hash + ts + sig>, ?token=/?ptk= one-time tokens).
+# The share link is a LONG-LIVED credential and must never land in access
+# logs in full. NOTE: uvicorn's AccessFormatter unpacks record.args (5-tuple,
+# element 2 = "method path proto"); we must rewrite that element IN PLACE and
+# never clear args, or every request line raises a logging error and is lost.
 class _AccessLogSecretFilter(logging.Filter):
-    _PATTERN = _re.compile(r"((?:link|token|ptk)=)([0-9A-Za-z_-]{6})[0-9A-Za-z_-]+")
+    _PATTERN = _re.compile(
+        r"([?&](?:link|token|ptk|ticket)=)([0-9A-Za-z_.-]{6})[0-9A-Za-z_.-]+"
+    )
+
+    def _redact(self, s):
+        return self._PATTERN.sub(r"\1\2…", s)
 
     def filter(self, record):
         try:
-            msg = record.getMessage()
-            red = self._PATTERN.sub(r"\1\2…", msg)
-            if red != msg:
-                record.msg = red
-                record.args = ()
+            args = record.args
+            if isinstance(args, tuple):
+                # Scan every string element instead of assuming a fixed
+                # position so a uvicorn arg-order change can't re-leak.
+                changed = False
+                mutable = list(args)
+                for i, a in enumerate(mutable):
+                    if isinstance(a, str):
+                        red = self._redact(a)
+                        if red != a:
+                            mutable[i] = red
+                            changed = True
+                if changed:
+                    record.args = tuple(mutable)
+            else:
+                msg = record.getMessage()
+                red = self._redact(msg)
+                if red != msg:
+                    record.msg = red
+                    record.args = None
         except Exception:
             pass
         return True

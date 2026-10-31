@@ -286,6 +286,11 @@ install_nginx() {
 log_format cfip '$remote_addr - $remote_user [$time_local] "$request" '
                 '$status $body_bytes_sent "$http_referer" '
                 '"$http_user_agent" "$http_x_forwarded_for" cf=$http_cf_connecting_ip';
+# credential-safe variant for proxied API traffic: $uri excludes the query
+# string, so ?link/?token/?ptk/?ticket bearer values never reach disk.
+log_format noquery '$remote_addr - $remote_user [$time_local] "$method $uri HTTP/$srv_protocol" '
+                '$status $body_bytes_sent "$http_referer" '
+                '"$http_user_agent" cf=$http_cf_connecting_ip';
 EOF
   env BACKEND_PORT="$BACKEND_PORT" API_PUBLIC="$API_PUBLIC" WS_PUBLIC="$WS_PUBLIC" envsubst '$BACKEND_PORT $API_PUBLIC $WS_PUBLIC' <<'EOF' | $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null'
 add_header X-Content-Type-Options "nosniff" always;
@@ -334,6 +339,7 @@ server {
     }
 
     location /api/ {
+        access_log /var/log/nginx/static-access.log noquery;
         client_max_body_size 64m;
         proxy_pass http://meow_backend;
         proxy_http_version 1.1;
@@ -345,6 +351,7 @@ server {
     }
 
     location /ws/ {
+        access_log /var/log/nginx/static-access.log noquery;
         proxy_pass http://127.0.0.1:$BACKEND_PORT;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
