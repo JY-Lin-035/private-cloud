@@ -27,7 +27,7 @@ AUTH_KINDS = {"pw_lock", "admin_probe", "login_fail"}
 # auth pool which escalates straight to a full-site block.
 AUTH_ENDPOINTS = (
     "/api/accounts/login", "/api/accounts/register", "/api/accounts/getCode",
-    "/api/accounts/resetPW", "/api/accounts/verifyEmail", "/api/share/verifyPassword",
+    "/api/accounts/resetPW", "/api/share/verifyPassword",
 )
 # Only kinds whose actor is the *authenticated* account may lead to account
 # disabling; login_fail carries an attempted username and must never disable

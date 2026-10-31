@@ -23,7 +23,6 @@ class SessionMiddleware(BaseHTTPMiddleware):
         '/api/accounts/login',
         '/api/accounts/register',
         '/api/accounts/getCode',
-        '/api/accounts/verifyEmail',
         '/api/accounts/resetPW',
         '/api/accounts/checkSession',
         '/api/accounts/settings/public',
