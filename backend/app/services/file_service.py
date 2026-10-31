@@ -756,34 +756,25 @@ class FileService:
     def recalculate_used_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
         """Recalculate used storage from files that still occupy disk.
 
-        Includes SOFT-DELETED (trashed) files on purpose: trash items remain
-        on disk until GC and, by the delete path's own semantics, keep
-        counting against the quota. Excluding them here would let a user
-        free quota while data still occupies disk (upload -> trash ->
-        recalculate -> repeat == unbounded disk growth).
+        Delegates to the single shared implementation (app.services.quota) so
+        the user self-service, admin, and scheduled sweeps can never drift.
+        Includes soft-deleted (trashed) files on purpose: they stay on disk
+        until GC and, by the delete path's own semantics, keep counting toward
+        the quota; excluding them would allow a quota bypass.
         """
         try:
             account = self.account_repo.get_by_id(user_id)
-
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
-            files = self.db.execute(
-                select(File).where(
-                    File.owner_id == user_id
-                )
-            ).scalars().all()
-
-            # Sum up all file sizes
-            total_used = sum(f.size for f in files)
-
-            # Update account used_size
-            account.used_size = total_used
-            self.account_repo.update(account)
+            from app.services.quota import recalc_user_storage
+            total_used, _folders = recalc_user_storage(self.db, account)
+            self.db.commit()
 
             return {
                 'used_storage': total_used,
                 'stateCode': HTTPStatus.OK
             }
-        except Exception as e:
+        except Exception:
+            self.db.rollback()
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

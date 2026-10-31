@@ -208,56 +208,22 @@ def recalculate_all_users_storage(self):
         
         try:
             from app.repositories.account_repository import AccountRepository
-            from app.repositories.file_repository import FileRepository
-            from app.repositories.folder_repository import FolderRepository
-            from app.models.file import File
-            from app.models.folder import Folder
-            from sqlalchemy import select
-            
+            from app.services.quota import recalc_user_storage
+
             account_repo = AccountRepository(db)
-            file_repo = FileRepository(db)
-            folder_repo = FolderRepository(db)
-            
+
             # Get all users
             all_users = account_repo.get_all()
-            
+
             total_users_processed = 0
             total_folders_updated = 0
-            
+
             for user in all_users:
-                logger.info(f"Processing user: {user.name}")
-                
-                # Get all folders for the user
-                folders = db.execute(
-                    select(Folder).where(Folder.owner_id == user.id)
-                ).scalars().all()
-                
-                user_total_size = 0
-                
-                # Recalculate each folder size
-                for folder in folders:
-                    # Calculate actual size from files in this folder
-                    files = db.execute(
-                        select(File).where(
-                            File.parent_folder_id == folder.uuid,
-                            File.deleted_at.is_(None)
-                        )
-                    ).scalars().all()
-                    
-                    actual_size = sum(file.size for file in files)
-                    
-                    # Update folder size
-                    folder.size = actual_size
-                    user_total_size += actual_size
-                
-                # Update account used size
-                user.used_size = user_total_size
-                
+                total, nf = recalc_user_storage(db, user)
                 total_users_processed += 1
-                total_folders_updated += len(folders)
-                
-                logger.info(f"Updated user {user.name}: {user_total_size} bytes, {len(folders)} folders")
-            
+                total_folders_updated += nf
+                logger.info(f"Updated user {user.name}: {total} bytes")
+
             db.commit()
             
             logger.info(

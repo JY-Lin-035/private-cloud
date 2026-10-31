@@ -141,7 +141,7 @@ class CollaborationService:
                 file_groups[file_uuid]['members'].append({
                     'collaborator_id': c.collaborator_id,
                     'collaborator_name': collaborator.name if collaborator else '未知',
-                    'collaborator_email': collaborator.email if collaborator else '未知',
+                    'collaborator_email': mask_email(collaborator.email) if collaborator else '未知',
                     'permission': c.permission,
                     'created_at': (c.created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
                 })

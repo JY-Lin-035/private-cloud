@@ -304,32 +304,13 @@ def recalculate_user_storage(
 ):
     """Recalculate storage usage for a specific user (admin only)."""
     _admin_required(request)
-    from app.models.file import File
-    from app.models.folder import Folder
-    from sqlalchemy import select
+    from app.services.quota import recalc_user_storage
 
     target_user = db.query(Account).filter(Account.name == username.strip()).first()
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    folders = db.execute(
-        select(Folder).where(Folder.owner_id == target_user.id)
-    ).scalars().all()
-
-    total_size = 0
-    for folder in folders:
-        # Include soft-deleted files: they still occupy disk and count toward
-        # quota by design, so recalculation must not free quota for trashed data.
-        files = db.execute(
-            select(File).where(
-                File.parent_folder_id == folder.uuid,
-            )
-        ).scalars().all()
-        actual_size = sum(f.size for f in files)
-        folder.size = actual_size
-        total_size += actual_size
-
-    target_user.used_size = total_size
+    total_size, n_folders = recalc_user_storage(db, target_user)
     db.commit()
 
     logger.info(f"Storage recalculation completed for user {username}: {total_size} bytes")
@@ -337,7 +318,7 @@ def recalculate_user_storage(
         "message": "Storage recalculation completed",
         "username": username,
         "total_size": total_size,
-        "folders_updated": len(folders),
+        "folders_updated": n_folders,
     }
 
 def _admin_required(request) -> dict:
