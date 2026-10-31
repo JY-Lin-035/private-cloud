@@ -150,7 +150,7 @@ async def download_shared_file(
         share_service = ShareService(db)
         
         result = share_service.download(link, ticket=ticket)
-        logger.info(f"Download shared file result: {result}")
+        logger.info(f"Download shared file {_m(link)} status={(result or {}).get('stateCode', '?')}")
         
         if result and 'error' in result:
             logger.error(f"Download shared file error: {result['error']}, stateCode: {result['stateCode']}")
@@ -258,7 +258,7 @@ async def share_download_folder(
     if err:
         raise HTTPException(status_code=err['stateCode'], detail=err['error'])
     items, kept_files, _ = zip_service.collect_zip_items(db, folder.owner_id, [], [folder.uuid])
-    logger.info(f"Public folder zip: link={link}, files={kept_files}")
+    logger.info(f"Public folder zip: link={_m(link)}, files={kept_files}")
     return zip_service.build_zip_response(items, folder.name)
 
 
@@ -276,5 +276,5 @@ async def share_download_items(
     import re as _re
     clean = _re.sub(r'[\\/:*?"<>|\x00-\x1f]', '', request.folder_name or '')[:100].strip()
     display = f'{clean}-part' if clean else 'shared-download'
-    logger.info(f"Public items zip: link={request.link}, files={kept_files}, folders={kept_folders}")
+    logger.info(f"Public items zip: link={_m(request.link)}, files={kept_files}, folders={kept_folders}")
     return zip_service.build_zip_response(items, display)

@@ -443,3 +443,97 @@ class TestQuotaAndShareHardening:
             assert False, "should have rejected >128"
         except ValidationError:
             pass
+
+
+class TestQuotaSharedHelper:
+    """N1: all three recalc paths share one helper; it MUST count trash."""
+
+    def test_recalc_user_storage_counts_trash(self, db_session, sample_account, sample_home_folder):
+        import uuid as _u
+        from datetime import datetime
+        from app.models.file import File
+        from app.services.quota import recalc_user_storage
+        db_session.add_all([
+            File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                 parent_folder_id=sample_home_folder.uuid, name="live", size=700,
+                 mime_type="text/plain", storage_path="x"),
+            File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                 parent_folder_id=sample_home_folder.uuid, name="gone", size=300,
+                 mime_type="text/plain", storage_path="y", deleted_at=datetime.utcnow()),
+        ])
+        db_session.commit()
+        total, nfolders = recalc_user_storage(db_session, sample_account)
+        assert total == 1000  # includes the 300 trashed bytes
+        assert sample_account.used_size == 1000
+        assert nfolders >= 1
+
+
+class TestTusIdValidation:
+    def test_accepts_uuid4_rejects_traversal(self):
+        import uuid as _u
+        from app.services.file_service import FileService
+        assert FileService._tus_id_ok(str(_u.uuid4())) is True
+        for bad in ["", "..", "a" * 35, "a" * 37, "../..", "x" * 36, "550e8400-e29b-41d4-a716-44665544000"[:35]]:
+            assert FileService._tus_id_ok(bad) is False, bad
+
+
+class TestAuditSanitize:
+    def test_clean_neutralizes_separators_and_bounds(self):
+        from app.utils.security_log import _clean
+        out = _clean("evil|LINE\n|FORGE\rx")
+        assert "\n" not in out and "\r" not in out and "|" not in out
+        assert len(_clean("x" * 5000)) == 300
+
+
+class TestLoginCsrfGuard:
+    import asyncio
+
+    def _run(self, scope):
+        import asyncio
+        from app.middleware.origin_guard import OriginGuardMiddleware
+        state = {"status": None, "passed_app": False}
+
+        async def app(s, r, sd):
+            state["passed_app"] = True
+
+        async def send(msg):
+            if msg["type"] == "http.response.start":
+                state["status"] = msg["status"]
+
+        mw = OriginGuardMiddleware(app)
+
+        async def _go():
+            await mw(scope, None, send)
+
+        asyncio.run(_go())
+        return state
+
+    def _scope(self, path, origin=None, cookie=None):
+        h = [(b"host", b"api.example.com")]
+        if origin:
+            h.append((b"origin", origin.encode()))
+        if cookie:
+            h.append((b"cookie", cookie.encode()))
+        return {"type": "http", "method": "POST", "path": path, "headers": h, "client": ("1.2.3.4", 1)}
+
+    def test_bad_origin_login_blocked_even_without_cookie(self, monkeypatch):
+        from app.middleware.origin_guard import OriginGuardMiddleware
+        from app.config import settings
+        monkeypatch.setattr(settings, "ALLOWED_ORIGINS", "https://good.test")
+        st = self._run(self._scope("/api/accounts/login", origin="https://evil.test"))
+        assert st["status"] == 403 and not st["passed_app"]
+
+    def test_allowed_origin_login_passes(self, monkeypatch):
+        from app.middleware.origin_guard import OriginGuardMiddleware
+        from app.config import settings
+        monkeypatch.setattr(settings, "ALLOWED_ORIGINS", "https://good.test")
+        st = self._run(self._scope("/api/accounts/login", origin="https://good.test"))
+        assert st["passed_app"] and st["status"] is None
+
+    def test_no_origin_nonbrowser_passes(self):
+        st = self._run(self._scope("/api/accounts/login"))
+        assert st["passed_app"] and st["status"] is None
+
+    def test_unrelated_path_no_cookie_unchecked(self):
+        st = self._run(self._scope("/api/share/downloadFile", origin="https://evil.test"))
+        assert st["passed_app"]
