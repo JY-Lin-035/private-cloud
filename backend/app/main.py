@@ -203,7 +203,10 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    # Do not trust X-Forwarded-For: real client IP comes from CF-Connecting-IP
-    # via security_engine.get_client_ip(). Keeping proxy_headers off prevents a
-    # spoofed XFF from influencing request.client.host.
-    uvicorn.run(app, host="127.0.0.1", port=8000, proxy_headers=False)
+    # Real client IP is taken from CF-Connecting-IP via security_engine.
+    # proxy_headers must stay ON for the loopback proxy only (forwarded_allow_ips)
+    # so X-Forwarded-Proto makes url_for() emit https tus Locations; without it
+    # browsers block upload PATCHes as mixed content. Port 8000 is bound to
+    # loopback, so remote peers can never feed these headers directly.
+    uvicorn.run(app, host="127.0.0.1", port=8000,
+                proxy_headers=True, forwarded_allow_ips="127.0.0.1")
