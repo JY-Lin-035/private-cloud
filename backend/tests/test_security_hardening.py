@@ -568,3 +568,60 @@ class TestQuotaRecursiveFolderSize:
         assert used == 1000
         assert sub.size == 900
         assert sample_home_folder.size == 1000  # recursive: own 100 + sub 900
+
+
+class TestAccessLogCredentialFilter:
+    """R6: uvicorn access-log masking must (a) redact link/token/ptk/ticket,
+    (b) NOT break uvicorn's AccessFormatter (it unpacks record.args), and
+    (c) never leak the long-lived share hash embedded in ticket=."""
+
+    LINK = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    TICKET = LINK + ".1730000000.XyZsig"
+
+    def _make_record(self, formatter_cls):
+        import logging as _l
+        # Contract copied from uvicorn 0.54 AccessFormatter.formatMessage:
+        #   (client_addr, method, full_path, http_version, status_code)
+        #   fmt = '%s - "%s %s HTTP/%s" %s'
+        rec = _l.LogRecord("uvicorn.access", _l.INFO, "p", 1,
+                           '%s - "%s %s HTTP/%s" %s', None, None)
+        rec.args = ("127.0.0.1:5555", "GET",
+                    f"/api/share/downloadFile?link={self.LINK}&ticket={self.TICKET}",
+                    "1.1", 200)
+        return rec
+
+    def _run_filter(self, rec):
+        from app.main import _AccessLogSecretFilter
+        assert _AccessLogSecretFilter().filter(rec) is True
+        return rec
+
+    def test_redacts_link_and_ticket_with_real_uvicorn_formatter(self):
+        try:
+            from uvicorn.logging import AccessFormatter
+        except Exception:
+            import pytest as _p; _p.skip("uvicorn formatter unavailable")
+        rec = self._run_filter(self._make_record(AccessFormatter))
+        out = AccessFormatter().format(rec)  # must NOT raise
+        assert self.LINK not in out and self.TICKET not in out
+        assert "link=a1b2c3…" in out and "ticket=a1b2c3…" in out
+        assert "200" in out  # status still logged (no dropped line)
+
+    def test_formatter_survives_args_tuple_contract(self):
+        # AccessFormatter unpacks exactly 5 args; filter must preserve shape.
+        rec = self._run_filter(self._make_record(None))
+        assert isinstance(rec.args, tuple) and len(rec.args) == 5
+
+    def test_idempotent_double_filter(self):
+        rec = self._make_record(None)
+        once = self._run_filter(rec)
+        before = once.args
+        twice = self._run_filter(once)
+        assert twice.args == before
+
+    def test_plain_path_untouched(self):
+        import logging as _l
+        rec = _l.LogRecord("uvicorn.access", _l.INFO, "p", 1,
+                           '%s - "%s %s HTTP/%s" %s', None, None)
+        rec.args = ("1.2.3.4:5", "GET", "/api/files/list?parent_folder_uuid=abc", "1.1", 200)
+        rec = self._run_filter(rec)
+        assert rec.args[2] == "/api/files/list?parent_folder_uuid=abc"
