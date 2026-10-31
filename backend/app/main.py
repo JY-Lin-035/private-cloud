@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # never clear args, or every request line raises a logging error and is lost.
 class _AccessLogSecretFilter(logging.Filter):
     _PATTERN = _re.compile(
-        r"([?&](?:link|token|ptk|ticket)=)([0-9A-Za-z_.-]{6})[0-9A-Za-z_.-]+"
+        r"([?&](?:link|token|ptk|ticket)=)([0-9A-Za-z_.%-]{6})[0-9A-Za-z_.%-]+"
     )
 
     def _redact(self, s):

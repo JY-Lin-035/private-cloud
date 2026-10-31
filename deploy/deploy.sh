@@ -286,11 +286,20 @@ install_nginx() {
 log_format cfip '$remote_addr - $remote_user [$time_local] "$request" '
                 '$status $body_bytes_sent "$http_referer" '
                 '"$http_user_agent" "$http_x_forwarded_for" cf=$http_cf_connecting_ip';
-# credential-safe variant for proxied API traffic: $uri excludes the query
-# string, so ?link/?token/?ptk/?ticket bearer values never reach disk.
-log_format noquery '$remote_addr - $remote_user [$time_local] "$method $uri HTTP/$srv_protocol" '
+# credential-safe variant for proxied API traffic: $uri (no query) so
+# ?link/?token/?ptk/?ticket bearer values never reach disk.
+log_format noquery '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" '
                 '$status $body_bytes_sent "$http_referer" '
                 '"$http_user_agent" cf=$http_cf_connecting_ip';
+# share-page access: the /share/<32-hex> path IS a long-lived bearer token,
+# so log the mapped (masked) URI and drop the referer (which would echo it).
+log_format noshare '$remote_addr - $remote_user [$time_local] "$request_method $masked_uri $server_protocol" '
+                '$status $body_bytes_sent "-" '
+                '"$http_user_agent" cf=$http_cf_connecting_ip';
+map $uri $masked_uri {
+    default         $uri;
+    "~^/share/(?<h>[a-f0-9]{6})"  "/share/${h}…";
+}
 EOF
   env BACKEND_PORT="$BACKEND_PORT" API_PUBLIC="$API_PUBLIC" WS_PUBLIC="$WS_PUBLIC" envsubst '$BACKEND_PORT $API_PUBLIC $WS_PUBLIC' <<'EOF' | $SUDO tee /etc/nginx/snippets/meow_security_headers.conf >'/dev/null'
 add_header X-Content-Type-Options "nosniff" always;
@@ -313,7 +322,7 @@ server {
     root /srv/meowcloud/current;
     index index.html;
 
-    access_log /var/log/nginx/static-access.log cfip;
+    access_log /var/log/nginx/static-access.log noshare;
 
     sendfile on; tcp_nopush on; tcp_nodelay on;
     gzip on; gzip_comp_level 5; gzip_min_length 1024; gzip_vary on;
