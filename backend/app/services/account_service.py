@@ -97,7 +97,13 @@ class AccountService:
                 if email_service:
                     from app.services.feature_flag_service import FeatureFlagService
                     if FeatureFlagService(self.db).effective_enabled("enable_verification_email"):
-                        email_service.send_verification_email(account.id, account.email)
+                        # DS2: per-account resend cooldown (10 min) so the
+                        # mailer cannot be farmed across IPs via logins.
+                        try:
+                            if self.redis.set(f"resendV:{account.id}", "1", nx=True, ex=600):
+                                email_service.send_verification_email(account.id, account.email)
+                        except Exception:
+                            pass
                 return {'error': '信箱地址尚未驗證!', 'stateCode': HTTPStatus.FORBIDDEN}
             
             if not account.enable:
