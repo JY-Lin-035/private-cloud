@@ -347,3 +347,47 @@ class TestResetUniform:
         wrong = svc.reset_password("res@x.com", "wrongcode", "NewP@ss1!xyz")
         assert ghost["stateCode"] == wrong["stateCode"] == 403
         assert ghost["error"] == wrong["error"]
+
+class TestTusLocation:
+    """Regression guard: tus Location MUST carry the public https scheme.
+
+    Production bug (2026-10-31): cloudflared does not always send
+    X-Forwarded-Proto, so url_for() emitted http:// Locations and every
+    browser PATCH died on CSP connect-src / mixed content.
+    """
+
+    @staticmethod
+    def _req(headers=None, scheme="http", host="testserver"):
+        from starlette.requests import Request
+        h = {"host": host, **(headers or {})}
+        scope = {
+            "type": "http", "method": "POST", "path": "/api/files/tus",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in h.items()],
+            "scheme": scheme, "server": ("127.0.0.1", 8000),
+            "query_string": b"", "client": ("127.0.0.1", 5555),
+        }
+        return Request(scope)
+
+    def test_app_url_config_wins(self, monkeypatch):
+        from app.api.v1 import files as F
+        monkeypatch.setattr(F.settings, "APP_URL", "https://meowcloud-api.example.com/")
+        loc = F._tus_location(self._req(), "ID1")
+        assert loc == "https://meowcloud-api.example.com/api/files/tus/ID1"
+
+    def test_cf_connecting_ip_implies_https(self, monkeypatch):
+        from app.api.v1 import files as F
+        monkeypatch.setattr(F.settings, "APP_URL", "")
+        loc = F._tus_location(self._req({"cf-connecting-ip": "8.8.8.8"}), "ID2")
+        assert loc.startswith("https://") and "testserver" in loc
+
+    def test_xfp_header_authoritative_when_present(self, monkeypatch):
+        from app.api.v1 import files as F
+        monkeypatch.setattr(F.settings, "APP_URL", "")
+        loc = F._tus_location(self._req({"x-forwarded-proto": "https"}), "ID3")
+        assert loc.startswith("https://")
+
+    def test_plain_loopback_dev_stays_http(self, monkeypatch):
+        from app.api.v1 import files as F
+        monkeypatch.setattr(F.settings, "APP_URL", "")
+        loc = F._tus_location(self._req(), "ID4")
+        assert loc == "http://testserver/api/files/tus/ID4"
