@@ -289,7 +289,7 @@ log_format cfip '$remote_addr - $remote_user [$time_local] "$request" '
 # credential-safe variant for proxied API traffic: $uri (no query) so
 # ?link/?token/?ptk/?ticket bearer values never reach disk.
 log_format noquery '$remote_addr - $remote_user [$time_local] "$request_method $uri $server_protocol" '
-                '$status $body_bytes_sent "$http_referer" '
+                '$status $body_bytes_sent "-" '
                 '"$http_user_agent" cf=$http_cf_connecting_ip';
 # share-page access: the /share/<32-hex> path IS a long-lived bearer token,
 # so log the mapped (masked) URI and drop the referer (which would echo it).

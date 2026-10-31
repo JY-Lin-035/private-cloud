@@ -625,3 +625,13 @@ class TestAccessLogCredentialFilter:
         rec.args = ("1.2.3.4:5", "GET", "/api/files/list?parent_folder_uuid=abc", "1.1", 200)
         rec = self._run_filter(rec)
         assert rec.args[2] == "/api/files/list?parent_folder_uuid=abc"
+
+    def test_percent_encoded_values_masked(self):
+        import logging as _l
+        rec = _l.LogRecord("uvicorn.access", _l.INFO, "p", 1,
+                           '%s - "%s %s HTTP/%s" %s', None, None)
+        rec.args = ("1.2.3.4:5", "GET",
+                    "/api/files/download?file_uuid=u&token=" + "ab" * 32 + "%2E111",
+                    "1.1", 200)
+        rec = self._run_filter(rec)
+        assert "ababab…" in rec.args[2] and "ab" * 32 not in rec.args[2]
