@@ -43,6 +43,31 @@ def _decode_tus_metadata(metadata_header: Optional[str]) -> dict:
     return metadata
 
 
+def _tus_location(request: Request, upload_id: str) -> str:
+    """Absolute PATCH URL advertised to tus clients.
+
+    Browsers refuse to send PATCH from an https page to an http URL (mixed
+    content), and CSP connect-src blocks it too, so the scheme MUST be right.
+    url_for() derives the scheme from uvicorn's view (http behind a plain-HTTP
+    tunnel/proxy) and cloudflared does not always carry X-Forwarded-Proto, so
+    we prefer the configured public API base (APP_URL) and otherwise infer
+    HTTPS from Cloudflare markers on a loopback request.
+    """
+    base = (settings.APP_URL or "").strip().rstrip("/")
+    if not base:
+        scheme = request.url.scheme
+        hdrs = request.headers
+        proto = (hdrs.get("x-forwarded-proto") or "").split(",")[0].strip()
+        if proto in ("http", "https"):
+            scheme = proto
+        elif hdrs.get("cf-connecting-ip") or '"https"' in (hdrs.get("cf-visitor") or ""):
+            # Any request through the Cloudflare edge terminates TLS as https.
+            scheme = "https"
+        host = hdrs.get("host") or request.url.netloc
+        base = f"{scheme}://{host}"
+    return f"{base}/api/files/tus/{upload_id}"
+
+
 @router.options("/tus")
 async def tus_options():
     """Return tus handshake headers for browser clients."""
@@ -98,7 +123,7 @@ async def tus_create_upload(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         upload_id = result['upload_id']
-        location = str(request.url_for('tus_patch_upload', upload_id=upload_id))
+        location = str(_tus_location(request, upload_id))
         body = await request.body()
         if body:
             offset_result = file_service.append_tus_chunk(upload_id, 0, body, user_id)
@@ -155,7 +180,7 @@ async def tus_patch_upload(
         response_headers = {
             'Tus-Resumable': '1.0.0',
             'Upload-Offset': str(result['offset']),
-            'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
+            'Location': str(_tus_location(request, upload_id)),
         }
         if result.get('completed'):
             finalize_result = file_service.finalize_tus_upload(upload_id, user_id)
@@ -194,7 +219,7 @@ async def tus_head_upload(
                 'Tus-Resumable': '1.0.0',
                 'Upload-Offset': str(result['offset']),
                 'Upload-Length': str(result['file_size']),
-                'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
+                'Location': str(_tus_location(request, upload_id)),
             },
             content=None,
         )
