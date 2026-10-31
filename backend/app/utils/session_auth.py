@@ -11,26 +11,28 @@ from redis import Redis
 
 
 def parse_session_cookie(cookie_header: Optional[str]) -> Optional[str]:
-    """Extract the raw `session` cookie value from a Cookie header string.
+    """Extract the raw `session` cookie value using the SAME parser the auth
+    layer (Starlette SimpleCookie) uses, and fail closed on duplicates.
 
-    Red-team finding: Starlette's request.cookies resolves DUPLICATE cookie
-    pairs last-wins, while naive first-wins parsing here disagreed — a logged-in
-    user could show a valid session to auth and a junk one to the throttle/
-    accounting layer (evading per-user counters). Fail closed on duplicates:
-    two `session=` pairs is never a legitimate browser state.
+    Red-team DS2-5: earlier hand-rolled `startswith("session=")` disagreed with
+    SimpleCookie on whitespace around `=` (e.g. `session = v`), resurrecting the
+    auth-vs-guard divergence. Red-team r10: duplicate cookies resolved
+    last-wins by Starlette vs first-wins here — accounting evasion.
     """
     if not cookie_header:
         return None
-    found = None
-    count = 0
-    for part in cookie_header.split(";"):
-        part = part.strip()
-        if part.startswith("session="):
-            count += 1
-            found = part[len("session="):] or None
-    if count != 1:
+    import re as _re
+    n = len(_re.findall(r"(?:^|;)\s*[Ss]ession\s*=", cookie_header))
+    if n != 1:
         return None
-    return found
+    try:
+        from http.cookies import SimpleCookie
+        c = SimpleCookie()
+        c.load(cookie_header)
+        m = c.get("session")
+        return m.value if m else None
+    except Exception:
+        return None
 
 
 def split_session_value(value: Optional[str]) -> Optional[tuple[int, str]]:

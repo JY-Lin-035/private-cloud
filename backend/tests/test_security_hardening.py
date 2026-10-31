@@ -683,7 +683,9 @@ class TestRedTeamRound10Fixes:
         db_session.add_all([sub, f]); db_session.commit()
         svc = FileService(db_session)
         r = svc.restore(sample_account.id, f.uuid)
-        assert r.get("stateCode") == 409, r
+        assert 'error' not in r, r
+        db_session.refresh(sub)
+        assert sub.deleted_at is None  # ancestor auto-restored, no orphan
 
     def test_rename_system_folder_forbidden(self, db_session, sample_account, sample_home_folder):
         from app.services.folder_service import FolderService
@@ -710,3 +712,42 @@ class TestRedTeamRound10Fixes:
         assert verify_ticket("hash123", t, "argon-old-prefix")
         assert not verify_ticket("hash123", t, "argon-NEW-prefix"), "rotating password must kill tickets"
         assert not verify_ticket("hash123", t), "no-marker verify must fail for marker'd ticket"
+
+
+class TestRedTeamRound11Locks:
+    """Locks for DS2 bypasses of round-10 fixes."""
+
+    def test_cookie_whitespace_variant_parses(self):
+        from app.utils.session_auth import parse_session_cookie
+        assert parse_session_cookie("session = 1|abc") == "1|abc"
+        assert parse_session_cookie("session= 1|abc") == "1|abc"
+        assert parse_session_cookie("session=1|a; session=2|b") is None
+
+    def test_ticket_marker_changes_with_password(self):
+        from app.services.share_service import _pw_marker
+        h1 = "$argon2id$v=19$m=65536,t=6,p=6$AAAA$hashone"
+        h2 = "$argon2id$v=19$m=65536,t=6,p=6$BBBB$hashtwo"
+        assert _pw_marker(h1) != _pw_marker(h2)
+        assert _pw_marker("") != _pw_marker(h1)
+
+    def test_unique_name_is_case_insensitive(self):
+        from app.utils.pathing import unique_name
+        assert unique_name("A.TXT", {"a.txt"}) != "A.TXT"
+
+    def test_move_depth_guard_exists(self):
+        import inspect
+        from app.services.folder_service import FolderService
+        src = inspect.getsource(FolderService.move_folders)
+        assert "_subtree_height" in src and "MAX_FOLDER_DEPTH" in src
+
+    def test_ancestor_chain_has_no_64_cut(self):
+        import inspect
+        from app.services.folder_service import FolderService
+        src = inspect.getsource(FolderService._ancestor_uuids)
+        assert "guard < 64" not in src
+
+    def test_public_path_segment_budget(self):
+        from app.utils.pathing import sanitize_rel_path
+        deep = "/".join("s%d" % i for i in range(100))
+        segs, err = sanitize_rel_path(deep)
+        assert err is not None

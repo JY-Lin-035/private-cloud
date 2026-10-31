@@ -42,8 +42,10 @@ class FolderRepository(BaseRepository[Folder]):
         """Get the full path from root to the current folder."""
         path = []
         current = self.get_by_uuid(folder_uuid)
+        seen = set()
         
-        while current:
+        while current and current.uuid not in seen:
+            seen.add(current.uuid)
             path.insert(0, {"uuid": current.uuid, "name": current.name})
             if current.parent_id:
                 current = self.get_by_uuid(current.parent_id)

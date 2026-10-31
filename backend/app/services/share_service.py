@@ -17,6 +17,14 @@ from app.config import settings
 from app.utils import logger as log
 from app.utils.security import hash_password, verify_password
 from app.utils.share_ticket import issue_ticket, verify_ticket
+
+
+def _pw_marker(pw):
+    """Password-epoch marker for tickets. Must actually change when the
+    password changes — argon2 hashes share a constant `$argon2id$v=19$m...`
+    prefix, so slicing the raw hash is useless (red-team DS2-1)."""
+    import hashlib
+    return hashlib.sha256((pw or '').encode()).hexdigest()[:16]
 from app.constants import HTTPStatus
 
 
@@ -290,7 +298,7 @@ class ShareService:
             if not verify_password(password, item.share_password):
                 self.logger.info(f"Share password verify failed for link {share_hash[:6]}…")
                 return {'error': '密碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
-            return {'ticket': issue_ticket(share_hash, (item.share_password or '')[:16]),
+            return {'ticket': issue_ticket(share_hash, _pw_marker(item.share_password)),
                     'expires_in': settings.SHARE_TICKET_TTL_SECONDS,
                     'stateCode': HTTPStatus.OK}
         except Exception as e:
@@ -311,7 +319,7 @@ class ShareService:
                 if access_error:
                     return access_error
                 
-                if file.share_password and not verify_ticket(share_hash, ticket, (file.share_password or '')[:16]):
+                if file.share_password and not verify_ticket(share_hash, ticket, _pw_marker(file.share_password)):
                     return {'error': '此分享需要密碼', 'stateCode': 428}
                 
                 file_path = Path(os.path.join(self.storage_base_path, file.uuid))
@@ -338,7 +346,7 @@ class ShareService:
                 if access_error:
                     return access_error
                 
-                if folder.share_password and not verify_ticket(share_hash, ticket, (folder.share_password or '')[:16]):
+                if folder.share_password and not verify_ticket(share_hash, ticket, _pw_marker(folder.share_password)):
                     return {'error': '此分享需要密碼', 'stateCode': 428}
                 
                 return {'error': '資料夾分享不支援下載', 'stateCode': HTTPStatus.BAD_REQUEST}
@@ -379,7 +387,7 @@ class ShareService:
         access_error = self._check_share_access(folder)
         if access_error:
             return None, access_error
-        if folder.share_password and not verify_ticket(share_hash, ticket, (folder.share_password or '')[:16]):
+        if folder.share_password and not verify_ticket(share_hash, ticket, _pw_marker(folder.share_password)):
             return None, {'error': '此分享需要密碼', 'stateCode': 428}
         return folder, None
 

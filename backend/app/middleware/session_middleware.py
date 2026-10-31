@@ -56,16 +56,14 @@ class SessionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Extract session cookie
-        session_token = request.cookies.get('session')
-        if session_token:
-            # Fail closed on duplicate session cookies (auth/guard parser
-            # divergence hardening; see session_auth.parse_session_cookie).
-            raw_cookie = request.headers.get('cookie') or ''
-            dup = sum(1 for p in raw_cookie.split(';') if p.strip().startswith('session='))
-            if dup > 1:
-                logger.info("Session middleware - Duplicate session cookies rejected")
-                return Response(status_code=HTTPStatus.UNAUTHORIZED)
-
+        raw_cookie = request.headers.get('cookie') or ''
+        from app.utils.session_auth import parse_session_cookie
+        session_token = parse_session_cookie(raw_cookie)
+        if session_token is None and 'session' in raw_cookie.lower():
+            # a session-ish cookie exists but the single trusted parser
+            # rejects it (duplicates / malformed) -> fail closed
+            logger.info("Session middleware - Rejected malformed/duplicate session cookie")
+            return Response(status_code=HTTPStatus.UNAUTHORIZED)
         if session_token:
             # Validate session format (id|token)
             if '|' not in session_token:

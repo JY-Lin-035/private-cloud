@@ -370,7 +370,26 @@ async def upload_file(
         file_service = FileService(db)
         
         # Read file content
-        file_content = await file.read()
+        try:
+            declared = int(size or 0)
+        except (TypeError, ValueError):
+            declared = 0
+        if declared < 0:
+            raise HTTPException(status_code=400, detail='Invalid size')
+        cap = max(declared, 0) + 1024 * 1024
+        # DS2-7: bound memory regardless of what the client declares vs sends
+        HARD_MAX = 100 * 1024 * 1024
+        if cap > HARD_MAX:
+            raise HTTPException(status_code=413, detail='檔案過大')
+        buf = bytearray()
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > cap:
+                raise HTTPException(status_code=413, detail='實際大小超過宣告')
+        file_content = bytes(buf)
         file_size = len(file_content)
         
         # Create a mock file object with file attribute

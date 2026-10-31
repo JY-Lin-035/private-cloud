@@ -65,49 +65,61 @@ class FolderService:
             hops += 1
     
     def _soft_delete_children(self, folder_uuid: str):
-        """Recursively soft delete all children (folders and files)."""
-        
+        """Iteratively soft-delete all descendants (cycle-safe, no recursion)."""
+        from collections import deque
         file_repo = FileRepository(self.db)
-        
-        # Get all child folders
-        child_folders = self.folder_repo.get_by_parent(folder_uuid)
-        for child_folder in child_folders:
-            self._soft_delete_children(child_folder.uuid)
-            self.folder_repo.soft_delete(child_folder.uuid)
-        
-        # Get all child files
-        child_files = file_repo.get_by_folder(folder_uuid)
-        for child_file in child_files:
-            file_repo.soft_delete(child_file.uuid)
+        seen = {folder_uuid}
+        q = deque([folder_uuid])
+        while q:
+            cur = q.popleft()
+            child_folders = self.folder_repo.get_by_parent(cur)
+            for child_folder in child_folders:
+                if child_folder.uuid in seen:
+                    continue
+                seen.add(child_folder.uuid)
+                q.append(child_folder.uuid)
+                self.folder_repo.soft_delete(child_folder.uuid)
+            for child_file in file_repo.get_by_folder(cur):
+                file_repo.soft_delete(child_file.uuid)
     
     def _hard_delete_children(self, folder_uuid: str) -> None:
-        """Recursively hard delete all children (folders and files) and their storage files.
-        Only responsible for deletion, not size calculation."""
+        """Iteratively hard-delete all descendants + their storage files.
+
+        Cycle-safe and recursion-free (DS2: >64 depth used to blow the stack
+        mid-delete, skipping the account.used_size decrement => quota drift).
+        Only responsible for deletion, not size calculation.
+        """
+        from collections import deque
         file_repo = FileRepository(self.db)
 
-        # Get all child folders
-        child_folders = self.db.execute(
-            select(Folder).where(Folder.parent_id == folder_uuid)
-        ).scalars().all()
+        # Collect every descendant folder uuid (BFS, seen-guarded)
+        order = []
+        seen = {folder_uuid}
+        q = deque([folder_uuid])
+        while q:
+            cur = q.popleft()
+            for kid in self.db.execute(select(Folder.uuid).where(Folder.parent_id == cur)).scalars().all():
+                if kid in seen:
+                    continue
+                seen.add(kid)
+                order.append(kid)
+                q.append(kid)
 
-        for child_folder in child_folders:
-            # Recursively delete children first
-            self._hard_delete_children(child_folder.uuid)
-            # Delete the folder itself
-            self.folder_repo.hard_delete(child_folder.uuid)
+        # Delete all files under root + descendants
+        parent_ids = [folder_uuid] + order
+        for pid in parent_ids:
+            for cf in self.db.execute(select(File).where(File.parent_folder_id == pid)).scalars().all():
+                fp = os.path.join(self.storage_base_path, cf.uuid)
+                try:
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                except OSError:
+                    pass
+                file_repo.hard_delete(cf.uuid)
 
-        # Get all child files (including deleted ones)
-        child_files = self.db.execute(
-            select(File).where(File.parent_folder_id == folder_uuid)
-        ).scalars().all()
-
-        for child_file in child_files:
-            # Delete actual file from storage
-            file_path = os.path.join(self.storage_base_path, child_file.uuid)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            # Delete file record from database
-            self.file_repo.hard_delete(child_file.uuid)
+        # Delete descendant folders (deepest-first is irrelevant for hard rows)
+        for kid in order:
+            self.folder_repo.hard_delete(kid)
     
     def create(self, user_id: int, parent_folder_uuid: Optional[str], name: str) -> Optional[Dict[str, Any]]:
         """Create a new folder."""
@@ -269,15 +281,18 @@ class FolderService:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def _collect_subtree_file_uuids(self, folder_uuid: str) -> set:
-        """All file uuids anywhere under a folder (for collab revocation)."""
+        """All file uuids anywhere under a folder (iterative, cycle-safe)."""
         try:
-            files = set(self.db.execute(
-                select(File.uuid).where(File.parent_folder_id == folder_uuid)
-            ).scalars().all())
-            for child in self.db.execute(
-                select(Folder.uuid).where(Folder.parent_id == folder_uuid)
-            ).scalars().all():
-                files |= self._collect_subtree_file_uuids(child)
+            from collections import deque
+            files = set()
+            seen = {folder_uuid}
+            q = deque([folder_uuid])
+            while q:
+                cur = q.popleft()
+                files |= set(self.db.execute(select(File.uuid).where(File.parent_folder_id == cur)).scalars().all())
+                for kid in self.db.execute(select(Folder.uuid).where(Folder.parent_id == cur)).scalars().all():
+                    if kid not in seen:
+                        seen.add(kid); q.append(kid)
             return files
         except Exception:
             return set()
@@ -295,35 +310,35 @@ class FolderService:
             if not folder.deleted_at:
                 return {'error': 'Folder not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
 
-            # Red-team F5: restoring under a parent that is still trashed would
-            # create an invisible orphan (in no tree, in no trash view).
-            if folder.parent_id:
-                parent = self.folder_repo.get_by_uuid(folder.parent_id)
-                if parent and parent.deleted_at is not None:
-                    return {'error': '父資料夾仍在垃圾桶中，請先還原父資料夾', 'stateCode': HTTPStatus.CONFLICT}
-            
-            # Recursive function to restore all children under folder_uuid
-            def restore_all_children_recursive(parent_uuid: str):
-                """Recursively restore all children (folders and files) under parent_uuid."""
-                # Get all child folders
-                child_folders = self.db.execute(
-                    select(Folder).where(Folder.parent_id == parent_uuid)
-                ).scalars().all()
-                
-                for child_folder in child_folders:
-                    child_folder.deleted_at = None
-                    # Recursively restore nested children
-                    restore_all_children_recursive(child_folder.uuid)
-                
-                # Get all child files
-                child_files = self.db.execute(
-                    select(File).where(File.parent_folder_id == parent_uuid)
-                ).scalars().all()
-                
-                for child_file in child_files:
-                    child_file.deleted_at = None
-            
-            restore_all_children_recursive(folder_uuid)
+            # DS2-2/F5: restoring under a still-trashed parent used to create an
+            # invisible orphan (batch path had no guard at all). Fix by walking
+            # the ancestor chain and restoring trashed ancestors too, so the
+            # item always returns to a visible tree. Bounded by a seen-set.
+            anc = folder.parent_id
+            aseen = {folder.uuid}
+            while anc and anc not in aseen:
+                aseen.add(anc)
+                p = self.folder_repo.get_by_uuid(anc)
+                if not p:
+                    break
+                if p.deleted_at is not None:
+                    p.deleted_at = None
+                    self.folder_repo.update(p)
+                anc = p.parent_id
+
+            # Restore descendants iteratively (recursion blew the stack on deep trees)
+            from collections import deque
+            rq = deque([folder_uuid])
+            rseen = {folder_uuid}
+            while rq:
+                cur = rq.popleft()
+                for cf in self.db.execute(select(Folder).where(Folder.parent_id == cur)).scalars().all():
+                    cf.deleted_at = None
+                    if cf.uuid not in rseen:
+                        rseen.add(cf.uuid); rq.append(cf.uuid)
+                for cfile in self.db.execute(select(File).where(File.parent_folder_id == cur)).scalars().all():
+                    cfile.deleted_at = None
+            self.db.flush()
             
             # Check for conflict with active folder having same name
             # Handle NULL parent_id comparison correctly
@@ -560,7 +575,9 @@ class FolderService:
                 select(Folder).where(Folder.uuid == folder_uuid)
             ).scalar_one_or_none()
             
-            while current_folder:
+            _seen = set()
+            while current_folder and current_folder.uuid not in _seen:
+                _seen.add(current_folder.uuid)
                 path_parts.append(current_folder.name)
                 if current_folder.parent_id:
                     current_folder = self.db.execute(
@@ -640,15 +657,41 @@ class FolderService:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def _ancestor_uuids(self, folder_uuid: str) -> set:
-        """Set of uuids from this folder up to the root (inclusive)."""
+        """Full ancestor chain (inclusive), cycle-safe and UNBOUNDED in depth.
+
+        DS2-4: the old 64-hop cut silently excluded deeper ancestors, so
+        move's cycle check could be bypassed once depth > 64. Termination is
+        guaranteed by the seen-set even on corrupted (cyclic) data.
+        """
         chain = set()
         cur = self.folder_repo.get_by_uuid(folder_uuid)
-        guard = 0
-        while cur and guard < 64:
+        while cur and cur.uuid not in chain:
             chain.add(cur.uuid)
             cur = self.folder_repo.get_by_uuid(cur.parent_id) if cur.parent_id else None
-            guard += 1
         return chain
+
+    def _subtree_height(self, folder_uuid: str, budget: int = 2000) -> int:
+        """Max depth (in folders) of the subtree rooted at uuid; capped scan."""
+        from collections import deque
+        h = 0
+        q = deque([(folder_uuid, 1)])
+        seen = {folder_uuid}
+        nodes = 0
+        while q:
+            u, d = q.popleft()
+            h = max(h, d)
+            kids = self.db.execute(
+                select(Folder.uuid).where(Folder.parent_id == u)
+            ).scalars().all()
+            for k in kids:
+                if k in seen:
+                    continue
+                seen.add(k)
+                nodes += 1
+                if nodes > budget:
+                    return 10 ** 6  # effectively "too deep/wide" -> reject
+                q.append((k, d + 1))
+        return h
 
     def move_folders(self, user_id: int, folder_uuids: list[str], target_folder_uuid: str) -> Dict[str, Any]:
         """Move folders under target. Cycles/foreign are rejected per item; name collisions auto-renamed."""
@@ -657,11 +700,16 @@ class FolderService:
             if not target or target.owner_id != user_id or target.deleted_at:
                 return {'error': '目標資料夾無效', 'stateCode': HTTPStatus.FORBIDDEN}
 
+            target_depth = len(self._ancestor_uuids(target.uuid))
             moved, renamed, failed = [], {}, []
             rows = []
             for u in folder_uuids[:500]:
                 folder = self.folder_repo.get_by_uuid(u)
                 if not folder:
+                    continue
+                # DS2-3: keep the global depth invariant when re-parenting.
+                if target_depth + self._subtree_height(folder.uuid) > self.MAX_FOLDER_DEPTH:
+                    failed.append({"uuid": folder.uuid, "reason": "移動後資料夾深度超過上限"})
                     continue
                 rows.append((len(self._ancestor_uuids(folder.uuid)), folder))
             rows.sort(key=lambda pair: pair[0])  # shallowest first

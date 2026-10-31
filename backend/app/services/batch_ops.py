@@ -66,11 +66,13 @@ def _subtree_levels(db, user_id: int, top_uuids: List[str]) -> List[List[str]]:
     """BFS over folders. level0 = tops; deeper levels are children uuids."""
     levels: List[List[str]] = [top_uuids]
     frontier = top_uuids
+    seen = set(top_uuids)
     while frontier:
         nxt: List[str] = []
         for chunk in _chunks(frontier):
-            nxt += list(db.execute(select(Folder.uuid).where(
-                Folder.owner_id == user_id, Folder.parent_id.in_(chunk))).scalars().all())
+            nxt += [u for u in db.execute(select(Folder.uuid).where(
+                Folder.owner_id == user_id, Folder.parent_id.in_(chunk))).scalars().all() if u not in seen]
+        seen.update(nxt)
         frontier = nxt
         if frontier:
             levels.append(frontier)
@@ -222,7 +224,34 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                     pass
 
             else:  # restore
-                restore_folders = subtree_uuids
+                restore_folders = list(subtree_uuids)
+                # DS2-2: batch restore must also un-trash the ancestor chain of
+                # every restored top item, else children reappear in a still
+                # trashed parent (invisible orphan) — the exact bug the single
+                # restore guard fixed only for the one-item path.
+                _seen_anc = set(restore_folders)
+                _tops = [tf for tf in top_folders]
+                for tf in _tops:
+                    anc = tf.parent_id
+                    while anc and anc not in _seen_anc:
+                        _seen_anc.add(anc)
+                        # resolve by uuid string (parent_id stores parent uuid)
+                        p_row = db.execute(select(Folder).where(Folder.uuid == anc)).scalar_one_or_none()
+                        if not p_row:
+                            break
+                        if p_row.deleted_at is not None:
+                            restore_folders.append(anc)
+                        anc = p_row.parent_id
+                for f in top_files:
+                    anc = f.parent_folder_id
+                    while anc and anc not in _seen_anc:
+                        _seen_anc.add(anc)
+                        p_row = db.execute(select(Folder).where(Folder.uuid == anc)).scalar_one_or_none()
+                        if not p_row:
+                            break
+                        if p_row.deleted_at is not None:
+                            restore_folders.append(anc)
+                        anc = p_row.parent_id
                 restore_files = [f for f in top_files if f.deleted_at] + \
                                 [f for f in descendants if f.deleted_at]
                 live_names: Dict[str, set] = {}

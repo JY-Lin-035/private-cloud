@@ -622,11 +622,18 @@ class FileService:
             if not file.deleted_at:
                 return {'error': 'File not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
 
-            # Red-team F5: refuse to restore into a folder that is still trashed.
+            # DS2-2/F5: restore ancestor folder chain so the file lands back in
+            # a visible tree instead of becoming an invisible orphan.
             if file.parent_folder_id:
-                _pf = self.folder_repo.get_by_uuid(file.parent_folder_id)
-                if _pf and _pf.deleted_at is not None:
-                    return {'error': '父資料夾仍在垃圾桶中，請先還原父資料夾', 'stateCode': HTTPStatus.CONFLICT}
+                anc = self.folder_repo.get_by_uuid(file.parent_folder_id)
+                aseen = set()
+                while anc and anc.uuid not in aseen:
+                    aseen.add(anc.uuid)
+                    if anc.deleted_at is not None:
+                        anc.deleted_at = None
+                        self.db.add(anc)
+                    anc = self.folder_repo.get_by_uuid(anc.parent_id) if anc.parent_id else None
+                self.db.flush()
             
             # Check for name conflict with existing files in the same folder
             if file.parent_folder_id:
