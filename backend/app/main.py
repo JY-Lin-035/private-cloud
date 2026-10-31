@@ -17,6 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 # element 2 = "method path proto"); we must rewrite that element IN PLACE and
 # never clear args, or every request line raises a logging error and is lost.
 class _AccessLogSecretFilter(logging.Filter):
+    # NOTE: param NAMES written in percent-encoded form (e.g. %74icket=) are
+    # not matched here; the Cloudflare edge normalizes percent-encodings of
+    # unreserved characters before reaching us, and the value-encoded variant
+    # IS covered ('%' in the class). Direct loopback clients are out of the
+    # remote threat model (documented, non-blocking per security review R9).
     _PATTERN = _re.compile(
         r"([?&](?:link|token|ptk|ticket)=)([0-9A-Za-z_.%-]{6})[0-9A-Za-z_.%-]+"
     )
