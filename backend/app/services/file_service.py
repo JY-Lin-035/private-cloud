@@ -578,8 +578,13 @@ class FileService:
                 removed = self.file_repo.hard_delete(file_uuid)
                 if not removed:
                     return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
-                account.used_size = max(0, account.used_size - file_size)
-                self.account_repo.update(account)
+                # DS7: hard_delete committed separately; reload the account
+                # under a fresh row lock so concurrent deltas are never lost.
+                acct = self.db.query(Account).filter(
+                    Account.id == user_id).with_for_update().first()
+                if acct:
+                    acct.used_size = max(0, (acct.used_size or 0) - file_size)
+                    self.account_repo.update(acct)
                 file_path = os.path.join(self.storage_base_path, file.uuid)
                 try:
                     if os.path.exists(file_path):

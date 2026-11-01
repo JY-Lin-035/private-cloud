@@ -940,11 +940,6 @@ class TestRedTeamRound6Locks:
         db_session.refresh(sample_account); db_session.refresh(collab)
         assert sample_account.used_size == 100   # owner charged by delta (+100), not absolute
         assert collab.used_size == 0             # collaborator untouched
-        # and REST PUT source must lock f.owner_id — assert the call site changed
-        import inspect
-        from app.api.v1 import files as F
-        src = inspect.getsource(F.save_file_content)
-        assert "Account.id == owner_id" in src and "owner_id = f.owner_id" in src
 
     def test_f6_2_preview_raw_uses_role(self):
         import inspect
@@ -957,3 +952,92 @@ class TestRedTeamRound6Locks:
         from app.api.v1 import files as F, collab_ws as C
         assert '"editor", "viewer"' in inspect.getsource(F)
         assert '"editor", "viewer"' in inspect.getsource(C)
+
+
+class TestSaveContentQuotaBehavioral:
+    """DS7 F7-1 lock: save_file_content must compute size deltas UNDER the
+    account+file locks and land quota exactly on real bytes. Self-contained
+    app with a StaticPool sqlite shared across threads (serializes, like the
+    real account-row lock does on MySQL)."""
+
+    def _build(self, monkeypatch, tmp_path):
+        import uuid as _u
+        from datetime import datetime
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from unittest.mock import MagicMock
+        from app.models.base import Base
+        import app.models.account, app.models.folder, app.models.file, app.models.collaboration  # noqa
+        from app.models.account import Account
+        from app.models.folder import Folder
+        from app.models.file import File
+        from app.api.v1 import files as F
+        from app.api import dependencies as D
+        from app.services.feature_flag_service import FeatureFlagService
+
+        eng = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                            poolclass=StaticPool)
+        Base.metadata.create_all(eng)
+        S = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False)
+        db = S()
+        owner = Account(name="own71", password="x", email="o7@x.cc", signal_file_size=10**8,
+                        total_file_size=10**8, used_size=0, identity=0, enable=True,
+                        email_verified_at=datetime.utcnow())
+        db.add(owner); db.flush()
+        home = Folder(uuid=str(_u.uuid4()), owner_id=owner.id, parent_id=None,
+                      name="Home", size=0, is_system=True)
+        db.add(home); db.flush()
+        f = File(uuid=str(_u.uuid4()), owner_id=owner.id, parent_folder_id=home.uuid,
+                 name="q.txt", size=0, mime_type="text/plain", storage_path="x")
+        db.add(f); db.commit()
+        self._oid, self._fid, self._dbfile = owner.id, f.uuid, db
+
+        monkeypatch.setattr(F.settings, "STORAGE_BASE_PATH", str(tmp_path))
+        monkeypatch.setattr(FeatureFlagService, "effective_enabled",
+                            lambda self, key, default=False: True)
+        def _gd():
+            yield S()
+        app = FastAPI()
+        app.include_router(F.router)
+        app.dependency_overrides[D.get_db] = _gd
+        app.dependency_overrides[D.get_current_user_id] = lambda: owner.id
+        rmock = MagicMock()
+        rmock.pipeline.return_value.execute.return_value = [1, 500]
+        rmock.smembers.return_value = set()
+        rmock.get.return_value = None
+        rmock.exists.return_value = 0
+        rmock.set.return_value = True
+        app.dependency_overrides[D.get_redis] = lambda: rmock
+        return TestClient(app), S, tmp_path
+
+    def test_sequential_and_interleaved_edits_keep_quota_equal_bytes(self, monkeypatch, tmp_path):
+        import threading
+        c, S, tmp_path = self._build(monkeypatch, tmp_path)
+        fid = self._fid
+
+        def used():
+            d = S()
+            try:
+                from app.models.account import Account
+                return d.query(Account.used_size).filter(Account.id == self._oid).scalar()
+            finally:
+                d.close()
+
+        assert c.put("/api/files/content", json={"uuid": fid, "text": "A" * 500}).status_code == 200
+        assert used() == 500
+        assert c.put("/api/files/content", json={"uuid": fid, "text": "B" * 100}).status_code == 200
+        assert used() == 100
+        assert c.put("/api/files/content", json={"uuid": fid, "text": "C" * 900}).status_code == 200
+        assert used() == 900
+
+        def put(s):
+            c.put("/api/files/content", json={"uuid": fid, "text": s * 300})
+        ts = [threading.Thread(target=put, args=(ch,)) for ch in "XYZ"]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        assert used() == 300                      # exactly one 300-byte file
+        import os
+        assert os.path.getsize(os.path.join(str(tmp_path), fid)) == 300
+        self._dbfile.close()

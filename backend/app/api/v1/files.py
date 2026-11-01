@@ -720,7 +720,7 @@ def _file_access_role(db: Session, user_id: int, f) -> str | None:
     ).scalars().first()
     if not c:
         return None
-    role = (c.permission or "editor").strip().lower()
+    role = (c.permission or "").strip().lower()
     return role if role in ("editor", "viewer") else "viewer"  # F6-3 whitelist, unknown => read-only
 
 
@@ -830,33 +830,46 @@ async def save_file_content(
     """Write editor content back atomically with quota accounting and 409 conflict guard."""
     _require_preview_flag()
     batch_ops.assert_not_deleting(redis, request.uuid)
-    f = _load_editable(db, user_id, request.uuid)
-    if _file_access_role(db, user_id, f) == "viewer":
-        raise HTTPException(status_code=403, detail="唯讀成員無法編輯此檔案")
-    if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
-        raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
+    _load_editable(db, user_id, request.uuid)          # fast 404/415 shape checks
     data = request.text.encode("utf-8")
     if len(data) > MAX_EDIT_BYTES:
         raise HTTPException(status_code=413, detail="內容超過編輯上限 2MB")
+    # F7-1: EVERY size-dependent decision must be made under locks, in the
+    # same order as WS persist_content/upload: Account FOR UPDATE -> File
+    # FOR UPDATE. A pre-lock f.size read let REST PUT compute its delta from
+    # stale bytes while a concurrent persist wrote the file, double-charging
+    # the owner (or under-charging on the reverse interleave).
+    owner_id_row = db.execute(
+        select(FileModel.owner_id).where(FileModel.uuid == request.uuid)
+    ).scalar_one_or_none()
+    if owner_id_row is None:
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    acct = db.query(Account).filter(Account.id == owner_id_row).with_for_update().first()
+    f = db.execute(
+        select(FileModel).where(FileModel.uuid == request.uuid).with_for_update()
+    ).scalar_one_or_none()
+    if f is None or f.deleted_at is not None or not is_editable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    role = _file_access_role(db, user_id, f)
+    if role is None:
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    if role == "viewer":
+        raise HTTPException(status_code=403, detail="唯讀成員無法編輯此檔案")
+    if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
+        raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
+    if acct is None:
+        raise HTTPException(status_code=404, detail="帳號不存在")
     delta = len(data) - (f.size or 0)
-    # F6-1: quota belongs to the FILE OWNER (bytes live in their tree), not
-    # the caller. Collaborator edits must charge/refund the owner's account,
-    # matching the WS persist_content path.
-    owner_id = f.owner_id
+    # F6-1: quota belongs to the FILE OWNER (bytes live in their tree).
     if delta != 0:
-        acct = db.query(Account).filter(Account.id == owner_id).with_for_update().first()
-        if acct is None:
-            raise HTTPException(status_code=404, detail="帳號不存在")
         if delta > 0:
             if len(data) > acct.signal_file_size:
                 raise HTTPException(status_code=413, detail="超過單檔大小上限")
             if (acct.used_size or 0) + delta > acct.total_file_size:
                 raise HTTPException(status_code=413, detail="空間不足，無法儲存")
-            acct.used_size = (acct.used_size or 0) + delta
-        else:
-            acct.used_size = max(0, (acct.used_size or 0) + delta)
+        acct.used_size = max(0, (acct.used_size or 0) + delta)
     path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
-    tmp = path + ".tmp"
+    tmp = f"{path}.{_os.getpid()}.rest.tmp"
     try:
         with open(tmp, "wb") as fh:
             fh.write(data)

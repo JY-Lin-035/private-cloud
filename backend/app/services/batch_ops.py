@@ -173,6 +173,10 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                     pass
 
             elif mode == "permanent":
+                # DS7 2.1: align lock order account -> file rows (previously
+                # file-delete happened before the account UPDATE, opposite to
+                # WS persist/upload and deadlock-prone under concurrency).
+                db.query(Account).filter(Account.id == user_id).with_for_update().first()
                 doomed_files = top_files + descendants
                 seen: set = set()
                 freed = 0
