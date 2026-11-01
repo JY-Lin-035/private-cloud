@@ -173,26 +173,38 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                     pass
 
             elif mode == "permanent":
-                # DS7 2.1: align lock order account -> file rows (previously
-                # file-delete happened before the account UPDATE, opposite to
-                # WS persist/upload and deadlock-prone under concurrency).
-                db.query(Account).filter(Account.id == user_id).with_for_update().first()
+                # DS7 2.1 / R18-1: lock order account -> file rows, and every
+                # quota-relevant value must be a *current read* taken AFTER
+                # the account lock. A plain SELECT following FOR UPDATE still
+                # returns the REPEATABLE READ snapshot, silently losing
+                # concurrent used_size/size deltas (lost update).
+                acct = (
+                    db.query(Account)
+                    .filter(Account.id == user_id)
+                    .with_for_update()
+                    .first()
+                )
                 doomed_files = top_files + descendants
-                seen: set = set()
-                freed = 0
-                for f in doomed_files:
-                    if f.uuid not in seen:
-                        seen.add(f.uuid)
-                        freed += f.size or 0
+                seen: set = set(f.uuid for f in doomed_files)
+                ordered = sorted(seen)
+                fresh_size: Dict[str, int] = {}
+                for chunk in _chunks(ordered):
+                    for fu, sz in db.execute(
+                        select(File.uuid, File.size)
+                        .where(File.owner_id == user_id, File.uuid.in_(chunk))
+                        .with_for_update()
+                    ).all():
+                        fresh_size[fu] = sz or 0
+                freed = sum(fresh_size.values())
                 doomed_folders = set(subtree_uuids)
                 by_parent: Dict[str, int] = {}
                 for f in doomed_files:
                     if f.parent_folder_id and f.parent_folder_id not in doomed_folders:
-                        by_parent[f.parent_folder_id] = by_parent.get(f.parent_folder_id, 0) + (f.size or 0)
+                        by_parent[f.parent_folder_id] = by_parent.get(f.parent_folder_id, 0) + fresh_size.get(f.uuid, f.size or 0)
                 for tf in top_folders:
                     if tf.parent_id and tf.parent_id not in doomed_folders:
                         by_parent[tf.parent_id] = by_parent.get(tf.parent_id, 0) + (tf.size or 0)
-                for chunk in _chunks(list(seen)):
+                for chunk in _chunks(ordered):
                     res = db.execute(sa_delete(File).where(
                         File.owner_id == user_id, File.uuid.in_(chunk)))
                     n_files += res.rowcount or 0
@@ -201,8 +213,7 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                         res = db.execute(sa_delete(Folder).where(
                             Folder.owner_id == user_id, Folder.uuid.in_(chunk)))
                         n_folders += res.rowcount or 0
-                acct = db.query(Account).filter(Account.id == user_id).first()
-                if acct and freed:
+                if acct:
                     acct.used_size = max(0, (acct.used_size or 0) - freed)
                 db.commit()
                 from app.services.folder_service import FolderService

@@ -1041,3 +1041,52 @@ class TestSaveContentQuotaBehavioral:
         import os
         assert os.path.getsize(os.path.join(str(tmp_path), fid)) == 300
         self._dbfile.close()
+
+
+class TestBatchPermanentQuotaR19:
+    """R8 heredoc truncation regrew these locks; R19: account FOR UPDATE row
+    kept and refunded from; sizes re-read current (post-lock) not snapshot."""
+
+    def _perm_branch(self):
+        src = open("app/services/batch_ops.py").read()
+        return src.split('elif mode == "permanent":')[1].split('else:  # restore')[0]
+
+    def test_account_locked_first_and_kept(self):
+        b = self._perm_branch()
+        assert b.index("Account.id == user_id)") < b.index("sa_delete(File)")
+        assert "acct = (" in b and ".with_for_update()" in b
+        assert "used_size = max(0, (acct.used_size or 0) - freed)" in b
+        # plain snapshot re-read removed
+        assert re.search(r"acct =\s*db\.query\(Account\)\.filter\(Account\.id == user_id\)\.first\(\)", b) is None
+
+    def test_sizes_are_current_reads(self):
+        b = self._perm_branch()
+        assert "select(File.uuid, File.size)" in b
+        assert "fresh_size" in b and "freed = sum(fresh_size.values())" in b
+        # locking reads come after the account lock
+        assert b.index("Account.id == user_id)") < b.index("select(File.uuid, File.size)")
+
+
+class TestFolderTrashRevokeShareLock:
+    def test_trash_clears_share_in_all_paths(self):
+        fs = open("app/services/folder_service.py").read()
+        bo = open("app/services/batch_ops.py").read()
+        assert "child_folder.shared = None" in fs or "folder.shared = None" in fs
+        assert "shared=None" in bo  # batch soft-delete clears hash atomically
+
+    def test_share_access_denies_trashed_items(self):
+        src = open("app/services/share_service.py").read()
+        assert "_check_share_access" in src
+        assert 'getattr(item, "deleted_at", None) is not None' in src
+        assert src.count("deleted_at.is_(None)") >= 3
+
+
+class TestTicketPwEpochLock:
+    def test_ticket_marker_binds_password_epoch(self):
+        st = open("app/utils/share_ticket.py").read()
+        assert "def issue_ticket(share_hash: str, pwd_marker" in st
+        assert "def verify_ticket(share_hash: str, ticket" in st
+        assert "share_hash}|{pwd_marker" in st
+        w = open("app/services/share_service.py").read()
+        assert "_pw_marker" in w
+        assert "verify_ticket(share_hash, ticket, _pw_marker" in w
