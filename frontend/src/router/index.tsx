@@ -29,7 +29,6 @@ const router = createBrowserRouter([
         <div className="flex flex-col min-h-screen">
           <Nav layoutClass="flex-0" />
           <div className="flex-1 overflow-y-auto">
-            <LandingIntro />
             <Home layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
             <LandingDetail />
           </div>
