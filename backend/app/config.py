@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     MAX_ROOM_CONNECTIONS: int = 50                   # concurrent sockets per file room
     WS_MSG_PER_MIN: int = 1200                       # per-connection message rate (burst-tolerant)
     COLLAB_STATE_TTL_SECONDS: int = 7 * 24 * 3600    # expire abandoned collab keys
+    COLLAB_FAILED_STATE_TTL_SECONDS: int = 3600      # R11-MED-1: unbufferable edits expire fast
     COLLAB_UPDATE_BUDGET_BYTES: int = 16 * 1024 * 1024  # per-file y-update log budget
     MAX_Y_INCREMENTAL_BYTES: int = 2 * 1024 * 1024    # single incremental y_update cap
 

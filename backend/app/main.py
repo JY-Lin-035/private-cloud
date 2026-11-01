@@ -171,15 +171,35 @@ if settings.ENABLE_API_DOCS:
 
 
 # Background scheduler for auto-save and snapshots
+def collab_autosave_tick(r):
+    """One autosave pass. On success with no live members, the volatile collab
+    keys are pure duplication of the file we just committed to disk -> drop
+    them (a rejoin rebuilds from disk). On failure (quota full etc.) the edit
+    is unrecoverable right now; cap the keys' TTL so abandoned buffered state
+    stops pinning Redis for 7 days per R11-MED-1."""
+    from app.services.snapshot_service import auto_save_to_disk, purge_file_state, demote_failed_state_ttl
+    for key in r.scan_iter("collab_content:*"):
+        file_uuid = key.replace("collab_content:", "")
+        result = auto_save_to_disk(file_uuid, r)
+        if result is True:
+            try:
+                from app.api.v1.collab_ws import manager as _cm
+                occupied = file_uuid in _cm.rooms
+            except Exception:
+                occupied = True
+            if not occupied:
+                purge_file_state(file_uuid, r, include_snapshots=False)
+        elif result is False:
+            demote_failed_state_ttl(file_uuid, r)
+
+
 def _scheduler():
     elapsed = 0
     while True:
         time.sleep(30)
         elapsed += 30
         try:
-            for key in redis_client.scan_iter("collab_content:*"):
-                file_uuid = key.replace("collab_content:", "")
-                auto_save_to_disk(file_uuid, redis_client)
+            collab_autosave_tick(redis_client)
             if elapsed >= settings.SNAPSHOT_INTERVAL:
                 elapsed = 0
                 for key in redis_client.scan_iter("collab_content:*"):

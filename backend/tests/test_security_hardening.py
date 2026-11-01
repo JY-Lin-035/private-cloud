@@ -1090,3 +1090,88 @@ class TestTicketPwEpochLock:
         w = open("app/services/share_service.py").read()
         assert "_pw_marker" in w
         assert "verify_ticket(share_hash, ticket, _pw_marker" in w
+
+
+class FakeCollabRedis:
+    def __init__(self):
+        self.kv = {}
+        self._ttls = {}
+        self.deleted = []
+    def scan_iter(self, pattern):
+        pfx = pattern.rstrip("*")
+        return [k for k in self.kv if k.startswith(pfx)]
+    def get(self, k):
+        return self.kv.get(k)
+    def ttl(self, k):
+        return self._ttls.get(k, -2)
+    def expire(self, k, s):
+        if k in self.kv:
+            self._ttls[k] = s
+    def delete(self, k):
+        if k in self.kv:
+            self.deleted.append(k)
+            del self.kv[k]
+            self._ttls.pop(k, None)
+            return 1
+        return 0
+
+
+class TestAutosaveRedisPinningR20:
+    """R11-MED-1: autosaved/failed collab buffers must not pin Redis 7d."""
+
+    def _seed(self, r, uuid="f"*20, content="x"*1000):
+        r.kv[f"collab_content:{uuid}"] = content
+        r._ttls[f"collab_content:{uuid}"] = 7*24*3600
+        r.kv[f"collab_ystate:{uuid}"] = "b64blob"
+        r._ttls[f"collab_ystate:{uuid}"] = 7*24*3600
+        r.kv[f"collab_snapshot:{uuid}"] = '[{"id":1}]'
+        r._ttls[f"collab_snapshot:{uuid}"] = 7*24*3600
+        return uuid
+
+    def test_success_and_empty_room_purges_volatile_keeps_snapshots(self, monkeypatch):
+        from app.main import collab_autosave_tick
+        import app.services.collab_persist as cp
+        import app.api.v1.collab_ws as cw
+        monkeypatch.setattr(cp, "persist_content", lambda u, c: True)
+        r = FakeCollabRedis()
+        u = self._seed(r)
+        assert not cw.manager.rooms.get(u)
+        collab_autosave_tick(r)
+        assert f"collab_content:{u}" in r.deleted
+        assert f"collab_ystate:{u}" in r.deleted
+        assert f"collab_snapshot:{u}" not in r.deleted  # version archive survives
+
+    def test_success_with_live_room_keeps_state(self, monkeypatch):
+        from app.main import collab_autosave_tick
+        import app.services.collab_persist as cp
+        import app.api.v1.collab_ws as cw
+        monkeypatch.setattr(cp, "persist_content", lambda u, c: True)
+        r = FakeCollabRedis()
+        u = self._seed(r)
+        cw.manager.rooms[u] = {"conn": {"user_id": 1, "websocket": None}}
+        try:
+            collab_autosave_tick(r)
+        finally:
+            cw.manager.rooms.pop(u, None)
+        assert f"collab_content:{u}" not in r.deleted
+        assert r._ttls[f"collab_content:{u}"] == 7*24*3600
+
+    def test_failure_demotes_ttl_once(self, monkeypatch):
+        from app.main import collab_autosave_tick
+        import app.services.collab_persist as cp
+        monkeypatch.setattr(cp, "persist_content", lambda u, c: False)
+        r = FakeCollabRedis()
+        u = self._seed(r)
+        collab_autosave_tick(r)
+        assert f"collab_content:{u}" not in r.deleted
+        assert r._ttls[f"collab_content:{u}"] == 3600
+        ttl1 = r._ttls[f"collab_ystate:{u}"]
+        collab_autosave_tick(r)  # next tick must not re-arm a sliding TTL
+        assert r._ttls[f"collab_ystate:{u}"] == ttl1
+        assert r._ttls[f"collab_snapshot:{u}"] == 7*24*3600
+
+    def test_source_lock_scheduler_tick_contract(self):
+        src = open("app/main.py").read()
+        assert "def collab_autosave_tick" in src
+        assert "include_snapshots=False" in src
+        assert "demote_failed_state_ttl" in src
