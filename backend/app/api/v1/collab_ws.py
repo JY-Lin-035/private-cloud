@@ -32,7 +32,7 @@ MAX_Y_UPDATES = 1000
 Y_STATE_VERSION = "5"
 PERM_TTL = 10  # seconds; per-connection permission cache
 
-_perm_cache: Dict[tuple[str, int], tuple[bool, float]] = {}
+_perm_cache: Dict[tuple[str, int], tuple[str, float]] = {}  # role string (or __none__)
 _perm_lock = threading.Lock()
 
 
@@ -448,7 +448,16 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
             # permission column on every write-capable frame type (the column
             # existed but was never checked before).
             if msg_type in _WRITE_TYPES:
-                role = await asyncio.to_thread(_perm_role_cached, file_uuid, user_id)
+                # DS4 F-1 / DS5: viewer-role collaborators are read-only; gate
+                # every write-capable frame BEFORE dispatch (this block must
+                # not consume the per-type handlers — DS5 F5-1 regression).
+                # DS5(1.4d): disk-writing frames re-check the role UNCACHED so
+                # a demotion (editor->viewer) takes effect immediately on disk.
+                _force = msg_type in ("persist_text", "save", "switch_version", "y_projection")
+                if _force:
+                    with _perm_lock:
+                        _perm_cache.pop((file_uuid, user_id), None)
+                role = await asyncio.to_thread(_perm_role_cached, file_uuid, user_id, _force)
                 if role is None:
                     await websocket.close(code=4403)
                     break
@@ -456,6 +465,7 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
                     await websocket.send_json({"type": "write_error", "message": "唯讀成員無法編輯此檔案"})
                     continue
 
+            if msg_type == "y_init_state":
                 if not await asyncio.to_thread(_perm_ok, file_uuid, user_id):
                     await websocket.close(code=4403)
                     break

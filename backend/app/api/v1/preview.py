@@ -58,8 +58,12 @@ async def issue_preview_token(
     origin = http_request.headers.get("origin")
     if origin and origin not in settings.allowed_origins:
         raise HTTPException(status_code=403, detail="來源不受信任")
-    f = db.execute(select(File).where(File.uuid == request.uuid, File.owner_id == user_id)).scalar_one_or_none()
+    f = db.execute(select(File).where(File.uuid == request.uuid)).scalar_one_or_none()
     if f is None or f.deleted_at is not None or ext_of(f.name) not in SANDBOX_EXTS:
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援沙箱預覽")
+    # DS5 F5-2: collaborators (any role) may preview; strangers get 404.
+    from app.api.v1.files import _file_access_role
+    if _file_access_role(db, user_id, f) is None:
         raise HTTPException(status_code=404, detail="檔案不存在或不支援沙箱預覽")
     batch_ops.assert_not_deleting(redis, f.uuid)
     token = secrets.token_urlsafe(32)

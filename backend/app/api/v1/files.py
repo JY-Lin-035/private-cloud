@@ -705,11 +705,29 @@ def _fmt_dt(dt) -> str:
     return dt.isoformat() if isinstance(dt, _dt) else str(dt)
 
 
+def _file_access_role(db: Session, user_id: int, f) -> str | None:
+    """DS5 F5-2: single source for file-level roles on editor surfaces."""
+    if f is None:
+        return None
+    if f.owner_id == user_id:
+        return "owner"
+    from app.models.collaboration import Collaboration
+    c = db.execute(
+        select(Collaboration).where(
+            Collaboration.file_uuid == f.uuid,
+            Collaboration.collaborator_id == user_id,
+        )
+    ).scalars().first()
+    return (c.permission or "editor").lower() if c else None
+
+
 def _load_editable(db: Session, user_id: int, file_uuid: str) -> FileModel:
     f = db.execute(
-        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+        select(FileModel).where(FileModel.uuid == file_uuid)
     ).scalar_one_or_none()
     if f is None or f.deleted_at is not None or not is_editable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    if _file_access_role(db, user_id, f) is None:
         raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
     return f
 
@@ -810,6 +828,8 @@ async def save_file_content(
     _require_preview_flag()
     batch_ops.assert_not_deleting(redis, request.uuid)
     f = _load_editable(db, user_id, request.uuid)
+    if _file_access_role(db, user_id, f) == "viewer":
+        raise HTTPException(status_code=403, detail="唯讀成員無法編輯此檔案")
     if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
         raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
     data = request.text.encode("utf-8")
@@ -865,9 +885,11 @@ _RANGE_RE = _re.compile(r'bytes=(\d*)-(\d*)$')
 
 def _load_streamable(db: Session, user_id: int, file_uuid: str) -> FileModel:
     f = db.execute(
-        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+        select(FileModel).where(FileModel.uuid == file_uuid)
     ).scalar_one_or_none()
     if f is None or f.deleted_at is not None or not is_streamable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援串流")
+    if _file_access_role(db, user_id, f) is None:
         raise HTTPException(status_code=404, detail="檔案不存在或不支援串流")
     path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
     if not _os.path.isfile(path):

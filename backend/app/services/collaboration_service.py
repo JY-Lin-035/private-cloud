@@ -134,7 +134,9 @@ class CollaborationService:
     def get_owned_collaborations(self, owner_id: int) -> Optional[Dict[str, Any]]:
         """Get all collaborations initiated by the current user (inviter view)."""
         try:
-            collabs = self.collab_repo.get_by_owner(owner_id)[:1000]
+            collabs = self.collab_repo.get_by_owner(owner_id)
+            total_all = len(collabs)
+            collabs = collabs[:1000]
             # DS4 J-1: batch loads instead of per-row queries
             from app.models.file import File as _F
             fmap = {}
@@ -163,8 +165,13 @@ class CollaborationService:
                     'permission': c.permission,
                     'created_at': (c.created_at + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
                 })
+            # DS5 F5-3: hide files that are currently trashed (invitee view already does)
+            for fu in [k for k, v in file_groups.items()
+                       if fmap.get(k) is None or fmap[k].deleted_at is not None]:
+                file_groups.pop(fu, None)
             items = list(file_groups.values())
-            return {'items': items, 'total': len(items), 'stateCode': HTTPStatus.OK}
+            return {'items': items, 'total': len(items), 'capped': total_all > 1000,
+                    'stateCode': HTTPStatus.OK}
         except Exception as e:
             return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 

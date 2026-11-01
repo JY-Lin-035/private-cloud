@@ -808,3 +808,98 @@ class TestRedTeamRound12Locks:
         from app.api.v1 import files as fs
         src = inspect.getsource(fs)
         assert "except (TypeError, ValueError):" in src and "Invalid Upload-Length" in src
+
+
+class TestWsDispatchBehavioral:
+    """DS5 F5-1 lock: the viewer gate must not shadow the per-type handlers.
+    Drives the REAL websocket_collab loop with a scripted fake socket and
+    asserts dispatch side effects (behavior, not source strings)."""
+
+    @staticmethod
+    def _run(monkeypatch, role, msgs, fu="F" * 36, uid=109):
+        import asyncio, types
+        from app.api.v1 import collab_ws as cw
+        from starlette.websockets import WebSocketDisconnect
+
+        calls = {"persist": [], "append": [], "broadcast": [], "sent": [], "state": []}
+
+        class FakeR:
+            def getdel(self, k): return f"{uid}:{fu}"
+            def get(self, k): return "x" if k.startswith("session:") else None
+            def set(self, *a, **k): return True
+            def setex(self, *a, **k): return True
+            def delete(self, *a): return 1
+            def expire(self, *a, **k): return True
+            def close(self): pass
+        monkeypatch.setattr(cw, "Redis", types.SimpleNamespace(from_url=lambda *a, **k: FakeR()))
+        monkeypatch.setattr(cw, "_perm_ok", lambda *a, **k: True)
+        monkeypatch.setattr(cw, "_perm_role_cached", lambda *a, **k: role)
+        monkeypatch.setattr(cw, "_ensure_y_state_version", lambda *a: None)
+        monkeypatch.setattr(cw, "_load_y_base_content", lambda *a: "ORIGINAL")
+        monkeypatch.setattr(cw, "_get_y_updates", lambda *a, **k: [])
+        monkeypatch.setattr(cw, "get_snapshots", lambda *a: [])
+        monkeypatch.setattr(cw, "_snapshot_summary", lambda s: [])
+        monkeypatch.setattr(cw, "_room_users", lambda f: [])
+        monkeypatch.setattr(cw, "_get_y_state_key", lambda f: "yst")
+        monkeypatch.setattr(cw, "_watch", lambda *a, **k: asyncio.sleep(3600))
+        def _bc(f, msg, exclude=None):
+            calls["broadcast"].append(msg["type"])
+        async def _bc_a(f, msg, exclude=None): calls["broadcast"].append(msg.get("type"))
+        monkeypatch.setattr(cw, "_broadcast", _bc_a)
+        monkeypatch.setattr(cw, "_append_y_update", lambda f, r, u, cap: calls["append"].append(u) or True)
+        monkeypatch.setattr(cw, "_has_y_updates", lambda f, r: False)
+        monkeypatch.setattr(cw, "_set_collab_content", lambda f, r, c: (calls["state"].append(c), True)[1])
+        monkeypatch.setattr(cw, "_set_y_state", lambda f, r, u: None)
+        def _pc(file_uuid, content): calls["persist"].append(content); return True
+        async def _pc_a(*a, **k): return True
+        monkeypatch.setattr(cw, "persist_content", lambda f, c: calls["persist"].append(c) or True)
+
+        class FakeWS:
+            def __init__(self, script): self.script = list(script); self.sent = []
+            @property
+            def headers(self): return {}
+            scope = {"subprotocols": [cw.WS_SUBPROTOCOL, "T" * 43]}
+            async def accept(self, subprotocol=None): pass
+            async def close(self, code=1000): pass
+            async def receive_json(self):
+                if not self.script: raise WebSocketDisconnect()
+                await asyncio.sleep(0)
+                return self.script.pop(0)
+            async def send_json(self, obj): self.sent.append(obj); calls["sent"].append(obj)
+
+        mgr = types.SimpleNamespace(count=lambda f: 0, add=lambda *a: None,
+                                    remove=lambda *a: None, rooms={})
+        monkeypatch.setattr(cw, "manager", mgr)
+        ws = FakeWS(msgs)
+        asyncio.run(cw.websocket_collab(ws, fu))
+        return calls
+
+    FU = "F" * 36
+
+    def test_owner_persist_reaches_disk(self, monkeypatch):
+        calls = self._run(monkeypatch, "owner",
+                          [{"type": "persist_text", "content": "V2"}], self.FU)
+        assert "V2" in calls["persist"], calls          # F5-1 regression lock
+        assert not any(s.get("type") == "write_error" for s in calls["sent"])
+
+    def test_editor_y_update_broadcasts(self, monkeypatch):
+        calls = self._run(monkeypatch, "editor",
+                          [{"type": "y_update", "update": "dXBk"}], self.FU)
+        assert calls["append"], calls                   # appended
+        assert "y_update" in calls["broadcast"]         # broadcast to peers
+
+    def test_viewer_write_rejected_not_dispatched(self, monkeypatch):
+        calls = self._run(monkeypatch, "viewer",
+                          [{"type": "persist_text", "content": "X"}], self.FU)
+        assert not calls["persist"]
+        assert any(s.get("type") == "write_error" for s in calls["sent"])
+
+    def test_none_role_closes(self, monkeypatch):
+        calls = self._run(monkeypatch, None,
+                          [{"type": "y_update", "update": "x"}], self.FU)
+        assert not calls["append"]
+
+    def test_unknown_type_falls_through_harmlessly(self, monkeypatch):
+        calls = self._run(monkeypatch, "editor",
+                          [{"type": "cursor", "cursor": {"i": 1}}], self.FU)
+        assert not calls["persist"] and not calls["append"]
