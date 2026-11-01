@@ -1,7 +1,7 @@
 from redis import Redis
 from app.services import batch_ops
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.schemas.folder import (
     CreateFolderRequest, RenameFolderRequest, DeleteFolderRequest, RestoreFolderRequest,
@@ -164,10 +164,15 @@ async def get_folder_path(
         logger.info(f"Get folder path request received, user_id: {user_id}, folder_uuid: {folder_uuid}")
         
         folder_service = FolderService(db)
+        folder = folder_service.folder_repo.get_by_uuid(folder_uuid)
+        if not folder or folder.owner_id != user_id or folder.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="找不到資料夾")
         path = folder_service.folder_repo.get_folder_path(folder_uuid)
         
         logger.info(f"Folder path retrieved: {len(path)} levels")
         return {"path": path}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Get folder path endpoint error: {e}")
         raise
@@ -224,7 +229,7 @@ async def list_trash(
 
 
 class FolderMoveRequest(BaseModel):
-    folder_uuids: list[str]
+    folder_uuids: list[str] = Field(max_length=2000)
     target_folder_uuid: str | None = None
     target_path: str | None = None
 

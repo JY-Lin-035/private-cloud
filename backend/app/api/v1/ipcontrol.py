@@ -26,6 +26,101 @@ from app.utils.security_log import write_event
 router = APIRouter(prefix="/api/ipcontrol", tags=["ipcontrol"])
 logger = log.get_logger("ipcontrol_api.log")
 
+_MIN_V4_CIDR, _MIN_V6_CIDR = 8, 20  # block-ladder blast-radius guards (R20b)
+
+
+def _canonical_rule_ip(raw: Optional[str]) -> str:
+    """Validate + canonicalize an admin-supplied IP or CIDR (R20b): bare IPs
+    become compressed-literal (kills case/zero-padded variants that silently
+    defeated exact matching); CIDRs are accepted, de-scoped (strict=False) and
+    width-guarded so one row can never blanket the internet."""
+    import ipaddress
+    s = (raw or "").strip()
+    if not s:
+        raise HTTPException(status_code=400, detail="IP 格式不正確")
+    try:
+        if "/" in s:
+            net = ipaddress.ip_network(s, strict=False)
+            if (net.version == 4 and net.prefixlen < _MIN_V4_CIDR) or \
+               (net.version == 6 and net.prefixlen < _MIN_V6_CIDR):
+                raise HTTPException(status_code=400,
+                                    detail=f"範圍過大（v4 至少 /{_MIN_V4_CIDR}、v6 至少 /{_MIN_V6_CIDR}）：{net}")
+            return str(net)
+        return ipaddress.ip_address(s).compressed
+    except ValueError:
+        raise HTTPException(status_code=400, detail="IP 格式不正確")
+
+
+def _ipactor_host(key: str) -> str:
+    return key.split(":", 1)[1] if ":" in key else key
+
+
+def _host_in(host: str, net):
+    import ipaddress
+    try:
+        return ipaddress.ip_address(host) in net
+    except ValueError:
+        return False
+
+
+def _link_recent_accounts(db: Session, rule: IpControl, raw_ip: str):
+    """One-click blast-radius escalation: mirror an IP rule onto every account
+    seen acting from that address (user-scope rules are family-agnostic, so
+    this is the dual-stack / dynamic-IP-proof knob). Dedupes live user rules
+    with the same scope."""
+    import ipaddress
+    from redis import Redis
+    try:
+        r = Redis.from_url(settings.REDIS_URL)
+        uids = set()
+        # ipActors keys are bare normalized addresses; a single-host rule
+        # (/32, /128 or plain IP) maps to exactly one key, broader CIDRs are
+        # matched by membership over the (short-lived, small) key space.
+        try:
+            net = ipaddress.ip_network((rule.ip or "").strip(), strict=False)
+            bare = str(net.network_address) if net.num_addresses == 1 else None
+        except ValueError:
+            net, bare = None, (rule.ip or "").strip()
+        if bare is not None:
+            pool = [f"ipActors:{bare}"]
+        else:
+            pool = [k.decode() if isinstance(k, bytes) else k
+                    for k in r.scan_iter("ipActors:*")]
+            if net is not None:
+                pool = [k for k in pool
+                        if _host_in(_ipactor_host(k), net)]
+        for key in pool:
+            for k in (r.hgetall(key) or {}).keys():
+                try:
+                    uids.add(int(k.decode() if isinstance(k, bytes) else k))
+                except ValueError:
+                    pass
+    except Exception:
+        uids = set()
+    if not uids:
+        return []
+    existing = {
+        u for (u,) in db.execute(select(IpControl.user_id).where(
+            IpControl.subject_type == "user", IpControl.user_id.in_(uids),
+            IpControl.scope == rule.scope,
+            IpControl.expires_at.is_(None) | (IpControl.expires_at > datetime.utcnow()),
+        )).all() if u
+    }
+    linked = []
+    for uid in sorted(uids - existing):
+        acct = db.get(Account, uid)
+        if not acct or acct.identity == Identity.ADMIN:
+            continue
+        db.add(IpControl(
+            subject_type="user", ip=None, token=None, user_id=uid, username=acct.name,
+            action=rule.action, scope=rule.scope, direction=rule.direction,
+            delay_ms=rule.delay_ms, upload_kbps=rule.upload_kbps, download_kbps=rule.download_kbps,
+            reason=f"linked from rule#{rule.id}", auto=False, created_by=rule.created_by,
+            expires_at=rule.expires_at,
+        ))
+        linked.append(acct.name)
+    return linked
+
 
 def _parse_abs_expires(value: Optional[str]) -> Optional[datetime]:
     if not value:
@@ -53,6 +148,7 @@ class ControlCreate(BaseModel):
     expires_in_hours: Optional[int] = None  # None = indefinite
     expires_at: Optional[str] = None        # absolute local datetime, beats expires_in_hours
     reason: Optional[str] = None
+    also_block_accounts: bool = False       # R20b: mirror onto accounts recently seen at this IP (ip rules only)
 
 
 class ControlUpdate(BaseModel):
@@ -94,7 +190,9 @@ def _actors_for(db: Session, ip: Optional[str]):
     try:
         from redis import Redis
         r = Redis.from_url(settings.REDIS_URL)
-        raw = r.hgetall(f"ipActors:{ip}")
+        raw = {}
+        for key in {ip, sec.normalize_ip(ip) or ip}:
+            raw.update(r.hgetall(f"ipActors:{key}") or {})
         uids = []
         for k in raw.keys():
             key = k.decode() if isinstance(k, bytes) else k
@@ -137,9 +235,7 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
 
     ip = user_id = username = token = None
     if payload.subject_type in ("ip", "ip_token"):
-        ip = (payload.ip or "").strip()
-        if not ip or len(ip) > 45 or ("." not in ip and ":" not in ip):
-            raise HTTPException(status_code=400, detail="IP 格式不正確")
+        ip = _canonical_rule_ip(payload.ip)
         if payload.subject_type == "ip_token":
             token = (payload.token or "").strip()
             if len(token) < 8:
@@ -178,10 +274,15 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
         rule.upload_kbps = None
     db.add(rule)
     db.commit()
+    linked: list = []
+    if payload.also_block_accounts and payload.subject_type == "ip":
+        linked = _link_recent_accounts(db, rule, ip)
+        db.commit()
     sec.invalidate_rules_cache()
     write_event("ipcontrol_create", ip, admin.get("username"), f"rule#{rule.id}",
-                f"{payload.subject_type} action={payload.action} scope={payload.scope} dir={payload.direction} reason={payload.reason}")
-    return {"id": rule.id}
+                f"{payload.subject_type} action={payload.action} scope={payload.scope} dir={payload.direction} reason={payload.reason}"
+                + (f" linked={','.join(linked)}" if linked else ""))
+    return {"id": rule.id, "linked_accounts": linked}
 
 
 @router.put("/admin/{rule_id}")
@@ -264,6 +365,11 @@ async def admin_suspend_account(payload: SuspendRequest, request: Request, db: S
         r.delete(f"session_data:{account.id}")
     except Exception:
         pass
+    try:
+        from app.services import collab_events
+        collab_events.revoke_user(account.id, "account suspended")
+    except Exception:
+        pass
     write_event("account_suspend", None, admin.get("username"), account.name, "由 IP Management 停用")
     return {"suspended": account.name}
 
@@ -274,7 +380,8 @@ async def admin_hotlinks(request: Request, ip: str = Query(..., max_length=45), 
     require_admin(request)
     try:
         from redis import Redis
-        raw = Redis.from_url(settings.REDIS_URL).hgetall(f"hotlinks:{ip}")
+        r0 = Redis.from_url(settings.REDIS_URL)
+        raw = r0.hgetall(f"hotlinks:{ip}") or r0.hgetall(f"hotlinks:{sec.normalize_ip(ip) or ip}")
     except Exception:
         raw = {}
     links = []

@@ -14,6 +14,10 @@ class CollaborationRemoveRequest(BaseModel):
     collaborator_id: int
 
 
+class WsTicketRequest(BaseModel):
+    file_uuid: str
+
+
 class CollaborationItem(BaseModel):
     """邀請者看到的成員清單"""
     id: int

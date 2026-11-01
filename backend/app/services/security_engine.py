@@ -3,6 +3,7 @@
 All entry points are best-effort: failures here must never break user requests.
 """
 import asyncio
+import ipaddress
 import threading
 from datetime import datetime, timedelta
 
@@ -27,7 +28,7 @@ AUTH_KINDS = {"pw_lock", "admin_probe", "login_fail"}
 # auth pool which escalates straight to a full-site block.
 AUTH_ENDPOINTS = (
     "/api/accounts/login", "/api/accounts/register", "/api/accounts/getCode",
-    "/api/accounts/resetPW", "/api/accounts/verifyEmail", "/api/share/verifyPassword",
+    "/api/accounts/resetPW", "/api/share/verifyPassword",
 )
 # Only kinds whose actor is the *authenticated* account may lead to account
 # disabling; login_fail carries an attempted username and must never disable
@@ -63,15 +64,82 @@ def mask_ip(ip):
     return ip[:2] + "…"
 
 
-def get_client_ip(scope_headers):
-    """scope_headers: dict of lowercase header name -> str (ASGI)."""
+def get_client_ip(scope_headers, remote_addr=None):
+    """Return the trusted client IP.
+
+    Trust chain:
+      1. Cloudflare's `CF-Connecting-IP` (the edge overwrites it; our only
+         public ingress is the tunnel).
+      2. `X-Real-IP`, but only when TRUST_REAL_IP is enabled AND the socket
+         peer is a configured trusted proxy (non-Cloudflare deployments).
+    `X-Forwarded-For` is deliberately NOT used: proxies append the client's
+    own value at the left, so it is spoofable (framing other users,
+    bypassing per-IP limits).
+    """
     cf = scope_headers.get("cf-connecting-ip")
     if cf:
-        return cf.split(",")[0].strip()
-    xff = scope_headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
+        return cf.split(",")[0].strip() or None
+    if settings.TRUST_REAL_IP and remote_addr and remote_addr in settings.trusted_proxy_ips:
+        real = scope_headers.get("x-real-ip")
+        if real:
+            return real.split(",")[0].strip() or None
     return None
+
+
+# ---------------------------------------------------------------- ip matching (R20b)
+
+def normalize_ip(ip):
+    """Canonical text form of a bare IP (compressed lowercase), or the input
+    stripped if unparseable (legacy rows / non-IP junk must keep working as
+    literal exact-match keys, never crash)."""
+    if not ip:
+        return None
+    try:
+        return ipaddress.ip_address(ip.strip()).compressed
+    except ValueError:
+        return ip.strip()
+
+
+def compile_rule_matcher(raw_ip):
+    """Precompiled matcher stored in the rules cache so the per-request path
+    never parses rule text. Bare IP -> exact (after normalization);
+    CIDR -> network containment. v4 rules only match v4 clients and vice
+    versa (ipaddress 'in' already enforces family). Returns None when the
+    rule has no ip subject."""
+    if not raw_ip:
+        return None
+    s = raw_ip.strip()
+    try:
+        # ip_network() accepts bare addresses too (becomes /32 or /128), and
+        # only networks implement __contains__ -- normalize everything to a
+        # network so the hot path is a single family-checked membership test.
+        return ipaddress.ip_network(s, strict=False)
+    except ValueError:
+        return ("literal", s)
+
+
+def ip_matches(matcher, norm_ip, raw_ip):
+    if matcher is None:
+        return False
+    if isinstance(matcher, tuple):          # unparseable rule text: literal
+        return raw_ip == matcher[1] or norm_ip == matcher[1]
+    try:
+        return ipaddress.ip_address(norm_ip or raw_ip) in matcher
+    except ValueError:
+        return False
+
+
+def _rule_matcher(r):
+    """Matcher access with lazy compile: rules built outside _active_rules
+    (tests, ad-hoc dicts) carry no '_m'; compile once and memoize in place."""
+    m = r.get("_m")
+    if m is None and r.get("ip"):
+        m = compile_rule_matcher(r["ip"])
+        try:
+            r["_m"] = m
+        except Exception:
+            pass
+    return m
 
 
 def _incr_ttl(r, key, amount, ttl):
@@ -141,6 +209,7 @@ def _active_rules():
                     "direction": r.direction, "delay_ms": r.delay_ms or 0,
                     "upload_kbps": r.upload_kbps, "download_kbps": r.download_kbps,
                     "auto": bool(r.auto),
+                    "_m": compile_rule_matcher(r.ip),
                 }
                 for r in rows if r.expires_at is None or r.expires_at > cutoff
             ]
@@ -173,13 +242,15 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
     delay = 0
     up_kbps = None
     dn_kbps = None
+    nip = normalize_ip(ip)
 
     def _subject_hit(r):
-        return (
-            (r["subject_type"] == "ip" and ip and r["ip"] == ip)
-            or (r["subject_type"] == "ip_token" and ip and r["ip"] == ip and is_share)
-            or (r["subject_type"] == "user" and user_id and r["user_id"] == user_id)
-        )
+        st = r["subject_type"]
+        if st == "ip":
+            return bool(ip) and ip_matches(_rule_matcher(r), nip, ip)
+        if st == "ip_token":
+            return bool(ip) and is_share and ip_matches(_rule_matcher(r), nip, ip)
+        return st == "user" and bool(user_id) and r["user_id"] == user_id
 
     rules = _active_rules()
     stream_governed = is_stream and any(
@@ -358,6 +429,11 @@ def _disable_account(username):
         r = _client()
         r.delete(f"session:{uid}")
         r.delete(f"session_data:{uid}")
+        try:
+            from app.services import collab_events
+            collab_events.revoke_user(uid, "account disabled")
+        except Exception:
+            pass
         write_event("account_disabled", None, username, None, "累積違規達頂端處置")
         invalidate_rules_cache()
         return f"，並停用帳號 {username}"
@@ -404,7 +480,7 @@ def count_download(user_id, ip, token=None, username=None):
             limit = settings.SEC_ANON_DOWNLOAD_HOURLY_LIMIT
             subject = {"ip": ip, "token": token}
             try:
-                hk = f"hotlinks:{ip}"
+                hk = f"hotlinks:{normalize_ip(ip) or ip}"
                 r.hset(hk, token[:8], token)
                 r.expire(hk, 3600)
             except Exception:
@@ -428,7 +504,7 @@ def track_actor(ip, user_id):
         return
     try:
         r = _client()
-        key = f"ipActors:{ip}"
+        key = f"ipActors:{normalize_ip(ip)}"
         r.hset(key, str(user_id), str(int(datetime.now().timestamp())))
         r.expire(key, 3600)
     except Exception:

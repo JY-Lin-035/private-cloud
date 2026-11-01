@@ -4,7 +4,7 @@ import secrets
 from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from redis import Redis
 from app.schemas.file import (
@@ -43,6 +43,48 @@ def _decode_tus_metadata(metadata_header: Optional[str]) -> dict:
     return metadata
 
 
+def _tus_location(request: Request, upload_id: str) -> str:
+    """Absolute PATCH URL advertised to tus clients.
+
+    Browsers refuse to send PATCH from an https page to an http URL (mixed
+    content), and CSP connect-src blocks it too, so the scheme MUST be right.
+    url_for() derives the scheme from uvicorn's view (http behind a plain-HTTP
+    tunnel/proxy) and cloudflared does not always carry X-Forwarded-Proto, so
+    we prefer the configured public API base (APP_URL) and otherwise infer
+    HTTPS from Cloudflare markers on a loopback request.
+    """
+    base = (settings.APP_URL or "").strip().rstrip("/")
+    if not base:
+        scheme = request.url.scheme
+        hdrs = request.headers
+        proto = (hdrs.get("x-forwarded-proto") or "").split(",")[0].strip()
+        if proto in ("http", "https"):
+            scheme = proto
+        elif hdrs.get("cf-connecting-ip") or '"https"' in (hdrs.get("cf-visitor") or ""):
+            # Any request through the Cloudflare edge terminates TLS as https.
+            scheme = "https"
+        host = hdrs.get("host") or request.url.netloc
+        base = f"{scheme}://{host}"
+    return f"{base}/api/files/tus/{upload_id}"
+
+
+async def _read_body_capped(request: Request, cap: int) -> bytes:
+    """Stream the request body but abort (413) once it exceeds cap bytes.
+
+    Red-team F7: unbounded request.body() buffering let an authenticated user
+    pin arbitrary amounts of server RAM while declaring Upload-Length=1.
+    """
+    cap = max(int(cap), 0) + 1024 * 1024
+    got = 0
+    chunks = []
+    async for ch in request.stream():
+        got += len(ch)
+        if got > cap:
+            raise HTTPException(status_code=413, detail='上傳內容超過宣告大小')
+        chunks.append(ch)
+    return b''.join(chunks)
+
+
 @router.options("/tus")
 async def tus_options():
     """Return tus handshake headers for browser clients."""
@@ -55,7 +97,7 @@ async def tus_options():
     )
 
 
-@router.post("/tus")
+@router.post("/tus", dependencies=[Depends(rate_limit(30, 300))])
 async def tus_create_upload(
     request: Request,
     upload_metadata: str = Header(None, alias='Upload-Metadata'),
@@ -79,7 +121,12 @@ async def tus_create_upload(
         if not filename:
             raise HTTPException(status_code=400, detail='Missing filename metadata')
 
-        file_size = int(upload_length or 0)
+        if upload_length is None or str(upload_length).strip() == "":
+            raise HTTPException(status_code=400, detail='Missing Upload-Length')
+        try:
+            file_size = int(upload_length)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail='Invalid Upload-Length')
         if file_size < 0:
             raise HTTPException(status_code=400, detail='Invalid Upload-Length')
 
@@ -98,14 +145,14 @@ async def tus_create_upload(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         upload_id = result['upload_id']
-        location = str(request.url_for('tus_patch_upload', upload_id=upload_id))
-        body = await request.body()
+        location = str(_tus_location(request, upload_id))
+        body = await _read_body_capped(request, file_size)
         if body:
-            offset_result = file_service.append_tus_chunk(upload_id, 0, body)
+            offset_result = file_service.append_tus_chunk(upload_id, 0, body, user_id)
             if offset_result and 'error' in offset_result:
                 raise HTTPException(status_code=offset_result['stateCode'], detail=offset_result['error'])
         elif file_size == 0:
-            finalize_result = file_service.finalize_tus_upload(upload_id)
+            finalize_result = file_service.finalize_tus_upload(upload_id, user_id)
             if finalize_result and 'error' in finalize_result:
                 raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
 
@@ -141,24 +188,33 @@ async def tus_patch_upload(
     try:
         if not tus_resumable:
             raise HTTPException(status_code=400, detail='Missing Tus-Resumable header')
-
-        body = await request.body()
-
         if not upload_offset:
             raise HTTPException(status_code=400, detail='Missing Upload-Offset header')
 
         file_service = FileService(db)
-        result = file_service.append_tus_chunk(upload_id, int(upload_offset), body)
+        # Owner/progress check happens BEFORE buffering the body so a forged
+        # or oversized PATCH cannot pin memory (red-team F7/F4).
+        progress = file_service.get_tus_upload(upload_id, user_id)
+        if not progress or 'error' in progress:
+            code = (progress or {}).get('stateCode', 404)
+            raise HTTPException(status_code=code, detail=(progress or {}).get('error', 'Upload not found'))
+        try:
+            cur_off = int(upload_offset)
+        except ValueError:
+            raise HTTPException(status_code=400, detail='Invalid Upload-Offset')
+        remaining = max(int(progress.get('file_size', 0)) - cur_off, 0)
+        body = await _read_body_capped(request, remaining)
+        result = file_service.append_tus_chunk(upload_id, int(upload_offset), body, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         response_headers = {
             'Tus-Resumable': '1.0.0',
             'Upload-Offset': str(result['offset']),
-            'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
+            'Location': str(_tus_location(request, upload_id)),
         }
         if result.get('completed'):
-            finalize_result = file_service.finalize_tus_upload(upload_id)
+            finalize_result = file_service.finalize_tus_upload(upload_id, user_id)
             if finalize_result and 'error' in finalize_result:
                 raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
             response_headers['Upload-Complete'] = 'true'
@@ -184,7 +240,7 @@ async def tus_head_upload(
     """Return the current tus offset for a resumable upload."""
     try:
         file_service = FileService(db)
-        result = file_service.get_tus_upload(upload_id)
+        result = file_service.get_tus_upload(upload_id, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
@@ -194,7 +250,7 @@ async def tus_head_upload(
                 'Tus-Resumable': '1.0.0',
                 'Upload-Offset': str(result['offset']),
                 'Upload-Length': str(result['file_size']),
-                'Location': str(request.url_for('tus_patch_upload', upload_id=upload_id)),
+                'Location': str(_tus_location(request, upload_id)),
             },
             content=None,
         )
@@ -203,6 +259,20 @@ async def tus_head_upload(
     except Exception as e:
         logger.error(f"Tus head upload endpoint error: {e}")
         raise
+
+
+@router.delete("/tus/{upload_id}", status_code=204)
+async def tus_abort_upload(
+    upload_id: str,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+):
+    """Abort an in-flight tus upload and release its quota reservation."""
+    file_service = FileService(db)
+    result = file_service.abort_tus_upload(upload_id, user_id)
+    if result and 'error' in result:
+        raise HTTPException(status_code=result['stateCode'], detail=result['error'])
+    return Response(status_code=204)
 
 
 @router.post("/tus/{upload_id}/finish")
@@ -214,7 +284,7 @@ async def tus_finish_upload(
     """Finalize a tus upload session and persist the final file."""
     try:
         file_service = FileService(db)
-        result = file_service.finalize_tus_upload(upload_id)
+        result = file_service.finalize_tus_upload(upload_id, user_id)
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
@@ -269,7 +339,7 @@ async def get_file_list(
         file_service = FileService(db)
         
         result = file_service.get_file_list(user_id, parent_folder_uuid)
-        logger.info(f"Get file list result: {result}")
+        logger.info(f"Get file list ok for user {user_id}")
         
         if result and 'error' in result:
             logger.error(f"Get file list error: {result['error']}, stateCode: {result['stateCode']}")
@@ -305,7 +375,20 @@ async def upload_file(
         file_service = FileService(db)
         
         # Read file content
-        file_content = await file.read()
+        # DS2-7: bound memory for the legacy multipart path. This endpoint
+        # has no declared-size parameter, so use the same hard ceiling the
+        # edge (Cloudflare/nginx) enforces; account quota is still validated
+        # on the real byte count inside the service afterwards.
+        cap = 100 * 1024 * 1024
+        buf = bytearray()
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > cap:
+                raise HTTPException(status_code=413, detail='實際大小超過宣告')
+        file_content = bytes(buf)
         file_size = len(file_content)
         
         # Create a mock file object with file attribute
@@ -377,15 +460,25 @@ async def download_file(
 
         if token:
             redis_key = f"download_file_token:{token}"
-            tdata = redis.get(redis_key)
+            try:
+                tdata = redis.getdel(redis_key)
+            except Exception:
+                tdata = redis.get(redis_key)
+                if tdata:
+                    redis.delete(redis_key)
             if not tdata:
                 raise HTTPException(status_code=401, detail="Invalid or expired download token")
-            redis.delete(redis_key)
             tdata_str = tdata.decode() if isinstance(tdata, bytes) else tdata
             parts = tdata_str.split(":")
             if len(parts) != 2:
                 raise HTTPException(status_code=400, detail="Invalid token data")
-            actual_user_id = int(parts[0])
+            try:
+                actual_user_id = int(parts[0])
+            except ValueError:
+                raise HTTPException(status_code=401, detail="Invalid or expired download token")
+            # Token is bound to the exact file it was issued for.
+            if parts[1] != file_uuid:
+                raise HTTPException(status_code=403, detail="Token does not match file")
 
         if actual_user_id is None:
             raise HTTPException(status_code=401, detail="Authentication required")
@@ -393,7 +486,7 @@ async def download_file(
         logger.info(f"Download file request received, user_id: {actual_user_id}, file_uuid: {file_uuid}")
 
         result = file_service.download(actual_user_id, file_uuid)
-        logger.info(f"Download file result: {result}")
+        logger.info(f"Download by user {actual_user_id}: status={(result or {}).get('stateCode', '?') if isinstance(result, dict) else '?'}")
 
         if result and 'error' in result:
             logger.error(f"Download error: {result['error']}")
@@ -498,7 +591,7 @@ async def recalculate_storage(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id)
 ):
-    """Recalculate used storage from actual non-deleted files."""
+    """Recalculate used storage from every file byte still on disk (trash included)."""
     try:
         logger.info(f"Recalculate storage request received, user_id: {user_id}")
 
@@ -519,8 +612,8 @@ async def recalculate_storage(
 
 
 class BatchDeleteRequest(BaseModel):
-    folders: list[str] = []
-    files: list[str] = []
+    folders: list[str] = Field(default_factory=list, max_length=2000)
+    files: list[str] = Field(default_factory=list, max_length=2000)
     mode: str  # soft | permanent | restore
 
 
@@ -535,14 +628,14 @@ async def batch_delete(
 
 
 class FileMoveRequest(BaseModel):
-    file_uuids: list[str]
+    file_uuids: list[str] = Field(max_length=2000)
     target_folder_uuid: Optional[str] = None
     target_path: Optional[str] = None
 
 
 class BulkDownloadRequest(BaseModel):
-    file_uuids: list[str] = []
-    folder_uuids: list[str] = []
+    file_uuids: list[str] = Field(default_factory=list, max_length=2000)
+    folder_uuids: list[str] = Field(default_factory=list, max_length=400)
 
 
 @router.post("/move")
@@ -612,11 +705,32 @@ def _fmt_dt(dt) -> str:
     return dt.isoformat() if isinstance(dt, _dt) else str(dt)
 
 
+def _file_access_role(db: Session, user_id: int, f) -> str | None:
+    """DS5 F5-2: single source for file-level roles on editor surfaces."""
+    if f is None:
+        return None
+    if f.owner_id == user_id:
+        return "owner"
+    from app.models.collaboration import Collaboration
+    c = db.execute(
+        select(Collaboration).where(
+            Collaboration.file_uuid == f.uuid,
+            Collaboration.collaborator_id == user_id,
+        )
+    ).scalars().first()
+    if not c:
+        return None
+    role = (c.permission or "").strip().lower()
+    return role if role in ("editor", "viewer") else "viewer"  # F6-3 whitelist, unknown => read-only
+
+
 def _load_editable(db: Session, user_id: int, file_uuid: str) -> FileModel:
     f = db.execute(
-        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+        select(FileModel).where(FileModel.uuid == file_uuid)
     ).scalar_one_or_none()
     if f is None or f.deleted_at is not None or not is_editable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    if _file_access_role(db, user_id, f) is None:
         raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
     return f
 
@@ -661,6 +775,7 @@ async def create_text_file(
     else:
         taken = set(db.execute(
             select(FileModel.name).where(
+                FileModel.owner_id == user_id,
                 FileModel.parent_folder_id.is_(None), FileModel.deleted_at.is_(None))
         ).scalars().all())
     name = unique_name(cleaned, taken)
@@ -715,28 +830,46 @@ async def save_file_content(
     """Write editor content back atomically with quota accounting and 409 conflict guard."""
     _require_preview_flag()
     batch_ops.assert_not_deleting(redis, request.uuid)
-    f = _load_editable(db, user_id, request.uuid)
-    if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
-        raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
+    _load_editable(db, user_id, request.uuid)          # fast 404/415 shape checks
     data = request.text.encode("utf-8")
     if len(data) > MAX_EDIT_BYTES:
         raise HTTPException(status_code=413, detail="內容超過編輯上限 2MB")
+    # F7-1: EVERY size-dependent decision must be made under locks, in the
+    # same order as WS persist_content/upload: Account FOR UPDATE -> File
+    # FOR UPDATE. A pre-lock f.size read let REST PUT compute its delta from
+    # stale bytes while a concurrent persist wrote the file, double-charging
+    # the owner (or under-charging on the reverse interleave).
+    owner_id_row = db.execute(
+        select(FileModel.owner_id).where(FileModel.uuid == request.uuid)
+    ).scalar_one_or_none()
+    if owner_id_row is None:
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    acct = db.query(Account).filter(Account.id == owner_id_row).with_for_update().first()
+    f = db.execute(
+        select(FileModel).where(FileModel.uuid == request.uuid).with_for_update()
+    ).scalar_one_or_none()
+    if f is None or f.deleted_at is not None or not is_editable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    role = _file_access_role(db, user_id, f)
+    if role is None:
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援編輯")
+    if role == "viewer":
+        raise HTTPException(status_code=403, detail="唯讀成員無法編輯此檔案")
+    if request.if_updated_at is not None and request.if_updated_at != _fmt_dt(f.updated_at):
+        raise HTTPException(status_code=409, detail="檔案已被其他位置更新")
+    if acct is None:
+        raise HTTPException(status_code=404, detail="帳號不存在")
     delta = len(data) - (f.size or 0)
-    if delta > 0:
-        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
-        if acct is None:
-            raise HTTPException(status_code=404, detail="帳號不存在")
-        if len(data) > acct.signal_file_size:
-            raise HTTPException(status_code=413, detail="超過單檔大小上限")
-        if (acct.used_size or 0) + delta > acct.total_file_size:
-            raise HTTPException(status_code=413, detail="空間不足，無法儲存")
-        acct.used_size = (acct.used_size or 0) + delta
-    elif delta < 0:
-        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
-        if acct:
-            acct.used_size = max(0, (acct.used_size or 0) + delta)
+    # F6-1: quota belongs to the FILE OWNER (bytes live in their tree).
+    if delta != 0:
+        if delta > 0:
+            if len(data) > acct.signal_file_size:
+                raise HTTPException(status_code=413, detail="超過單檔大小上限")
+            if (acct.used_size or 0) + delta > acct.total_file_size:
+                raise HTTPException(status_code=413, detail="空間不足，無法儲存")
+        acct.used_size = max(0, (acct.used_size or 0) + delta)
     path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
-    tmp = path + ".tmp"
+    tmp = f"{path}.{_os.getpid()}.rest.tmp"
     try:
         with open(tmp, "wb") as fh:
             fh.write(data)
@@ -771,9 +904,11 @@ _RANGE_RE = _re.compile(r'bytes=(\d*)-(\d*)$')
 
 def _load_streamable(db: Session, user_id: int, file_uuid: str) -> FileModel:
     f = db.execute(
-        select(FileModel).where(FileModel.uuid == file_uuid, FileModel.owner_id == user_id)
+        select(FileModel).where(FileModel.uuid == file_uuid)
     ).scalar_one_or_none()
     if f is None or f.deleted_at is not None or not is_streamable(f.name):
+        raise HTTPException(status_code=404, detail="檔案不存在或不支援串流")
+    if _file_access_role(db, user_id, f) is None:
         raise HTTPException(status_code=404, detail="檔案不存在或不支援串流")
     path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
     if not _os.path.isfile(path):

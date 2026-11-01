@@ -74,7 +74,9 @@ class TestAccountResetPassword:
         service = AccountService(db_session, mock_redis)
         result = service.reset_password("no@no.com", "code", "NewPass123!@#",)
         assert result is not None
-        assert result["stateCode"] == HTTPStatus.NOT_FOUND
+        # Uniform response: must not reveal that the address is unregistered.
+        assert result["stateCode"] == HTTPStatus.FORBIDDEN
+        assert result["error"] == "驗證碼錯誤或已失效"
 
 
 class TestAccountVerifyEmail:

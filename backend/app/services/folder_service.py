@@ -35,64 +35,99 @@ class FolderService:
         _, error = validate_display_name(name)
         return error is None
     
-    def _update_parent_folder_size(self, folder_uuid: str, size_delta: int):
-        """Recursively update parent folder sizes."""
-        folder = self.folder_repo.get_by_uuid(folder_uuid)
-        if not folder:
+    def _update_parent_folder_size(self, folder_uuid: str, size_delta: int, owner_id: Optional[int] = None):
+        """Propagate a size delta up the ancestor chain (iterative, capped).
+
+        Iteration (not recursion) removes the RecursionError DoS at extreme
+        depths; the hop cap plus owner-stickiness means a corrupted or
+        cross-owner chain can never loop forever or charge a foreign tree.
+        """
+        if not folder_uuid:
             return
-        
-        # Update current folder size
-        folder.size = max(0, folder.size + size_delta)
-        self.folder_repo.update(folder)
-        
-        # Recursively update parent
-        if folder.parent_id:
-            self._update_parent_folder_size(folder.parent_id, size_delta)
+        seen = set()
+        cur_uuid = folder_uuid
+        hops = 0
+        chain_owner = owner_id
+        while cur_uuid and hops < 64:
+            if cur_uuid in seen:  # cycle guard
+                return
+            seen.add(cur_uuid)
+            folder = self.folder_repo.get_by_uuid(cur_uuid)
+            if not folder:
+                return
+            if chain_owner is None:
+                chain_owner = folder.owner_id  # anchor propagation to this tree's owner
+            if folder.owner_id != chain_owner:
+                return  # never mutate another owner's chain
+            folder.size = max(0, (folder.size or 0) + size_delta)
+            self.folder_repo.update(folder)
+            cur_uuid = folder.parent_id
+            hops += 1
     
     def _soft_delete_children(self, folder_uuid: str):
-        """Recursively soft delete all children (folders and files)."""
-        
+        """Iteratively soft-delete all descendants (cycle-safe, no recursion)."""
+        from collections import deque
         file_repo = FileRepository(self.db)
-        
-        # Get all child folders
-        child_folders = self.folder_repo.get_by_parent(folder_uuid)
-        for child_folder in child_folders:
-            self._soft_delete_children(child_folder.uuid)
-            self.folder_repo.soft_delete(child_folder.uuid)
-        
-        # Get all child files
-        child_files = file_repo.get_by_folder(folder_uuid)
-        for child_file in child_files:
-            file_repo.soft_delete(child_file.uuid)
+        seen = {folder_uuid}
+        q = deque([folder_uuid])
+        while q:
+            cur = q.popleft()
+            child_folders = self.folder_repo.get_by_parent(cur)
+            for child_folder in child_folders:
+                if child_folder.uuid in seen:
+                    continue
+                seen.add(child_folder.uuid)
+                q.append(child_folder.uuid)
+                # DS4 G-1: trashing a folder revokes its share links, matching
+                # single-file delete (folder soft-delete previously left the
+                # `shared` hash intact so the link silently resurrected).
+                child_folder.shared = None
+                child_folder.share_password = None
+                self.folder_repo.soft_delete(child_folder.uuid)
+            for child_file in file_repo.get_by_folder(cur):
+                child_file.shared = None
+                child_file.share_password = None
+                file_repo.soft_delete(child_file.uuid)
     
     def _hard_delete_children(self, folder_uuid: str) -> None:
-        """Recursively hard delete all children (folders and files) and their storage files.
-        Only responsible for deletion, not size calculation."""
+        """Iteratively hard-delete all descendants + their storage files.
+
+        Cycle-safe and recursion-free (DS2: >64 depth used to blow the stack
+        mid-delete, skipping the account.used_size decrement => quota drift).
+        Only responsible for deletion, not size calculation.
+        """
+        from collections import deque
         file_repo = FileRepository(self.db)
 
-        # Get all child folders
-        child_folders = self.db.execute(
-            select(Folder).where(Folder.parent_id == folder_uuid)
-        ).scalars().all()
+        # Collect every descendant folder uuid (BFS, seen-guarded)
+        order = []
+        seen = {folder_uuid}
+        q = deque([folder_uuid])
+        while q:
+            cur = q.popleft()
+            for kid in self.db.execute(select(Folder.uuid).where(Folder.parent_id == cur)).scalars().all():
+                if kid in seen:
+                    continue
+                seen.add(kid)
+                order.append(kid)
+                q.append(kid)
 
-        for child_folder in child_folders:
-            # Recursively delete children first
-            self._hard_delete_children(child_folder.uuid)
-            # Delete the folder itself
-            self.folder_repo.hard_delete(child_folder.uuid)
+        # Delete all files under root + descendants
+        parent_ids = [folder_uuid] + order
+        for pid in parent_ids:
+            for cf in self.db.execute(select(File).where(File.parent_folder_id == pid)).scalars().all():
+                # row (with collab cascade) first, blob after (DS3 E1)
+                if file_repo.hard_delete(cf.uuid):
+                    fp = os.path.join(self.storage_base_path, cf.uuid)
+                    try:
+                        if os.path.exists(fp):
+                            os.remove(fp)
+                    except OSError:
+                        pass
 
-        # Get all child files (including deleted ones)
-        child_files = self.db.execute(
-            select(File).where(File.parent_folder_id == folder_uuid)
-        ).scalars().all()
-
-        for child_file in child_files:
-            # Delete actual file from storage
-            file_path = os.path.join(self.storage_base_path, child_file.uuid)
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            # Delete file record from database
-            self.file_repo.hard_delete(child_file.uuid)
+        # Delete descendant folders (deepest-first is irrelevant for hard rows)
+        for kid in order:
+            self.folder_repo.hard_delete(kid)
     
     def create(self, user_id: int, parent_folder_uuid: Optional[str], name: str) -> Optional[Dict[str, Any]]:
         """Create a new folder."""
@@ -111,8 +146,11 @@ class FolderService:
                 parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
                 if not parent_folder or parent_folder.owner_id != user_id:
                     return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+                if len(self._ancestor_chain(parent_folder)) + 1 > self.MAX_FOLDER_DEPTH:
+                    return {'error': '資料夾深度過深', 'stateCode': HTTPStatus.BAD_REQUEST}
             
             # Check for duplicate folder name in same parent directory
+            # (DB collation is case-insensitive; .first() tolerates legacy dupes)
             existing_folder = self.db.execute(
                 select(Folder).where(
                     Folder.owner_id == user_id,
@@ -120,7 +158,7 @@ class FolderService:
                     Folder.name == name,
                     Folder.deleted_at.is_(None)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
             
             if existing_folder:
                 return {'error': '資料夾已存在', 'stateCode': HTTPStatus.BAD_REQUEST}
@@ -146,7 +184,7 @@ class FolderService:
                 'created_at': _fmt_utc8(created_folder.created_at)
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def rename(self, user_id: int, folder_uuid: str, new_name: str) -> Optional[Dict[str, Any]]:
         """Rename a folder."""
@@ -159,7 +197,24 @@ class FolderService:
             folder = self.folder_repo.get_by_uuid(folder_uuid)
             if not folder or folder.owner_id != user_id:
                 return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
-            
+
+            if folder.is_system:
+                return {'error': '系統資料夾不可重命名', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            # Case-insensitive sibling collision guard (MySQL CI collation +
+            # red-team F3): renaming onto a sibling that differs only by case
+            # creates ambiguous rows that later blow up as 500s.
+            siblings = self.db.execute(
+                select(Folder.name).where(
+                    Folder.parent_id == folder.parent_id,
+                    Folder.owner_id == user_id,
+                    Folder.deleted_at.is_(None),
+                    Folder.uuid != folder.uuid,
+                )
+            ).scalars().all()
+            if new_name.casefold() in {s.casefold() for s in siblings}:
+                return {'error': '同名(不分大小寫)的資料夾已存在', 'stateCode': HTTPStatus.CONFLICT}
+
             # Update name
             folder.name = new_name
             self.folder_repo.update(folder)
@@ -170,7 +225,7 @@ class FolderService:
                 'updated_at': _fmt_utc8(folder.updated_at)
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def delete(self, user_id: int, folder_uuid: str, permanent: bool = False) -> Optional[Dict[str, Any]]:
         """Delete a folder (soft or hard)."""
@@ -188,6 +243,7 @@ class FolderService:
                 return {'error': '系統資料夾無法刪除', 'stateCode': HTTPStatus.FORBIDDEN}
 
             folder_size = folder.size
+            affected_files = self._collect_subtree_file_uuids(folder_uuid)
 
             if permanent:
                 # Hard delete: recursively delete all children and storage files
@@ -204,9 +260,27 @@ class FolderService:
             else:
                 # Soft delete: recursively mark all children as deleted
                 self._soft_delete_children(folder_uuid)
+                folder.shared = None
+                folder.share_password = None
                 self.folder_repo.soft_delete(folder_uuid)
 
                 # Don't update parent folder size for soft delete (items still occupy space)
+
+            try:
+                from app.services import collab_events
+                for fu in affected_files:
+                    collab_events.revoke_file(fu, "folder deleted")
+                if permanent:
+                    from app.services.snapshot_service import purge_file_state
+                    from redis import Redis as _Redis
+                    _r = _Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                    try:
+                        for fu in affected_files:
+                            purge_file_state(fu, _r)
+                    finally:
+                        _r.close()
+            except Exception:
+                pass
 
             return {
                 'uuid': folder_uuid,
@@ -214,7 +288,24 @@ class FolderService:
                 'permanent': permanent
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def _collect_subtree_file_uuids(self, folder_uuid: str) -> set:
+        """All file uuids anywhere under a folder (iterative, cycle-safe)."""
+        try:
+            from collections import deque
+            files = set()
+            seen = {folder_uuid}
+            q = deque([folder_uuid])
+            while q:
+                cur = q.popleft()
+                files |= set(self.db.execute(select(File.uuid).where(File.parent_folder_id == cur)).scalars().all())
+                for kid in self.db.execute(select(Folder.uuid).where(Folder.parent_id == cur)).scalars().all():
+                    if kid not in seen:
+                        seen.add(kid); q.append(kid)
+            return files
+        except Exception:
+            return set()
     
     def restore(self, user_id: int, folder_uuid: str) -> Optional[Dict[str, Any]]:
         """Restore a soft-deleted folder."""
@@ -228,29 +319,39 @@ class FolderService:
             
             if not folder.deleted_at:
                 return {'error': 'Folder not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
-            
-            # Recursive function to restore all children under folder_uuid
-            def restore_all_children_recursive(parent_uuid: str):
-                """Recursively restore all children (folders and files) under parent_uuid."""
-                # Get all child folders
-                child_folders = self.db.execute(
-                    select(Folder).where(Folder.parent_id == parent_uuid)
-                ).scalars().all()
-                
-                for child_folder in child_folders:
-                    child_folder.deleted_at = None
-                    # Recursively restore nested children
-                    restore_all_children_recursive(child_folder.uuid)
-                
-                # Get all child files
-                child_files = self.db.execute(
-                    select(File).where(File.parent_folder_id == parent_uuid)
-                ).scalars().all()
-                
-                for child_file in child_files:
-                    child_file.deleted_at = None
-            
-            restore_all_children_recursive(folder_uuid)
+
+            # DS2-2/F5: restoring under a still-trashed parent used to create an
+            # invisible orphan (batch path had no guard at all). Fix by walking
+            # the ancestor chain and restoring trashed ancestors too, so the
+            # item always returns to a visible tree. Bounded by a seen-set.
+            anc = folder.parent_id
+            aseen = {folder.uuid}
+            while anc and anc not in aseen:
+                aseen.add(anc)
+                p = self.folder_repo.get_by_uuid(anc)
+                if not p:
+                    break
+                if p.deleted_at is not None:
+                    p.deleted_at = None
+                    if self._heal_name_conflict(p) is False:
+                        self.db.rollback()
+                        return {'error': '上層資料夾名稱衝突，無法還原', 'stateCode': HTTPStatus.CONFLICT}
+                    self.folder_repo.update(p)
+                anc = p.parent_id
+
+            # Restore descendants iteratively (recursion blew the stack on deep trees)
+            from collections import deque
+            rq = deque([folder_uuid])
+            rseen = {folder_uuid}
+            while rq:
+                cur = rq.popleft()
+                for cf in self.db.execute(select(Folder).where(Folder.parent_id == cur)).scalars().all():
+                    cf.deleted_at = None
+                    if cf.uuid not in rseen:
+                        rseen.add(cf.uuid); rq.append(cf.uuid)
+                for cfile in self.db.execute(select(File).where(File.parent_folder_id == cur)).scalars().all():
+                    cfile.deleted_at = None
+            self.db.flush()
             
             # Check for conflict with active folder having same name
             # Handle NULL parent_id comparison correctly
@@ -362,7 +463,7 @@ class FolderService:
                     }
                 except Exception as e:
                     self.db.rollback()
-                    return {'error': f'合併失敗: {str(e)}', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+                    return {'error': '合併失敗', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
             
             # No conflict, proceed with normal restore
             # Restore the folder (clear deleted_at)
@@ -430,7 +531,7 @@ class FolderService:
                 'restored': True
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_by_owner(self, user_id: int) -> Dict[str, Any]:
         """Get all folders by owner."""
@@ -451,7 +552,7 @@ class FolderService:
                 ]
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_trash(self, user_id: int) -> Dict[str, Any]:
         """Get soft-deleted folders by owner."""
@@ -477,7 +578,7 @@ class FolderService:
                 'folders': folders_with_path
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _get_folder_path(self, folder_uuid: str, user_id: int) -> str:
         """Get the full path of a folder as a string."""
@@ -487,7 +588,9 @@ class FolderService:
                 select(Folder).where(Folder.uuid == folder_uuid)
             ).scalar_one_or_none()
             
-            while current_folder:
+            _seen = set()
+            while current_folder and current_folder.uuid not in _seen:
+                _seen.add(current_folder.uuid)
                 path_parts.append(current_folder.name)
                 if current_folder.parent_id:
                     current_folder = self.db.execute(
@@ -502,6 +605,21 @@ class FolderService:
         except Exception:
             return 'Unknown'
 
+    MAX_FOLDER_DEPTH = 64
+
+    def _ancestor_chain(self, folder) -> list:
+        """Return [folder, parent, ...] bounded; [] on cycle/missing."""
+        chain = []
+        seen = set()
+        cur = folder
+        while cur and len(chain) < self.MAX_FOLDER_DEPTH + 8:
+            if cur.uuid in seen:
+                break
+            seen.add(cur.uuid)
+            chain.append(cur)
+            cur = self.folder_repo.get_by_uuid(cur.parent_id) if cur.parent_id else None
+        return chain
+
     def resolve_or_create_path(self, user_id: int, base_folder_uuid: Optional[str], rel_path: str) -> Dict[str, Any]:
         """Resolve a relative path under base (or Home), creating missing folders."""
         try:
@@ -509,8 +627,6 @@ class FolderService:
             segments, err = sanitize_rel_path(rel_path)
             if err:
                 return {'error': err, 'stateCode': HTTPStatus.BAD_REQUEST}
-            if not segments:
-                return {'uuid': base_folder_uuid, 'created': []}
 
             current = base_folder_uuid
             if not current:
@@ -518,6 +634,19 @@ class FolderService:
                 if not home:
                     return {'error': '找不到 Home 資料夾', 'stateCode': HTTPStatus.NOT_FOUND}
                 current = home.uuid
+            else:
+                # Security (red-team F2): the mount base must belong to the
+                # caller and be alive; otherwise a user could plant folders
+                # inside another user's tree by supplying its UUID.
+                base = self.folder_repo.get_by_uuid(current)
+                if not base or base.owner_id != user_id or base.deleted_at is not None:
+                    return {'error': 'Error', 'stateCode': HTTPStatus.FORBIDDEN}
+                chain = self._ancestor_chain(base)
+                if len(chain) + len(segments) > self.MAX_FOLDER_DEPTH:
+                    return {'error': '資料夾深度過深', 'stateCode': HTTPStatus.BAD_REQUEST}
+
+            if not segments:
+                return {'uuid': current, 'created': []}
 
             created = []
             for seg in segments:
@@ -538,18 +667,86 @@ class FolderService:
                 created.append(seg)
             return {'uuid': current, 'created': created}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def _ancestor_uuids(self, folder_uuid: str) -> set:
-        """Set of uuids from this folder up to the root (inclusive)."""
+        """Full ancestor chain (inclusive), cycle-safe and UNBOUNDED in depth.
+
+        DS2-4: the old 64-hop cut silently excluded deeper ancestors, so
+        move's cycle check could be bypassed once depth > 64. Termination is
+        guaranteed by the seen-set even on corrupted (cyclic) data.
+        """
         chain = set()
         cur = self.folder_repo.get_by_uuid(folder_uuid)
-        guard = 0
-        while cur and guard < 64:
+        while cur and cur.uuid not in chain:
             chain.add(cur.uuid)
             cur = self.folder_repo.get_by_uuid(cur.parent_id) if cur.parent_id else None
-            guard += 1
         return chain
+
+    def _heal_name_conflict(self, folder) -> str | None:
+        """If a live sibling shares a collation-equal name, rename the given
+        folder before it re-enters the visible tree (DS3: restore-ancestor and
+        batch-restore paths skipped this and minted CI duplicates).
+        Comparison is done by the DB itself (utf8mb4 CI) — the only true source.
+        Returns the new name or None."""
+        from app.utils.pathing import unique_name
+        conflict = self.db.execute(
+            select(Folder.uuid).where(
+                Folder.owner_id == folder.owner_id,
+                (Folder.parent_id == folder.parent_id) if folder.parent_id else Folder.parent_id.is_(None),
+                Folder.name == folder.name,
+                Folder.deleted_at.is_(None),
+                Folder.uuid != folder.uuid,
+            ).limit(1)
+        ).scalars().first()
+        if not conflict:
+            return None  # no rename needed (None == ok, unchanged)
+        for _ in range(64):
+            siblings = set(self.db.execute(
+                select(Folder.name).where(
+                    Folder.owner_id == folder.owner_id,
+                    (Folder.parent_id == folder.parent_id) if folder.parent_id else Folder.parent_id.is_(None),
+                    Folder.deleted_at.is_(None),
+                    Folder.uuid != folder.uuid,
+                )
+            ).scalars().all())
+            cand = unique_name(folder.name, siblings)
+            still = self.db.execute(
+                select(Folder.uuid).where(
+                    Folder.owner_id == folder.owner_id,
+                    (Folder.parent_id == folder.parent_id) if folder.parent_id else Folder.parent_id.is_(None),
+                    Folder.name == cand,
+                    Folder.deleted_at.is_(None),
+                    Folder.uuid != folder.uuid,
+                ).limit(1)
+            ).scalars().first()
+            folder.name = cand
+            if not still:
+                return cand
+        return False  # could not resolve a unique name -> caller must abort
+
+    def _subtree_height(self, folder_uuid: str, budget: int = 2000) -> int:
+        """Max depth (in folders) of the subtree rooted at uuid; capped scan."""
+        from collections import deque
+        h = 0
+        q = deque([(folder_uuid, 1)])
+        seen = {folder_uuid}
+        nodes = 0
+        while q:
+            u, d = q.popleft()
+            h = max(h, d)
+            kids = self.db.execute(
+                select(Folder.uuid).where(Folder.parent_id == u)
+            ).scalars().all()
+            for k in kids:
+                if k in seen:
+                    continue
+                seen.add(k)
+                nodes += 1
+                if nodes > budget:
+                    return 10 ** 6  # effectively "too deep/wide" -> reject
+                q.append((k, d + 1))
+        return h
 
     def move_folders(self, user_id: int, folder_uuids: list[str], target_folder_uuid: str) -> Dict[str, Any]:
         """Move folders under target. Cycles/foreign are rejected per item; name collisions auto-renamed."""
@@ -558,11 +755,16 @@ class FolderService:
             if not target or target.owner_id != user_id or target.deleted_at:
                 return {'error': '目標資料夾無效', 'stateCode': HTTPStatus.FORBIDDEN}
 
+            target_depth = len(self._ancestor_uuids(target.uuid))
             moved, renamed, failed = [], {}, []
             rows = []
             for u in folder_uuids[:500]:
                 folder = self.folder_repo.get_by_uuid(u)
                 if not folder:
+                    continue
+                # DS2-3: keep the global depth invariant when re-parenting.
+                if target_depth + self._subtree_height(folder.uuid) > self.MAX_FOLDER_DEPTH:
+                    failed.append({"uuid": folder.uuid, "reason": "移動後資料夾深度超過上限"})
                     continue
                 rows.append((len(self._ancestor_uuids(folder.uuid)), folder))
             rows.sort(key=lambda pair: pair[0])  # shallowest first
@@ -604,4 +806,4 @@ class FolderService:
 
             return {'moved': moved, 'renamed': renamed, 'failed': failed, 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

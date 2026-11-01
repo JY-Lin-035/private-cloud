@@ -66,11 +66,13 @@ def _subtree_levels(db, user_id: int, top_uuids: List[str]) -> List[List[str]]:
     """BFS over folders. level0 = tops; deeper levels are children uuids."""
     levels: List[List[str]] = [top_uuids]
     frontier = top_uuids
+    seen = set(top_uuids)
     while frontier:
         nxt: List[str] = []
         for chunk in _chunks(frontier):
-            nxt += list(db.execute(select(Folder.uuid).where(
-                Folder.owner_id == user_id, Folder.parent_id.in_(chunk))).scalars().all())
+            nxt += [u for u in db.execute(select(Folder.uuid).where(
+                Folder.owner_id == user_id, Folder.parent_id.in_(chunk))).scalars().all() if u not in seen]
+        seen.update(nxt)
         frontier = nxt
         if frontier:
             levels.append(frontier)
@@ -163,24 +165,46 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                     ).values(deleted_at=now))
                     n_folders += res.rowcount or 0
                 db.commit()
+                try:
+                    from app.services import collab_events
+                    for uuid in fuuids:
+                        collab_events.revoke_file(uuid, "file trashed")
+                except Exception:
+                    pass
 
             elif mode == "permanent":
+                # DS7 2.1 / R18-1: lock order account -> file rows, and every
+                # quota-relevant value must be a *current read* taken AFTER
+                # the account lock. A plain SELECT following FOR UPDATE still
+                # returns the REPEATABLE READ snapshot, silently losing
+                # concurrent used_size/size deltas (lost update).
+                acct = (
+                    db.query(Account)
+                    .filter(Account.id == user_id)
+                    .with_for_update()
+                    .first()
+                )
                 doomed_files = top_files + descendants
-                seen: set = set()
-                freed = 0
-                for f in doomed_files:
-                    if f.uuid not in seen:
-                        seen.add(f.uuid)
-                        freed += f.size or 0
+                seen: set = set(f.uuid for f in doomed_files)
+                ordered = sorted(seen)
+                fresh_size: Dict[str, int] = {}
+                for chunk in _chunks(ordered):
+                    for fu, sz in db.execute(
+                        select(File.uuid, File.size)
+                        .where(File.owner_id == user_id, File.uuid.in_(chunk))
+                        .with_for_update()
+                    ).all():
+                        fresh_size[fu] = sz or 0
+                freed = sum(fresh_size.values())
                 doomed_folders = set(subtree_uuids)
                 by_parent: Dict[str, int] = {}
                 for f in doomed_files:
                     if f.parent_folder_id and f.parent_folder_id not in doomed_folders:
-                        by_parent[f.parent_folder_id] = by_parent.get(f.parent_folder_id, 0) + (f.size or 0)
+                        by_parent[f.parent_folder_id] = by_parent.get(f.parent_folder_id, 0) + fresh_size.get(f.uuid, f.size or 0)
                 for tf in top_folders:
                     if tf.parent_id and tf.parent_id not in doomed_folders:
                         by_parent[tf.parent_id] = by_parent.get(tf.parent_id, 0) + (tf.size or 0)
-                for chunk in _chunks(list(seen)):
+                for chunk in _chunks(ordered):
                     res = db.execute(sa_delete(File).where(
                         File.owner_id == user_id, File.uuid.in_(chunk)))
                     n_files += res.rowcount or 0
@@ -189,8 +213,7 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                         res = db.execute(sa_delete(Folder).where(
                             Folder.owner_id == user_id, Folder.uuid.in_(chunk)))
                         n_folders += res.rowcount or 0
-                acct = db.query(Account).filter(Account.id == user_id).first()
-                if acct and freed:
+                if acct:
                     acct.used_size = max(0, (acct.used_size or 0) - freed)
                 db.commit()
                 from app.services.folder_service import FolderService
@@ -206,9 +229,44 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                             os.remove(p)
                     except OSError:
                         pass
+                try:
+                    from app.services import collab_events
+                    from app.services.snapshot_service import purge_file_state
+                    for uuid in seen:
+                        collab_events.revoke_file(uuid, "file deleted")
+                        purge_file_state(uuid, r)
+                except Exception:
+                    pass
 
             else:  # restore
-                restore_folders = subtree_uuids
+                restore_folders = list(subtree_uuids)
+                # DS2-2: batch restore must also un-trash the ancestor chain of
+                # every restored top item, else children reappear in a still
+                # trashed parent (invisible orphan) — the exact bug the single
+                # restore guard fixed only for the one-item path.
+                _seen_anc = set(restore_folders)
+                _tops = [tf for tf in top_folders]
+                for tf in _tops:
+                    anc = tf.parent_id
+                    while anc and anc not in _seen_anc:
+                        _seen_anc.add(anc)
+                        # resolve by uuid string (parent_id stores parent uuid)
+                        p_row = db.execute(select(Folder).where(Folder.uuid == anc)).scalar_one_or_none()
+                        if not p_row:
+                            break
+                        if p_row.deleted_at is not None:
+                            restore_folders.append(anc)
+                        anc = p_row.parent_id
+                for f in top_files:
+                    anc = f.parent_folder_id
+                    while anc and anc not in _seen_anc:
+                        _seen_anc.add(anc)
+                        p_row = db.execute(select(Folder).where(Folder.uuid == anc)).scalar_one_or_none()
+                        if not p_row:
+                            break
+                        if p_row.deleted_at is not None:
+                            restore_folders.append(anc)
+                        anc = p_row.parent_id
                 restore_files = [f for f in top_files if f.deleted_at] + \
                                 [f for f in descendants if f.deleted_at]
                 live_names: Dict[str, set] = {}
@@ -217,6 +275,7 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                 for pid in pids:
                     if not pid:
                         names = set(db.execute(select(File.name).where(
+                            File.owner_id == user_id,
                             File.parent_folder_id.is_(None), File.deleted_at.is_(None))).scalars().all())
                         names |= set(db.execute(select(Folder.name).where(
                             Folder.parent_id.is_(None), Folder.deleted_at.is_(None),
@@ -237,6 +296,24 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                         f.name = unique_name(f.name, taken)
                         taken.add(f.name)
                     f.deleted_at = None
+                # DS3 E3: boundary folders (parent stays live) need CI-collision
+                # healing before bulk-clearing deleted_at, else restore mints
+                # collation-duplicate folder names.
+                from app.services.folder_service import FolderService
+                _fs = FolderService(db)
+                rset = set(restore_folders)
+                # DS5 F5-4/DS6 F6-4: pre-pass validates every boundary before
+                # the bulk clear below; NOTE _heal_name_conflict may rename in
+                # place — safe because all prior work is uncommitted and any
+                # failure path below calls db.rollback() discarding it all.
+                _brows = []
+                for chunk in _chunks(restore_folders):
+                    _brows += list(db.execute(select(Folder).where(Folder.uuid.in_(chunk))).scalars().all())
+                for b in _brows:
+                    if b.parent_id not in rset and _fs._heal_name_conflict(b) is False:
+                        db.rollback()
+                        return {"folders": 0, "files": 0, "freed_bytes": 0,
+                                "skipped": [{"uuid": b.uuid, "reason": "上層資料夾名稱衝突，無法還原"}]}
                 db.flush()
                 for chunk in _chunks(restore_folders):
                     db.execute(update(Folder).where(

@@ -26,8 +26,9 @@ class TestTusEmptyResponses:
         async def no_finalize(self, upload_id):
             return {'ok': True}
 
-        monkeypatch.setattr(fs_mod.FileService, 'append_tus_chunk', lambda self, u, o, c: fake_append(self, u, o, c))
-        monkeypatch.setattr(fs_mod.FileService, 'finalize_tus_upload', lambda self, u: {'ok': True})
+        monkeypatch.setattr(fs_mod.FileService, 'append_tus_chunk', lambda self, u, o, c, user_id=None: fake_append(self, u, o, c))
+        monkeypatch.setattr(fs_mod.FileService, 'get_tus_upload', lambda self, u, user_id=None: {'offset': 0, 'file_size': 100, 'stateCode': 200})
+        monkeypatch.setattr(fs_mod.FileService, 'finalize_tus_upload', lambda self, u, user_id=None: {'ok': True})
 
         headers = {
             'Tus-Resumable': '1.0.0',
@@ -42,6 +43,9 @@ class TestTusEmptyResponses:
 
             async def body(self):
                 return self._body
+
+            async def stream(self):
+                yield self._body
 
             def url_for(self, name, **kw):
                 return f'/api/files/tus/{kw.get("upload_id")}'

@@ -17,6 +17,14 @@ from app.config import settings
 from app.utils import logger as log
 from app.utils.security import hash_password, verify_password
 from app.utils.share_ticket import issue_ticket, verify_ticket
+
+
+def _pw_marker(pw):
+    """Password-epoch marker for tickets. Must actually change when the
+    password changes — argon2 hashes share a constant `$argon2id$v=19$m...`
+    prefix, so slicing the raw hash is useless (red-team DS2-1)."""
+    import hashlib
+    return hashlib.sha256((pw or '').encode()).hexdigest()[:16]
 from app.constants import HTTPStatus
 
 
@@ -111,7 +119,7 @@ class ShareService:
             return {'list': share_list, 'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error getting share list: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def create_link(self, user_id: int, item_uuid: str, item_type: str, limited_date: Optional[datetime] = None, available_user: Optional[List[int]] = None, password: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Create a share link for a folder or file. Always updates limited_date and available_user.
@@ -146,7 +154,7 @@ class ShareService:
                     item.share_password = hash_password(password) if password else None
                 self.folder_repo.update(item)
                 
-                self.logger.info(f"Folder share updated: uuid={item.uuid}, shared={item.shared}, limited_date={item.limited_date}")
+                self.logger.info(f"Folder share updated: uuid={item.uuid}, limited_date={item.limited_date}")
                 
                 return {'url': item.shared, 'stateCode': HTTPStatus.OK}
             
@@ -167,7 +175,7 @@ class ShareService:
                     item.share_password = hash_password(password) if password else None
                 self.file_repo.update(item)
                 
-                self.logger.info(f"File share updated: uuid={item.uuid}, shared={item.shared}, limited_date={item.limited_date}")
+                self.logger.info(f"File share updated: uuid={item.uuid}, limited_date={item.limited_date}")
                 
                 return {'url': item.shared, 'stateCode': HTTPStatus.OK}
             
@@ -176,7 +184,7 @@ class ShareService:
                 
         except Exception as e:
             self.logger.error(f"Error creating share link: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def delete_link(self, user_id: int, item_uuid: str, item_type: str) -> Optional[Dict[str, Any]]:
         """Delete a share link."""
@@ -215,41 +223,48 @@ class ShareService:
             return {'msg': 'success', 'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error deleting share link: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _check_share_access(self, item, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Check if a shared item is accessible. Returns error dict if not, None if OK."""
-        # Check limited_date (expiration)
-        if item.limited_date:
-            now = datetime.utcnow()
-            # limited_date is stored in local time (Taipei, UTC+8), so we need to compare with local time
-            now_local = now + timedelta(hours=8)
-            if now_local > item.limited_date:
-                self.logger.warning(f"Share link expired for item {item.uuid}, limited_date: {item.limited_date}, now_local: {now_local}")
-                return {'error': '分享連結已過期', 'stateCode': HTTPStatus.FORBIDDEN}
-        
-        # Check available_user (allowed user list)
-        if item.available_user and user_id is not None:
+        # Trashed items are NOT accessible via share links (defence-in-depth:
+        # share hash is not cleared when a parent folder is soft-deleted, and
+        # historical rows may predate share-clearing). Restoring the item
+        # re-enables the link again, which is the intended UX.
+        if getattr(item, "deleted_at", None) is not None:
+            return {'error': '分享的項目不存在或已被移除', 'stateCode': HTTPStatus.NOT_FOUND}
+
+        # Check available_user whitelist: an item restricted to specific users
+        # must NEVER be served to anonymous callers (user_id None) either —
+        # public endpoints do not pass a user_id, so a set whitelist is denied.
+        if item.available_user:
             try:
                 allowed_users = json.loads(item.available_user)
-                if allowed_users and user_id not in allowed_users:
-                    self.logger.warning(f"User {user_id} not in available_user list for item {item.uuid}")
-                    return {'error': '您沒有權限存取此分享連結', 'stateCode': HTTPStatus.FORBIDDEN}
             except (json.JSONDecodeError, TypeError):
-                self.logger.error(f"Failed to parse available_user for item {item.uuid}: {item.available_user}")
-        
+                allowed_users = []
+            if allowed_users and user_id not in allowed_users:
+                return {'error': '您沒有權限存取此分享連結', 'stateCode': HTTPStatus.FORBIDDEN}
+
+        # Check limited_date (expiration; stored in local Taipei time UTC+8)
+        if item.limited_date:
+            now = datetime.utcnow()
+            now_local = now + timedelta(hours=8)
+            if now_local > item.limited_date:
+                self.logger.warning(f"Share link expired for item {item.uuid}")
+                return {'error': '分享連結已過期', 'stateCode': HTTPStatus.FORBIDDEN}
+
         return None
     
     def get_share_status(self, share_hash: str) -> Optional[Dict[str, Any]]:
         """Public metadata about a share link: existence, password and expiry state."""
         try:
             item = self.db.execute(
-                select(File).where(File.shared == share_hash)
+                select(File).where(File.shared == share_hash, File.deleted_at.is_(None))
             ).scalar_one_or_none()
             item_type = 'file'
             if not item:
                 item = self.db.execute(
-                    select(Folder).where(Folder.shared == share_hash)
+                    select(Folder).where(Folder.shared == share_hash, Folder.deleted_at.is_(None))
                 ).scalar_one_or_none()
                 item_type = 'folder'
             if not item:
@@ -263,7 +278,7 @@ class ShareService:
                     'expired': expired, 'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error getting share status: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def verify_share_password(self, share_hash: str, password: str) -> Optional[Dict[str, Any]]:
         """Validate the share password; on success issue a short-lived ticket."""
@@ -281,14 +296,14 @@ class ShareService:
             if access_error:
                 return access_error
             if not verify_password(password, item.share_password):
-                self.logger.info(f"Share password verify failed for link {share_hash}")
+                self.logger.info(f"Share password verify failed for link {share_hash[:6]}…")
                 return {'error': '密碼錯誤', 'stateCode': HTTPStatus.FORBIDDEN}
-            return {'ticket': issue_ticket(share_hash),
+            return {'ticket': issue_ticket(share_hash, _pw_marker(item.share_password)),
                     'expires_in': settings.SHARE_TICKET_TTL_SECONDS,
                     'stateCode': HTTPStatus.OK}
         except Exception as e:
             self.logger.error(f"Error verifying share password: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def download(self, share_hash: str, user_id: Optional[int] = None, ticket: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Download a file via share link."""
@@ -304,15 +319,15 @@ class ShareService:
                 if access_error:
                     return access_error
                 
-                if file.share_password and not verify_ticket(share_hash, ticket):
+                if file.share_password and not verify_ticket(share_hash, ticket, _pw_marker(file.share_password)):
                     return {'error': '此分享需要密碼', 'stateCode': 428}
                 
                 file_path = Path(os.path.join(self.storage_base_path, file.uuid))
                 if not file_path.exists() or not file_path.is_file():
-                    self.logger.warning(f"File not found: {file_path}")
+                    self.logger.warning("Shared file payload missing")
                     return {'error': '檔案不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
-                self.logger.info(f"File found: {file_path} filename: {file.name}")
+                self.logger.info(f"Share file resolved for download: {file.uuid}")
                 return {
                     'real_path': str(file_path),
                     'filename': file.name,
@@ -331,17 +346,17 @@ class ShareService:
                 if access_error:
                     return access_error
                 
-                if folder.share_password and not verify_ticket(share_hash, ticket):
+                if folder.share_password and not verify_ticket(share_hash, ticket, _pw_marker(folder.share_password)):
                     return {'error': '此分享需要密碼', 'stateCode': 428}
                 
                 return {'error': '資料夾分享不支援下載', 'stateCode': HTTPStatus.BAD_REQUEST}
             
-            self.logger.warning(f"Share link not found: {share_hash}")
+            self.logger.warning(f"Share link not found: {share_hash[:6]}…")
             return {'error': '分享連結不存在', 'stateCode': HTTPStatus.NOT_FOUND}
             
         except Exception as e:
             self.logger.error(f"Error downloading file: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _generate_share_hash(self) -> str:
         """Generate a unique share hash."""
@@ -372,7 +387,7 @@ class ShareService:
         access_error = self._check_share_access(folder)
         if access_error:
             return None, access_error
-        if folder.share_password and not verify_ticket(share_hash, ticket):
+        if folder.share_password and not verify_ticket(share_hash, ticket, _pw_marker(folder.share_password)):
             return None, {'error': '此分享需要密碼', 'stateCode': 428}
         return folder, None
 
@@ -382,6 +397,10 @@ class ShareService:
         if not sub:
             return []
         segments = [s for s in sub.replace('\\', '/').split('/') if s not in ('', '.')]
+        # DS3 B4 (HIGH): unbounded segment count made downloadItems/browse a
+        # linear DB-query amplification vector on a single-worker event loop.
+        if len(segments) > 64:
+            return None
         if any(s == '..' or len(s) > 255 for s in segments):
             return None
         return segments
@@ -418,12 +437,14 @@ class ShareService:
             child_folders = self.db.execute(
                 select(Folder).where(
                     Folder.parent_id == cur.uuid,
+                    Folder.owner_id == folder.owner_id,
                     Folder.deleted_at.is_(None),
                 ).order_by(Folder.name)
             ).scalars().all()
             child_files = self.db.execute(
                 select(File).where(
                     File.parent_folder_id == cur.uuid,
+                    File.owner_id == folder.owner_id,
                     File.deleted_at.is_(None),
                 ).order_by(File.name)
             ).scalars().all()
@@ -436,7 +457,7 @@ class ShareService:
             }
         except Exception as e:
             self.logger.error(f"Error browsing share: {str(e)}")
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def collect_shared_items(self, share_hash: str, paths: List[str], ticket: Optional[str]):
         """Resolve public relative paths inside a shared folder into (file_uuids, folder_uuids)."""
@@ -444,10 +465,22 @@ class ShareService:
         if err:
             return None, None, None, err
         file_uuids, folder_uuids = [], []
-        for p in paths[:1000]:
+        # DS4: budget must bound event-loop TIME. 4096 segments still cost ~7s
+        # of synchronous DB walks on the single worker; 224 keeps worst case
+        # well under ~1s. Paths are deduped, and overflow / illegal segments
+        # return an explicit 400 instead of silently dropping the remainder
+        # (a "partial zip" that looks like a full 200 is a correctness bug).
+        budget = 224
+        uniq = list(dict.fromkeys(paths[:1000]))
+        for p in uniq:
             segments = self._split_public_path(p)
-            if segments is None or not segments:
+            if segments is None:
+                return None, None, None, {'error': '非法的路徑', 'stateCode': HTTPStatus.BAD_REQUEST}
+            if not segments:
                 continue
+            budget -= len(segments)
+            if budget < 0:
+                return None, None, None, {'error': '本次請求的路徑總量超過上限，請分批下載', 'stateCode': HTTPStatus.BAD_REQUEST}
             parent = self._walk_shared(folder, segments[:-1])
             if not parent:
                 continue

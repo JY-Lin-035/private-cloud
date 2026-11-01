@@ -9,7 +9,12 @@ const API_BASE = swUrl.searchParams.get('api') || '';
 const MEDIA_PREFIX = '/__media/';
 const ROOT = 'meow-media-2';
 const LEGACY_ROOTS = ['meow-media'];
-const SW_BUILD = 'p14-seal-22';
+const SW_BUILD = 'p15-ttl-30m';
+const CACHE_TTL_MS = 30 * 60 * 1000;   // drop entries untouched for 30 min
+const ATIME_FILE = 'atimes.json';
+const atimeMem = new Map();            // uid -> Map(uuid -> ms)
+let atimeFlushTimer = null;
+let lastSweep = 0;
 
 function trace0(k, stage) {
   broadcast({ type: 'media-skip', uid: k.uid, uuid: k.uuid, reason: `[w:${stage}]` });
@@ -183,6 +188,7 @@ async function doWarm(k, allowRetry = true) {
       // total may be null for 200 responses; size verified implicitly by close
       if (total != null && acc !== total) throw new Error('size-mismatch');
       await publishWip(dir, wipName, k.file);
+      markAccess(k);
       broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid });
     } catch (err) {
       const aborted = (err && err.name === 'AbortError') || ctrl.signal.aborted;
@@ -206,10 +212,73 @@ async function doWarm(k, allowRetry = true) {
 }
 
 self.addEventListener('install', (e) => e.waitUntil(self.skipWaiting()));
+
+// ------------------------------------------------------- access-time TTL
+function markAccess(k) {
+  try {
+    let m = atimeMem.get(k.uid);
+    if (!m) { m = new Map(); atimeMem.set(k.uid, m); }
+    m.set(k.uuid, Date.now());
+    if (!atimeFlushTimer) atimeFlushTimer = setTimeout(flushAtimes, 30000);
+  } catch { /* best-effort */ }
+}
+
+async function flushAtimes() {
+  atimeFlushTimer = null;
+  const roots = [];
+  try { const base = await navigator.storage.getDirectory(); await base.getDirectoryHandle(ROOT); roots.push(ROOT); } catch { /* none */ }
+  for (const uid of atimeMem.keys()) {
+    try {
+      const dir = (await rootDir()).getDirectoryHandle(uid);
+      const map = Object.fromEntries(atimeMem.get(uid) || []);
+      const h = await dir.getFileHandle(ATIME_FILE, { create: true });
+      const w = await h.createWritable();
+      await w.write(JSON.stringify(map));
+      await w.close();
+    } catch { /* uid dir gone */ }
+  }
+}
+
+async function sweepExpired(force = false) {
+  const now = Date.now();
+  if (!force && now - lastSweep < 60000) return 0;
+  lastSweep = now;
+  await flushAtimesSoon();
+  let removed = 0;
+  let base;
+  try { base = await navigator.storage.getDirectory(); } catch { return 0; }
+  let rootH;
+  try { rootH = await base.getDirectoryHandle(ROOT); } catch { return 0; }
+  for await (const [uid, dh] of rootH.entries()) {
+    if (dh.kind !== 'directory') continue;
+    let atimes = {};
+    try { atimes = JSON.parse(await (await (await dh.getFileHandle(ATIME_FILE)).getFile()).text()) || {}; } catch { /* none */ }
+    const mem = atimeMem.get(uid);
+    let alive = 0;
+    for await (const [name, fh] of dh.entries()) {
+      if (fh.kind !== 'file' || name === ATIME_FILE) continue;
+      const uuid = name.split('@')[0];
+      let at = atimes[uuid] || 0;
+      if (mem && mem.get(uuid) > at) at = mem.get(uuid);
+      if (!at) { try { at = (await fh.getFile()).lastModified || 0; } catch { /* skip */ } }
+      if (now - at > CACHE_TTL_MS) {
+        try { await dh.removeEntry(name); removed++; } catch { /* busy */ }
+      } else alive++;
+    }
+    if (alive === 0) { try { await rootH.removeEntry(uid); atimeMem.delete(uid); removed++; } catch { /* non-empty race */ } }
+  }
+  return removed;
+}
+
+async function flushAtimesSoon() {
+  if (atimeFlushTimer) { clearTimeout(atimeFlushTimer); }
+  await flushAtimes();
+}
 self.addEventListener('activate', (e) => e.waitUntil((async () => {
   for (const legacy of LEGACY_ROOTS) {
     try { const base = await navigator.storage.getDirectory(); await base.removeEntry(legacy, { recursive: true }); } catch { /* none */ }
   }
+  await sweepExpired(true).catch(() => {});
   await self.clients.claim();
 })()));
 
@@ -222,10 +291,19 @@ self.addEventListener('message', (e) => {
     })());
   }
   if (d.type === 'media-stop') { stopWarm(d.uuid); return; }
+  if (d.type === 'media-sweep') {
+    e.waitUntil((async () => {
+      const n = await sweepExpired(true).catch(() => 0);
+      const c = e.source && await self.clients.get(e.source.id);
+      c && c.postMessage({ type: 'media-swept', removed: n });
+    })());
+    return;
+  }
   if (d.type === 'media-purge') {
     e.waitUntil((async () => {
       warmState.abortReason = 'purge';
       try { if (warmState.ctrl) warmState.ctrl.abort(); } catch { /* noop */ }
+      atimeMem.clear();
       try {
         const base = await navigator.storage.getDirectory();
         await base.removeEntry(ROOT, { recursive: true });
@@ -248,7 +326,12 @@ self.addEventListener('fetch', (e) => {
   e.respondWith((async () => {
     let hit = null;
     try { hit = await cachedFile(k); } catch { /* miss */ }
-    if (hit) { broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid }); return rangeResponse(hit, e.request.headers.get('range'), k); }
+    if (hit) {
+      markAccess(k);
+      sweepExpired().catch(() => {});
+      broadcast({ type: 'media-cached', uid: k.uid, uuid: k.uuid });
+      return rangeResponse(hit, e.request.headers.get('range'), k);
+    }
     warm(k).catch(() => {});
     try {
       const headers = new Headers();

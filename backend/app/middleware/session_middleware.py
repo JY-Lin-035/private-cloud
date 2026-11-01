@@ -16,9 +16,33 @@ class SessionMiddleware(BaseHTTPMiddleware):
     # is what makes an idle (but open) tab expire as designed.
     NO_RENEW_PATHS = ('/api/announcements',)
 
+    # Endpoints that must be reachable without a valid session. Matched by
+    # EXACT path (plus an explicit prefix list) so a future sibling route such
+    # as /api/files/downloadXxx can never silently become public.
+    PUBLIC_EXACT = frozenset({
+        '/api/accounts/login',
+        '/api/accounts/register',
+        '/api/accounts/getCode',
+        '/api/accounts/resetPW',
+        '/api/accounts/checkSession',
+        '/api/accounts/settings/public',
+        '/api/share/downloadFile',
+        '/api/share/downloadFolder',
+        '/api/share/downloadItems',
+        '/api/share/browse',
+        '/api/share/status',
+        '/api/share/verifyPassword',
+        '/api/files/download',
+        '/api/files/raw',
+    })
+    PUBLIC_PREFIX = ('/api/email/verify/',)
+
     def __init__(self, app, redis_client: Redis):
         super().__init__(app)
         self.redis = redis_client
+
+    def _is_public(self, path: str) -> bool:
+        return path in self.PUBLIC_EXACT or any(path.startswith(p) for p in self.PUBLIC_PREFIX)
 
     def _is_no_renew(self, request: Request) -> bool:
         return (
@@ -28,21 +52,22 @@ class SessionMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         # Skip session validation for public endpoints
-        public_paths = ['/api/accounts/login', '/api/accounts/register', '/api/accounts/getCode', '/api/accounts/verifyEmail', '/api/accounts/resetPW', '/api/accounts/checkSession', '/api/accounts/settings/public', '/api/email/verify/', '/api/share/downloadFile', '/api/share/downloadFolder', '/api/share/downloadItems', '/api/share/browse', '/api/share/status', '/api/share/verifyPassword', '/api/files/download', '/api/files/raw', '/ws/collab/']
-        double_check_paths = ['/api/files/downloadToken']
-        if any(request.url.path.startswith(path) for path in public_paths) and not any(request.url.path.startswith(path) for path in double_check_paths):
-            logger.info(f"Session middleware - Request: {request.url.path}")
+        if self._is_public(request.url.path):
             return await call_next(request)
 
         # Extract session cookie
-        session_token = request.cookies.get('session')
-
-        logger.info(f"Session middleware - Request: {request.url.path}, has_session_cookie: {session_token is not None}")
-        
+        raw_cookie = request.headers.get('cookie') or ''
+        from app.utils.session_auth import parse_session_cookie
+        session_token = parse_session_cookie(raw_cookie)
+        if session_token is None and 'session' in raw_cookie.lower():
+            # a session-ish cookie exists but the single trusted parser
+            # rejects it (duplicates / malformed) -> fail closed
+            logger.info("Session middleware - Rejected malformed/duplicate session cookie")
+            return Response(status_code=HTTPStatus.UNAUTHORIZED)
         if session_token:
             # Validate session format (id|token)
             if '|' not in session_token:
-                logger.info(f"Session middleware - Invalid session format, session_token: {session_token}")
+                logger.info(f"Session middleware - Invalid session format, path: {request.url.path}")
                 return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             user_id, token_value = session_token.split('|', 1)
@@ -50,7 +75,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
             try:
                 user_id = int(user_id)
             except ValueError:
-                logger.info(f"Session middleware - Invalid user_id in session, session_token: {session_token}")
+                logger.info(f"Session middleware - Invalid user_id in session, path: {request.url.path}")
                 return Response(status_code=HTTPStatus.UNAUTHORIZED)
             
             # Check session in Redis
@@ -81,7 +106,6 @@ class SessionMiddleware(BaseHTTPMiddleware):
                     # Inject user into request state
                     request.state.user = user_dict
                     request.state.user_id = user_id
-                    logger.info(f"Session middleware - Session validated, user_id: {user_id}")
                 except json.JSONDecodeError as e:
                     logger.error(f"Session middleware - Failed to parse user data: {e}")
                     return Response(status_code=HTTPStatus.UNAUTHORIZED)
@@ -96,8 +120,6 @@ class SessionMiddleware(BaseHTTPMiddleware):
             if not self._is_no_renew(request):
                 self.redis.expire(f"session:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
                 self.redis.expire(f"session_data:{user_id}", settings.TOKEN_EXPIRE_TIME * 60)
-        else:
-            logger.info(f"Session middleware - No session cookie provided, path: {request.url.path}")
         
         # Process request
         response = await call_next(request)
@@ -110,7 +132,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
                         max_age=settings.TOKEN_EXPIRE_TIME * 60,
                         path='/',
                         httponly=True,
-                        samesite='none',
+                        samesite=settings.COOKIE_SAMESITE,
                         secure=True
                     )
         

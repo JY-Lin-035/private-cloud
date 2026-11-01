@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 import os
+import shutil
+import time
 import platform
 import logging
 
@@ -47,6 +49,11 @@ celery_app.conf.update(
             'schedule': settings.STORAGE_RECALCULATION_PERIOD,
             'options': {'queue': 'cleanup'},
         },
+        'cleanup-stale-tus-uploads': {
+            'task': 'app.tasks.cleanup_tasks.cleanup_stale_tus_uploads',
+            'schedule': 3600,
+            'options': {'queue': 'cleanup'},
+        },
     },
 )
 
@@ -84,11 +91,28 @@ def _purge_folder_subtree(db, file_repo, folder_uuid: str) -> tuple[int, int]:
         path = _file_storage_path(child_file)
         if os.path.exists(path):
             os.remove(path)
+        _purge_collab(child_file.uuid)
         file_repo.hard_delete(child_file.uuid)
         files_removed += 1
         bytes_freed += child_file.size or 0
 
     return files_removed, bytes_freed
+
+
+def _purge_collab(file_uuid: str) -> None:
+    """Drop collaboration Redis state and close any live socket for a file."""
+    try:
+        from redis import Redis
+        from app.services import collab_events
+        from app.services.snapshot_service import purge_file_state
+        collab_events.revoke_file(file_uuid, "retention purge")
+        r = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        try:
+            purge_file_state(file_uuid, r)
+        finally:
+            r.close()
+    except Exception:
+        pass
 
 
 @celery_app.task(bind=True, max_retries=3)
@@ -145,6 +169,7 @@ def cleanup_soft_deleted_items(self):
                     os.remove(file_path)
                     logger.info(f"Deleted file from storage: {file_path}")
 
+                _purge_collab(file.uuid)
                 file_repo.hard_delete(file.uuid)
                 total_files_deleted += 1
                 total_size_freed += file.size or 0
@@ -183,56 +208,22 @@ def recalculate_all_users_storage(self):
         
         try:
             from app.repositories.account_repository import AccountRepository
-            from app.repositories.file_repository import FileRepository
-            from app.repositories.folder_repository import FolderRepository
-            from app.models.file import File
-            from app.models.folder import Folder
-            from sqlalchemy import select
-            
+            from app.services.quota import recalc_user_storage
+
             account_repo = AccountRepository(db)
-            file_repo = FileRepository(db)
-            folder_repo = FolderRepository(db)
-            
+
             # Get all users
             all_users = account_repo.get_all()
-            
+
             total_users_processed = 0
             total_folders_updated = 0
-            
+
             for user in all_users:
-                logger.info(f"Processing user: {user.username}")
-                
-                # Get all folders for the user
-                folders = db.execute(
-                    select(Folder).where(Folder.owner_id == user.id)
-                ).scalars().all()
-                
-                user_total_size = 0
-                
-                # Recalculate each folder size
-                for folder in folders:
-                    # Calculate actual size from files in this folder
-                    files = db.execute(
-                        select(File).where(
-                            File.parent_folder_id == folder.uuid,
-                            File.deleted_at.is_(None)
-                        )
-                    ).scalars().all()
-                    
-                    actual_size = sum(file.size for file in files)
-                    
-                    # Update folder size
-                    folder.size = actual_size
-                    user_total_size += actual_size
-                
-                # Update account used size
-                user.used_size = user_total_size
-                
+                total, nf = recalc_user_storage(db, user)
                 total_users_processed += 1
-                total_folders_updated += len(folders)
-                
-                logger.info(f"Updated user {user.username}: {user_total_size} bytes, {len(folders)} folders")
-            
+                total_folders_updated += nf
+                logger.info(f"Updated user {user.name}: {total} bytes")
+
             db.commit()
             
             logger.info(
@@ -251,4 +242,62 @@ def recalculate_all_users_storage(self):
             
     except Exception as e:
         logger.error(f"Storage recalculation task failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+
+@celery_app.task(bind=True, max_retries=3)
+def cleanup_stale_tus_uploads(self):
+    """Remove abandoned tus temp upload directories past the max age."""
+    try:
+        max_age = settings.TUS_TEMP_MAX_AGE_SECONDS
+        base = settings.STORAGE_BASE_PATH
+        if not os.path.isabs(base):
+            base = os.path.join(os.getcwd(), base)
+        from app.constants import StorageLimits
+        tus_dir = os.path.join(base, StorageLimits.TUS_TEMP_DIR_NAME)
+        cutoff = time.time() - max_age
+        removed = 0
+        if os.path.isdir(tus_dir):
+            for name in os.listdir(tus_dir):
+                path = os.path.join(tus_dir, name)
+                try:
+                    if not os.path.isdir(path):
+                        continue
+                    # Age on the newest file inside, NOT the directory mtime:
+                    # appending chunks to upload.bin does not refresh the dir
+                    # mtime, so a >24h slow-but-active upload would otherwise
+                    # be deleted mid-flight.
+                    newest = os.path.getmtime(path)
+                    for root, _dirs, files in os.walk(path):
+                        for fn in files:
+                            try:
+                                newest = max(newest, os.path.getmtime(os.path.join(root, fn)))
+                            except OSError:
+                                continue
+                    if newest < cutoff:
+                        shutil.rmtree(path, ignore_errors=True)
+                        removed += 1
+                except OSError:
+                    continue
+        # GC orphaned collab temp files (<uuid>.<pid>.<hex>.tmp in the storage
+        # root) left behind by crashed persist writes. Real blobs never carry
+        # the .tmp suffix.
+        pruned = 0
+        try:
+            for name in os.listdir(base):
+                if not name.endswith(".tmp"):
+                    continue
+                fp = os.path.join(base, name)
+                try:
+                    if os.path.isfile(fp) and os.path.getmtime(fp) < cutoff:
+                        os.remove(fp)
+                        pruned += 1
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        logger.info(f"Stale tus cleanup removed {removed} dirs, pruned {pruned} orphan tmp files")
+        return {"status": "success", "removed": removed, "pruned_tmp": pruned}
+    except Exception as e:
+        logger.error(f"Stale tus cleanup failed: {str(e)}")
         return {"status": "error", "error": str(e)}

@@ -1,5 +1,6 @@
 import uuid
 import os
+import re
 import json
 import mimetypes
 from datetime import datetime, timezone, timedelta
@@ -56,7 +57,7 @@ class FileService:
                 'total_storage': total_storage
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_file_list(self, user_id: int, parent_folder_uuid: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Get list of files in a folder."""
@@ -68,6 +69,8 @@ class FileService:
                     return {"error": "Folder not found", "stateCode": HTTPStatus.NOT_FOUND}
                 if folder.owner_id != user_id:
                     return {"error": "Forbidden", "stateCode": HTTPStatus.FORBIDDEN}
+                if folder.deleted_at is not None:
+                    return {"error": "Folder not found", "stateCode": HTTPStatus.NOT_FOUND}
             files = self.file_repo.get_by_folder(parent_folder_uuid) if parent_folder_uuid else []
             folders = self.folder_repo.get_by_parent(parent_folder_uuid) if parent_folder_uuid else self.folder_repo.get_by_owner(user_id)
             
@@ -118,7 +121,7 @@ class FileService:
             
             return {'files': file_list, 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _validate_upload_filename(self, filename: str) -> bool:
         """Validate a filename for upload safety (shared denylist)."""
@@ -129,6 +132,12 @@ class FileService:
     def _get_tus_upload_dir(self, upload_id: str) -> str:
         """Return the temporary tus upload directory for an upload id."""
         return os.path.join(self.storage_base_path, StorageLimits.TUS_TEMP_DIR_NAME, upload_id)
+
+    @staticmethod
+    def _tus_id_ok(upload_id: str) -> bool:
+        # tus ids are always server-generated uuid4 strings; anything else
+        # (e.g. '..', '%2e', traversal) is rejected before touching the path.
+        return bool(upload_id) and bool(re.fullmatch(r"[0-9a-fA-F-]{36}", upload_id))
 
     def _get_tus_upload_path(self, upload_id: str) -> str:
         """Return the temporary tus upload binary path."""
@@ -144,6 +153,30 @@ class FileService:
         with open(self._get_tus_metadata_path(upload_id), 'w', encoding='utf-8') as f:
             json.dump(metadata, f)
 
+    def _sum_inflight_tus_bytes(self, user_id: int) -> int:
+        """Total DECLARED bytes of this user's unfinished tus sessions.
+
+        Used to reserve quota at create time: without this, a user could open
+        N parallel sessions that each individually pass the check and collectively
+        pin far more disk than their plan allows before finalize serializes them.
+        Unreadable/stale entries are skipped; GC reclaims them separately.
+        """
+        total = 0
+        try:
+            tus_dir = os.path.join(self.storage_base_path, StorageLimits.TUS_TEMP_DIR_NAME)
+            for name in os.listdir(tus_dir):
+                meta_path = os.path.join(tus_dir, name, 'upload.meta.json')
+                try:
+                    with open(meta_path, encoding='utf-8') as fh:
+                        m = json.load(fh)
+                    if int(m.get('user_id', -1)) == user_id:
+                        total += max(0, int(m.get('file_size', 0)))
+                except (OSError, ValueError, TypeError):
+                    continue
+        except OSError:
+            pass
+        return total
+
     def create_tus_upload(self, user_id: int, parent_folder_uuid: Optional[str], filename: str, file_size: int) -> Optional[Dict[str, Any]]:
         """Create a new temporary tus upload session."""
         try:
@@ -156,6 +189,24 @@ class FileService:
 
             if file_size > account.signal_file_size:
                 return {'error': '檔案大小超過限制', 'stateCode': HTTPStatus.FORBIDDEN}
+
+            # Reserve against the total quota up-front so in-progress temp files
+            # cannot exceed the account's plan before finalize re-checks.
+            # Replacing an existing same-name file frees its old bytes.
+            existing = self.db.execute(
+                select(File).where(
+                    File.owner_id == user_id,
+                    File.parent_folder_id == parent_folder_uuid,
+                    File.name == filename,
+                    File.deleted_at.is_(None),
+                )
+            ).scalars().first()
+            old_size = existing.size if existing else 0
+            # Count this user's OTHER in-flight tus sessions (the current one has
+            # no meta file yet) so parallel uploads can't collectively over-pin.
+            inflight = self._sum_inflight_tus_bytes(user_id)
+            if (account.used_size or 0) - old_size + inflight + file_size > (account.total_file_size or 0):
+                return {'error': '空間不足，無法上傳', 'stateCode': 413}
 
             if parent_folder_uuid:
                 parent_folder = self.folder_repo.get_by_uuid(parent_folder_uuid)
@@ -187,10 +238,12 @@ class FileService:
                 'stateCode': HTTPStatus.OK,
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
-    def get_tus_upload(self, upload_id: str) -> Optional[Dict[str, Any]]:
+    def get_tus_upload(self, upload_id: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Read current tus upload progress information."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
         try:
             upload_path = self._get_tus_upload_path(upload_id)
             metadata_path = self._get_tus_metadata_path(upload_id)
@@ -200,6 +253,10 @@ class FileService:
 
             with open(metadata_path, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
+
+            if user_id is not None and int(metadata.get('user_id', 0)) != int(user_id):
+                # Do not reveal that someone else's upload exists.
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
 
             offset = os.path.getsize(upload_path)
             return {
@@ -210,10 +267,13 @@ class FileService:
                 'stateCode': HTTPStatus.OK,
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
-    def append_tus_chunk(self, upload_id: str, upload_offset: int, chunk: bytes) -> Optional[Dict[str, Any]]:
+    def append_tus_chunk(self, upload_id: str, upload_offset: int, chunk: bytes,
+                         user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Append one chunk to a temporary tus upload."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
         try:
             upload_path = self._get_tus_upload_path(upload_id)
             metadata_path = self._get_tus_metadata_path(upload_id)
@@ -224,15 +284,31 @@ class FileService:
             with open(metadata_path, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
 
+            if user_id is not None and int(metadata.get('user_id', 0)) != int(user_id):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+
             current_offset = os.path.getsize(upload_path)
             if current_offset != upload_offset:
                 return {'error': 'Upload offset mismatch', 'stateCode': HTTPStatus.CONFLICT}
+
+            # Never write past the declared Upload-Length.
+            file_size = int(metadata.get('file_size', 0))
+            remaining = max(0, file_size - current_offset)
+            if remaining <= 0:
+                return {
+                    'upload_id': upload_id,
+                    'offset': current_offset,
+                    'completed': True,
+                    'stateCode': HTTPStatus.OK,
+                }
+            if len(chunk) > remaining:
+                chunk = chunk[:remaining]
 
             with open(upload_path, 'ab') as f:
                 f.write(chunk)
 
             new_offset = os.path.getsize(upload_path)
-            completed = new_offset >= int(metadata.get('file_size', 0))
+            completed = new_offset >= file_size
 
             return {
                 'upload_id': upload_id,
@@ -241,10 +317,31 @@ class FileService:
                 'stateCode': HTTPStatus.OK,
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
-    def finalize_tus_upload(self, upload_id: str) -> Optional[Dict[str, Any]]:
+    def abort_tus_upload(self, upload_id: str, user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Delete an in-flight tus session (owner-checked) to release quota."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+        try:
+            import shutil
+            dir_path = self._get_tus_upload_dir(upload_id)
+            meta_path = self._get_tus_metadata_path(upload_id)
+            if not os.path.exists(meta_path):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            if user_id is not None and int(metadata.get('user_id', 0)) != int(user_id):
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+            shutil.rmtree(dir_path, ignore_errors=True)
+            return {'ok': True}
+        except Exception:
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+
+    def finalize_tus_upload(self, upload_id: str, requesting_user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Finalize a tus upload by moving the temp file into persistent storage."""
+        if not self._tus_id_ok(upload_id):
+            return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
         try:
             upload_path = self._get_tus_upload_path(upload_id)
             metadata_path = self._get_tus_metadata_path(upload_id)
@@ -256,11 +353,16 @@ class FileService:
                 metadata = json.load(f)
 
             filename = metadata.get('filename')
-            file_size = int(metadata.get('file_size', 0))
             user_id = int(metadata.get('user_id', 0))
             parent_folder_uuid = metadata.get('parent_folder_uuid')
 
-            account = self.account_repo.get_by_id(user_id)
+            if requesting_user_id is not None and int(requesting_user_id) != user_id:
+                return {'error': 'Upload not found', 'stateCode': HTTPStatus.NOT_FOUND}
+
+            # Bill the real bytes on disk, never the client-declared length.
+            file_size = os.path.getsize(upload_path)
+
+            account = self.db.query(Account).filter(Account.id == user_id).with_for_update().first()
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
@@ -274,17 +376,18 @@ class FileService:
                     File.name == filename,
                     File.deleted_at.is_(None)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
 
-            old_file_size = 0
+            old_file_size = existing_file.size if existing_file else 0
+            projected = (account.used_size or 0) - old_file_size + file_size
+            if projected > (account.total_file_size or 0):
+                return {'error': '空間不足，無法完成上傳', 'stateCode': 413}
+
             if existing_file:
-                old_file_size = existing_file.size
                 old_storage_path = os.path.join(self.storage_base_path, existing_file.uuid)
                 if os.path.exists(old_storage_path):
                     os.remove(old_storage_path)
                 self.file_repo.hard_delete(existing_file.uuid)
-                account.used_size = max(0, account.used_size - old_file_size)
-                self.account_repo.update(account)
                 if parent_folder_uuid:
                     self.folder_service._update_parent_folder_size(parent_folder_uuid, -old_file_size)
 
@@ -307,7 +410,7 @@ class FileService:
             if parent_folder_uuid:
                 self.folder_service._update_parent_folder_size(parent_folder_uuid, file_size)
 
-            account.used_size += file_size
+            account.used_size = max(0, (account.used_size or 0) - old_file_size + file_size)
             self.account_repo.update(account)
 
             if os.path.exists(metadata_path):
@@ -323,12 +426,12 @@ class FileService:
                 'created_at': _fmt_utc8(created_file.created_at)
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def upload_file(self, user_id: int, parent_folder_uuid: Optional[str], file, file_size: int) -> Optional[Dict[str, Any]]:
         """Upload a file."""
         try:
-            account = self.account_repo.get_by_id(user_id)
+            account = self.db.query(Account).filter(Account.id == user_id).with_for_update().first()
 
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
@@ -356,22 +459,20 @@ class FileService:
                     File.name == filename,
                     File.deleted_at.is_(None)
                 )
-            ).scalar_one_or_none()
+            ).scalars().first()
+
+            old_file_size = existing_file.size if existing_file else 0
+            if (account.used_size or 0) - old_file_size + file_size > (account.total_file_size or 0):
+                return {'error': '空間不足，無法上傳', 'stateCode': 413}
 
             # If exists, hard delete the old file
-            old_file_size = 0
             if existing_file:
-                old_file_size = existing_file.size
                 # Delete old file from storage
                 old_storage_path = os.path.join(self.storage_base_path, existing_file.uuid)
                 if os.path.exists(old_storage_path):
                     os.remove(old_storage_path)
                 # Hard delete from database
                 self.file_repo.hard_delete(existing_file.uuid)
-
-                # Update account used storage (remove old file size)
-                account.used_size = max(0, account.used_size - old_file_size)
-                self.account_repo.update(account)
 
                 # Update parent folder size (remove old file size)
                 if parent_folder_uuid:
@@ -408,7 +509,7 @@ class FileService:
                 self.folder_service._update_parent_folder_size(parent_folder_uuid, file_size)
 
             # Update account used storage
-            account.used_size += file_size
+            account.used_size = max(0, (account.used_size or 0) - old_file_size + file_size)
             self.account_repo.update(account)
             
             return {
@@ -419,7 +520,7 @@ class FileService:
                 'created_at': _fmt_utc8(created_file.created_at)
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def download(self, user_id: int, file_uuid: str) -> Optional[Dict[str, Any]]:
         """Download a file."""
@@ -447,7 +548,7 @@ class FileService:
                 'stateCode': HTTPStatus.OK
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def delete(self, user_id: int, file_uuid: str, permanent: bool = False) -> Optional[Dict[str, Any]]:
         """Delete a file (soft or hard)."""
@@ -464,20 +565,32 @@ class FileService:
             
             file_size = file.size
 
-            # Clear share link
-            if file.shared:
+            # Clear share link (+ password hash) on trash — single-file path.
+            if file.shared or file.share_password:
                 file.shared = None
+                file.share_password = None
 
             if permanent:
-                # Hard delete: remove from storage and database
+                # DS3 E1: commit the DB row removal FIRST (hard_delete also
+                # clears collaborations + commits); only unlink the blob once
+                # the row is gone, so a failure can't leave bytes-orphaned or
+                # a row-ghost with stuck quota.
+                removed = self.file_repo.hard_delete(file_uuid)
+                if not removed:
+                    return {'error': 'NotFound', 'stateCode': HTTPStatus.NOT_FOUND}
+                # DS7: hard_delete committed separately; reload the account
+                # under a fresh row lock so concurrent deltas are never lost.
+                acct = self.db.query(Account).filter(
+                    Account.id == user_id).with_for_update().first()
+                if acct:
+                    acct.used_size = max(0, (acct.used_size or 0) - file_size)
+                    self.account_repo.update(acct)
                 file_path = os.path.join(self.storage_base_path, file.uuid)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                self.file_repo.hard_delete(file_uuid)
-
-                # Update account used storage only on hard delete
-                account.used_size = max(0, account.used_size - file_size)
-                self.account_repo.update(account)
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except OSError:
+                    pass
             else:
                 # Soft delete
                 self.file_repo.soft_delete(file_uuid)
@@ -485,14 +598,28 @@ class FileService:
             # Update parent folder size only for hard delete (soft delete items still occupy space)
             if permanent and file.parent_folder_id:
                 self.folder_service._update_parent_folder_size(file.parent_folder_id, -file_size)
-            
+
+            try:
+                from app.services import collab_events
+                collab_events.revoke_file(file_uuid, "file deleted")
+                if permanent:
+                    from app.services.snapshot_service import purge_file_state
+                    from redis import Redis as _Redis
+                    _r = _Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                    try:
+                        purge_file_state(file_uuid, _r)
+                    finally:
+                        _r.close()
+            except Exception:
+                pass
+
             return {
                 'uuid': file_uuid,
                 'size': file_size,
                 'permanent': permanent
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def restore(self, user_id: int, file_uuid: str) -> Optional[Dict[str, Any]]:
         """Restore a soft-deleted file."""
@@ -506,6 +633,22 @@ class FileService:
             
             if not file.deleted_at:
                 return {'error': 'File not deleted', 'stateCode': HTTPStatus.BAD_REQUEST}
+
+            # DS2-2/F5: restore ancestor folder chain so the file lands back in
+            # a visible tree instead of becoming an invisible orphan.
+            if file.parent_folder_id:
+                anc = self.folder_repo.get_by_uuid(file.parent_folder_id)
+                aseen = set()
+                while anc and anc.uuid not in aseen:
+                    aseen.add(anc.uuid)
+                    if anc.deleted_at is not None:
+                        anc.deleted_at = None
+                        if self.folder_service._heal_name_conflict(anc) is False:
+                            self.db.rollback()
+                            return {'error': '上層資料夾名稱衝突，無法還原', 'stateCode': HTTPStatus.CONFLICT}
+                        self.db.add(anc)
+                    anc = self.folder_repo.get_by_uuid(anc.parent_id) if anc.parent_id else None
+                self.db.flush()
             
             # Check for name conflict with existing files in the same folder
             if file.parent_folder_id:
@@ -539,7 +682,7 @@ class FileService:
                 'restored': True
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_by_owner(self, user_id: int) -> Dict[str, Any]:
         """Get all files by owner."""
@@ -561,7 +704,7 @@ class FileService:
                 ]
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def get_trash(self, user_id: int) -> Dict[str, Any]:
         """Get soft-deleted files by owner."""
@@ -588,7 +731,7 @@ class FileService:
                 'files': files_with_path
             }
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
     
     def _get_file_path(self, folder_uuid: str, user_id: int) -> str:
         """Get the full path of a folder as a string."""
@@ -597,8 +740,9 @@ class FileService:
             current_folder = self.db.execute(
                 select(Folder).where(Folder.uuid == folder_uuid)
             ).scalar_one_or_none()
-            
-            while current_folder:
+            seen = set()
+            while current_folder and current_folder.uuid not in seen:
+                seen.add(current_folder.uuid)
                 path_parts.append(current_folder.name)
                 if current_folder.parent_id:
                     current_folder = self.db.execute(
@@ -657,34 +801,30 @@ class FileService:
 
             return {'moved': moved, 'renamed': renamed, 'failed': failed, 'stateCode': HTTPStatus.OK}
         except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
 
     def recalculate_used_storage(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Recalculate used storage from actual non-deleted files."""
+        """Recalculate used storage from files that still occupy disk.
+
+        Delegates to the single shared implementation (app.services.quota) so
+        the user self-service, admin, and scheduled sweeps can never drift.
+        Includes soft-deleted (trashed) files on purpose: they stay on disk
+        until GC and, by the delete path's own semantics, keep counting toward
+        the quota; excluding them would allow a quota bypass.
+        """
         try:
             account = self.account_repo.get_by_id(user_id)
-
             if not account:
                 return {'error': '使用者不存在', 'stateCode': HTTPStatus.NOT_FOUND}
 
-            # Get all non-deleted files for the user
-            files = self.db.execute(
-                select(File).where(
-                    File.owner_id == user_id,
-                    File.deleted_at.is_(None)
-                )
-            ).scalars().all()
-
-            # Sum up all file sizes
-            total_used = sum(f.size for f in files)
-
-            # Update account used_size
-            account.used_size = total_used
-            self.account_repo.update(account)
+            from app.services.quota import recalc_user_storage
+            total_used, _folders = recalc_user_storage(self.db, account)
+            self.db.commit()
 
             return {
                 'used_storage': total_used,
                 'stateCode': HTTPStatus.OK
             }
-        except Exception as e:
-            return {'error': str(e), 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}
+        except Exception:
+            self.db.rollback()
+            return {'error': '操作失敗，請稍後再試', 'stateCode': HTTPStatus.INTERNAL_SERVER_ERROR}

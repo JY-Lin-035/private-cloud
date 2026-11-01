@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authApi } from '../../api/authApi';
+import { setAuthedUI } from '../../utils/authedUI';
 import { purgeMediaCache } from '../../utils/mediaCache';
 
 
@@ -33,6 +34,7 @@ function Login({ onFlip, onNotice, allowRegistration = false }: LoginProps) {
       };
 
       const r = await authApi.login(data);
+      setAuthedUI(true);
       purgeMediaCache(); // account switch: never inherit previous user's media cache
       localStorage.setItem("email", r.email);
       setUserName('');

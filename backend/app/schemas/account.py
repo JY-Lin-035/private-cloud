@@ -24,8 +24,8 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=128)
+    password: str = Field(max_length=128)  # bound Argon2 input; site policy max is 100
 
 
 class ModifyEmailRequest(BaseModel):

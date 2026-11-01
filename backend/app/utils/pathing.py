@@ -19,6 +19,8 @@ def sanitize_rel_path(rel_path: str) -> tuple[list[str], Optional[str]]:
         return [], None
     segments = []
     for part in raw.split('/'):
+        if len(segments) >= 64:
+            return [], '路徑層級過多'
         part = part.strip()
         if not part:
             continue
@@ -34,8 +36,14 @@ def sanitize_rel_path(rel_path: str) -> tuple[list[str], Optional[str]]:
 
 
 def unique_name(base: str, taken: set[str]) -> str:
-    """Return base or 'name (1).ext' style increments absent from taken."""
-    if base not in taken:
+    """Return base or 'name (1).ext' style increments absent from taken.
+
+    Comparison is case-insensitive (NFC+casefold) because MySQL's default
+    collation treats 'A.txt' and 'a.txt' as equal; case-sensitive checks here
+    allowed CI-duplicate rows that later blow up as 500s (red-team F3/DS2-6).
+    """
+    taken_ci = {t.casefold() for t in taken}
+    if base.casefold() not in taken_ci:
         return base
     if '.' in base and not base.startswith('.'):
         stem, dot, ext = base.rpartition('.')
@@ -44,6 +52,6 @@ def unique_name(base: str, taken: set[str]) -> str:
     i = 1
     while True:
         candidate = f"{stem} ({i}){dot}{ext}" if dot else f"{stem} ({i})"
-        if candidate not in taken:
+        if candidate.casefold() not in taken_ci:
             return candidate
         i += 1

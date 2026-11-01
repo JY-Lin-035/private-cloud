@@ -38,6 +38,46 @@ def _get_file_path(file_uuid: str) -> Optional[str]:
         db.close()
 
 
+COLLAB_STATE_PREFIXES = (
+    "collab_content:", "collab_ybase:", "collab_yupdates:",
+    "collab_yversion:", "collab_ystate:", "collab_snapshot:",
+    "collab_ybytes:",
+)
+
+# Everything except the snapshot archive: session-volatile state that can be
+# rebuilt from disk on the next join (load_file -> _load_file_content +
+# needs_y_init), so it must not pin Redis bytes for 7 days after a save.
+VOLATILE_STATE_PREFIXES = tuple(p for p in COLLAB_STATE_PREFIXES if p != "collab_snapshot:")
+
+
+def purge_file_state(file_uuid: str, redis: Redis, include_snapshots: bool = True) -> None:
+    """Drop collaboration Redis keys for a file (deletion / hard cleanup)."""
+    try:
+        prefixes = COLLAB_STATE_PREFIXES if include_snapshots else VOLATILE_STATE_PREFIXES
+        for prefix in prefixes:
+            redis.delete(f"{prefix}{file_uuid}")
+    except Exception:
+        pass
+
+
+def demote_failed_state_ttl(file_uuid: str, redis: Redis) -> None:
+    """R11-MED-1: when autosave cannot land content (quota full / file gone),
+    the volatile keys would otherwise sit at their 7-day TTL while the
+    scheduler retries forever. Give up on the buffered edit after a short
+    grace window: cap every volatile key's TTL at
+    COLLAB_FAILED_STATE_TTL_SECONDS once, on first failure (later ticks see a
+    smaller TTL and leave it alone, so it does count down)."""
+    cap = settings.COLLAB_FAILED_STATE_TTL_SECONDS
+    for prefix in VOLATILE_STATE_PREFIXES:
+        key = f"{prefix}{file_uuid}"
+        try:
+            t = redis.ttl(key)
+            if t is not None and 0 <= cap < t:
+                redis.expire(key, cap)
+        except Exception:
+            pass
+
+
 def _normalize_snapshots(snapshots: List[Dict]) -> List[Dict]:
     by_id = {}
     for snapshot in snapshots:
@@ -76,7 +116,12 @@ def save_snapshot(file_uuid: str, redis: Redis):
 
     snapshots = _normalize_snapshots(snapshots)
 
-    redis.set(_get_snapshot_key(file_uuid), json.dumps(snapshots))
+    key = _get_snapshot_key(file_uuid)
+    redis.set(key, json.dumps(snapshots))
+    try:
+        redis.expire(key, settings.COLLAB_STATE_TTL_SECONDS)
+    except Exception:
+        pass
 
 
 def get_snapshots(file_uuid: str, redis: Redis) -> List[Dict]:
@@ -100,18 +145,23 @@ def switch_to_snapshot(file_uuid: str, snapshot_id: int | str, redis: Redis) -> 
     return None
 
 
-def auto_save_to_disk(file_uuid: str, redis: Redis):
-    """Save latest content from Redis to disk (called every 30 seconds)."""
+def auto_save_to_disk(file_uuid: str, redis: Redis) -> Optional[bool]:
+    """Save latest content from Redis to disk (called every 30 seconds).
+
+    Routed through the quota-aware writer so autosave cannot bypass per-file
+    or total-quota limits (and keeps used_size accounting correct).
+
+    Returns True/False = persist outcome, None = nothing to do (no usable
+    buffered content). The scheduler tick uses this to either purge the
+    now-redundant volatile keys (success + empty room) or shorten their TTL
+    (failure), bounding Redis pinning per R11-MED-1.
+    """
     content = redis.get(_get_content_key(file_uuid))
     if not content or not content.strip():
-        return
-
-    file_path = _get_file_path(file_uuid)
-    if not file_path:
-        return
+        return None
 
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        from app.services.collab_persist import persist_content
+        return bool(persist_content(file_uuid, content))
     except Exception:
-        pass
+        return False

@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.services.share_service import ShareService
 from app.services import zip_service
 from app.api.dependencies import get_db, get_current_user_id, get_redis
@@ -14,6 +14,11 @@ from app.constants import HTTPStatus
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/share", tags=["share"])
+
+
+def _m(token: str) -> str:
+    """Bearer share links are credentials: never log them in full."""
+    return (token or "")[:6] + "…"
 logger = log.get_logger("share_api.log")
 
 
@@ -45,7 +50,7 @@ async def get_share_list(
         share_service = ShareService(db)
         
         result = share_service.get_list(user_id)
-        logger.info(f"Get share list result: {result}")
+        logger.info(f"Get share list ok for user_id {user_id}")
         
         if result and 'error' in result:
             logger.error(f"Get share list error {result['error']}, stateCode: {result['stateCode']}")
@@ -78,14 +83,19 @@ async def create_share_link(
                 # Also handle ISO format: "2026-07-17T09:00:00.000Z"
                 cleaned = request.limited_date.replace('Z', '+00:00')
                 parsed_limited_date = datetime.fromisoformat(cleaned)
+                if parsed_limited_date.year > 2038 or parsed_limited_date.year < 1970:
+                    raise ValueError('out of supported range')
                 logger.info(f"Parsed limited_date: {parsed_limited_date}")
-            except Exception as e:
-                logger.error(f"Failed to parse limited_date '{request.limited_date}': {e}")
+            except Exception:
+                # DS3 A9/A10: never silently fall through to a PERMANENT link
+                # when the caller asked for an expiry (and >2038 breaks MySQL
+                # TIMESTAMP at insert with a 500).
+                raise HTTPException(status_code=400, detail='到期日期格式不正確或超出支援範圍')
         
         share_service = ShareService(db)
         
         result = share_service.create_link(user_id, request.item_uuid, request.item_type, limited_date=parsed_limited_date, password=request.password)
-        logger.info(f"Create share link result: {result}")
+        logger.info(f"Create share link ok for user_id {user_id}, item {request.item_uuid}")
         
         if result and 'error' in result:
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
@@ -140,12 +150,12 @@ async def download_shared_file(
 ):
     """Download a file via share link (no authentication required)."""
     global logger
-    logger.info(f"Download shared file request received, link: {link}")
+    logger.info(f"Download shared file request received, link: {_m(link)}")
     try:        
         share_service = ShareService(db)
         
         result = share_service.download(link, ticket=ticket)
-        logger.info(f"Download shared file result: {result}")
+        logger.info(f"Download shared file {_m(link)} status={(result or {}).get('stateCode', '?')}")
         
         if result and 'error' in result:
             logger.error(f"Download shared file error: {result['error']}, stateCode: {result['stateCode']}")
@@ -193,7 +203,8 @@ async def share_verify_password(
     lockout (10/15min, no bystander punishment) + argon2 verification cost.
     """
     from app.services import security_engine
-    client_ip = request.client.host if request.client else ""
+    from app.utils.client_ip import request_client_ip
+    client_ip = request_client_ip(request)
     lock_key = f"sharePwFail:{body.link}:{client_ip}"
     try:
         failures = int(redis_client.get(lock_key) or 0)
@@ -215,13 +226,13 @@ async def share_verify_password(
                                                f"錯密碼（第 {attempts} 次）")
         raise HTTPException(status_code=result['stateCode'], detail=result['error'])
     redis_client.delete(lock_key)
-    logger.info(f"Share password verified, ticket issued for link: {body.link}")
+    logger.info(f"Share password verified, ticket issued for link: {_m(body.link)}")
     return {'ticket': result['ticket'], 'expires_in': result['expires_in']}
 
 
 class ShareItemsRequest(BaseModel):
     link: str
-    paths: list[str]
+    paths: list[str] = Field(max_length=2000)
     ticket: Optional[str] = None
     folder_name: Optional[str] = None  # root folder display name -> "<name>-part.zip"
 
@@ -252,7 +263,7 @@ async def share_download_folder(
     if err:
         raise HTTPException(status_code=err['stateCode'], detail=err['error'])
     items, kept_files, _ = zip_service.collect_zip_items(db, folder.owner_id, [], [folder.uuid])
-    logger.info(f"Public folder zip: link={link}, files={kept_files}")
+    logger.info(f"Public folder zip: link={_m(link)}, files={kept_files}")
     return zip_service.build_zip_response(items, folder.name)
 
 
@@ -270,5 +281,5 @@ async def share_download_items(
     import re as _re
     clean = _re.sub(r'[\\/:*?"<>|\x00-\x1f]', '', request.folder_name or '')[:100].strip()
     display = f'{clean}-part' if clean else 'shared-download'
-    logger.info(f"Public items zip: link={request.link}, files={kept_files}, folders={kept_folders}")
+    logger.info(f"Public items zip: link={_m(request.link)}, files={kept_files}, folders={kept_folders}")
     return zip_service.build_zip_response(items, display)

@@ -62,6 +62,11 @@ export async function registerMediaSW(): Promise<boolean> {
         }
       });
       try { if (navigator.storage.persist) await navigator.storage.persist(); } catch { /* noop */ }
+      // Periodic TTL sweep while a tab is open: expired media (30 min untouched)
+      // stops lying on shared devices even if nobody re-plays anything.
+      setInterval(() => {
+        if (document.visibilityState === 'visible') requestMediaSweep();
+      }, 10 * 60 * 1000);
       registeredOk = true;
     } catch (e) {
       console.warn('[mediaCache] SW register failed:', e);
@@ -72,6 +77,10 @@ export async function registerMediaSW(): Promise<boolean> {
     return registeredOk;
   })();
   return inflight;
+}
+
+export function requestMediaSweep(): void {
+  try { navigator.serviceWorker?.controller?.postMessage({ type: 'media-sweep' }); } catch { /* noop */ }
 }
 
 export async function mediaSrc(uuid: string, updatedAt: string, mime?: string): Promise<string> {
