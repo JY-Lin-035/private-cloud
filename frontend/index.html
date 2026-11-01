@@ -1,15 +1,100 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
 
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/webp" href="/assets/J.webp" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Meow</title>
+  <title>MeowCloud｜個人雲端儲存</title>
+  <meta name="description" content="個人雲端儲存" />
+  <link rel="canonical" href="https://meowcloud.jun.org.uk/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="MeowCloud" />
+  <meta property="og:title" content="MeowCloud｜個人雲端儲存" />
+  <meta property="og:description" content="個人雲端儲存" />
+  <meta property="og:url" content="https://meowcloud.jun.org.uk/" />
+  <meta property="og:image" content="https://meowcloud.jun.org.uk/assets/J.webp" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://meowcloud.jun.org.uk/#website",
+        "url": "https://meowcloud.jun.org.uk/",
+        "name": "MeowCloud",
+        "inLanguage": "zh-Hant"
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://meowcloud.jun.org.uk/#org",
+        "name": "MeowCloud",
+        "url": "https://meowcloud.jun.org.uk/",
+        "logo": "https://meowcloud.jun.org.uk/assets/J.webp",
+        "sameAs": ["https://github.com/JY-Lin-035/private-cloud"]
+      },
+      {
+        "@type": "SoftwareApplication",
+        "name": "MeowCloud",
+        "url": "https://meowcloud.jun.org.uk/",
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Web browser",
+        "description": "個人雲端儲存",
+        "publisher": { "@id": "https://meowcloud.jun.org.uk/#org" }
+      }
+    ]
+  }
+  </script>
+  <style>
+    .sl-wrap { max-width: 720px; margin: 0 auto; padding: 0 20px; color: #1f2328; font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif; }
+    .sl-hero { text-align: center; padding: 40px 20px 8px; }
+    .sl-hero h1 { font-size: 26px; margin: 0 0 10px; }
+    .sl-hero p { font-size: 15px; color: #57606a; margin: 0 auto; max-width: 560px; line-height: 1.7; }
+    .sl-lower { padding: 24px 20px 48px; }
+    .sl-feat { margin: 26px 0; }
+    .sl-feat h2 { font-size: 17px; margin: 0 0 6px; }
+    .sl-feat p { font-size: 14px; color: #57606a; margin: 0; line-height: 1.7; }
+    .sl-faq h2 { font-size: 17px; margin: 34px 0 10px; }
+    .sl-faq h3 { font-size: 15px; margin: 16px 0 4px; }
+    .sl-faq p { font-size: 14px; color: #57606a; margin: 0; line-height: 1.7; }
+    .sl-footer { margin-top: 40px; text-align: center; font-size: 12.5px; color: #8b949e; }
+    body.sl-authed .sl-hide { display: none; }
+  </style>
 </head>
 
 <body>
+  <header class="sl-hero sl-hide">
+    <h1>MeowCloud｜個人雲端儲存</h1>
+    <p>把檔案放上自己的雲端：上傳、瀏覽、協作、共編，在瀏覽器裡完成，手機電腦免安裝。</p>
+  </header>
   <div id="app"></div>
+  <div class="sl-lower sl-hide">
+    <div class="sl-wrap">
+      <section class="sl-feat">
+        <h2>檔案協作與即時共編</h2>
+        <p>邀請夥伴一起編輯文件，編輯者／檢視者權限涇渭分明，變更即時同步。</p>
+      </section>
+      <section class="sl-feat">
+        <h2>加密分享連結</h2>
+        <p>一條連結一套權限：可設密碼、到期日，並能隨時撤銷。</p>
+      </section>
+      <section class="sl-feat">
+        <h2>隱私自主</h2>
+        <p>你的資料存在自己管理的伺服器上，不依賴第三方平台。</p>
+      </section>
+      <section class="sl-faq">
+        <h2>常見問題</h2>
+        <h3>需要安裝 App 嗎？</h3>
+        <p>不用，開瀏覽器即用，支援手機與桌面裝置。</p>
+        <h3>支援哪些檔案預覽？</h3>
+        <p>影片、音樂、圖片、PDF、Office 文件格式與文字／程式碼皆可線上預覽，純文字類可直接編輯。</p>
+        <h3>分享出去的連結安全嗎？</h3>
+        <p>分享連結可加密碼、設效期，撤銷後即時失效。</p>
+      </section>
+      <footer class="sl-footer">© MeowCloud</footer>
+    </div>
+  </div>
   <script type="module" src="/src/main.tsx"></script>
 </body>
 
