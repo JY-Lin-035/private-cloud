@@ -42,13 +42,14 @@ interface FormState {
   hours: string;      // '1' | '6' | '24' | 'custom' | '' (indefinite)
   customAt: string;
   reason: string;
+  alsoBlock: boolean;
 }
 
 const emptyForm: FormState = {
   subject_type: 'ip', ip: '', token: '', username: '',
   action: 'slow', scope: 'transfer', direction: 'both',
   delay: '2000', upK: '256', dnK: '512',
-  hours: '1', customAt: '', reason: '',
+  hours: '1', customAt: '', reason: '', alsoBlock: false,
 };
 
 function toBody(f: FormState) {
@@ -66,6 +67,7 @@ function toBody(f: FormState) {
     expires_in_hours: (f.hours && f.hours !== 'custom') ? Number(f.hours) : null,
     expires_at: f.hours === 'custom' ? localToIso(f.customAt) : null,
     reason: f.reason.trim() || (f.action === 'block' ? '手動封鎖' : '手動設定'),
+    also_block_accounts: f.subject_type === 'ip' ? f.alsoBlock : false,
   };
 }
 
@@ -84,7 +86,7 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
       </label>
       <label className={labCls}>
         {f.subject_type === 'user' ? '帳號名稱' : f.subject_type === 'ip_token' ? 'IP' : 'IP 位址'}
-        <input className={inputCls} disabled={subjectFixed} placeholder={f.subject_type === 'user' ? '例 meowking' : '例 1.2.3.4'}
+        <input className={inputCls} disabled={subjectFixed} placeholder={f.subject_type === 'user' ? '例 meowking' : '例 1.2.3.4 或 1.2.3.0/24 或 2001:db8::/32'}
           value={f.subject_type === 'user' ? f.username : f.ip}
           onChange={e => set(f.subject_type === 'user' ? { username: e.target.value } : { ip: e.target.value })} />
       </label>
@@ -144,6 +146,12 @@ function FormFields({ f, set, subjectFixed = false }: { f: FormState; set: (patc
           <input type="datetime-local" step="1" className={inputCls} value={f.customAt} onChange={e => set({ customAt: e.target.value })} />
         </label>
       ) : <div className="hidden md:block" aria-hidden />}
+      {f.subject_type === 'ip' && (
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={f.alsoBlock} onChange={e => set({ alsoBlock: e.target.checked })} />
+          同時封鎖此 IP 近期活躍的帳號（免疫雙堆疊/動態 IP）
+        </label>
+      )}
       <label className={labCls}>原因
         <input className={inputCls} placeholder="例：批量拖檔疑似外洩" value={f.reason} onChange={e => set({ reason: e.target.value })} />
       </label>
@@ -232,6 +240,7 @@ function IPManagement({ layoutClass = "" }: Props) {
       hours: r.expires_at ? 'custom' : '',
       customAt: r.expires_at ? localInputFromUtc(r.expires_at) : '',
       reason: r.reason ?? '',
+      alsoBlock: false,
     });
   }
 

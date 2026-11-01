@@ -1175,3 +1175,105 @@ class TestAutosaveRedisPinningR20:
         assert "def collab_autosave_tick" in src
         assert "include_snapshots=False" in src
         assert "demote_failed_state_ttl" in src
+
+
+class TestIpMatchNormalizeR20b:
+    def test_normalize_variants(self):
+        from app.services.security_engine import normalize_ip
+        assert normalize_ip("2001:0DB8:0000:0000:0000:0000:0000:0001") == "2001:db8::1"
+        assert normalize_ip(" 1.2.3.4 ") == "1.2.3.4"
+        assert normalize_ip("garbage") == "garbage"
+        assert normalize_ip(None) is None
+
+    def test_matcher_hit_miss_matrix(self):
+        from app.services.security_engine import compile_rule_matcher, ip_matches
+        m6 = compile_rule_matcher("2001:DB8::/64")
+        assert ip_matches(m6, "2001:db8:0:0:abcd:ef01:2345:6789", "2001:db8::abcd")   # same /64, tail swap
+        assert not ip_matches(m6, "2001:db9::1", "2001:db9::1")                        # other /64
+        m4 = compile_rule_matcher("10.0.0.5")
+        assert ip_matches(m4, "10.0.0.5", "10.0.0.5")
+        assert not ip_matches(m4, "2001:db8::5", "2001:db8::5")                        # family guard
+        jl = compile_rule_matcher("not-an-ip")
+        assert ip_matches(jl, "not-an-ip", "not-an-ip")                                # literal fallback
+        assert not ip_matches(None, "1.2.3.4", "1.2.3.4")
+
+    def test_match_rules_end_to_end_cidr_block(self, monkeypatch):
+        import app.services.security_engine as se
+        from app.services.security_engine import compile_rule_matcher
+        rule = {
+            "id": 1, "subject_type": "ip", "ip": "2001:db8:cafe::/64", "token": None,
+            "user_id": None, "action": "block", "scope": "full", "direction": "both",
+            "delay_ms": 0, "upload_kbps": None, "download_kbps": None, "auto": False,
+            "_m": compile_rule_matcher("2001:db8:cafe::/64"),
+        }
+        monkeypatch.setattr(se, "_active_rules", lambda: [rule])
+        blocked, *_ = se.match_rules("2001:0DB8:CAFE:0000:0000:0000:0000:00ff", 7, False, False, False)
+        assert blocked
+        blocked, *_ = se.match_rules("2001:db8:cafe:1::ff", 7, False, False, False)
+        assert not blocked
+
+    def test_cache_compiles_matchers(self):
+        src = open("app/services/security_engine.py").read()
+        assert '"_m": compile_rule_matcher(r.ip)' in src
+        assert 'nip = normalize_ip(ip)' in src
+
+    def test_canonical_rule_ip_guards(self):
+        from app.api.v1.ipcontrol import _canonical_rule_ip
+        from fastapi import HTTPException
+        assert _canonical_rule_ip("2001:0DB8::ABCD") == "2001:db8::abcd"
+        assert _canonical_rule_ip("1.2.3.0/24") == "1.2.3.0/24"
+        assert _canonical_rule_ip("1.2.3.4/32") == "1.2.3.4/32"   # host bits kept for full-width
+        assert _canonical_rule_ip("1.2.3.5/24") == "1.2.3.0/24"   # strict=False descent
+        with pytest.raises(HTTPException):
+            _canonical_rule_ip("10.0.0.0/4")     # absurd v4 span
+        with pytest.raises(HTTPException):
+            _canonical_rule_ip("2001:db8::/16")  # absurd v6 span
+        with pytest.raises(HTTPException):
+            _canonical_rule_ip("")
+
+
+class TestLinkRecentAccountsR20b:
+    class _FakeR:
+        data: dict = {}
+        def scan_iter(self, pattern):
+            return [k for k in self.data if k.startswith("ipActors:")]
+        def hgetall(self, k):
+            return self.data.get(k, {})
+
+    def _mk(self, db, name, identity_val=None, expire=None):
+        from app.models.account import Account
+        kw = dict(name=name, email=f"{name}@x.io", password="x", enable=True)
+        a = Account(**kw)
+        if identity_val is not None:
+            a.identity = identity_val
+        db.add(a); db.commit(); db.refresh(a)
+        return a
+
+    def test_single_host_and_cidr_link_user_rules(self, db_session, monkeypatch):
+        from app.api.v1.ipcontrol import _link_recent_accounts
+        from app.models.ip_control import IpControl
+        from app.models.account import Account
+        import redis as rl
+        a = self._mk(db_session, "linkme")
+        admin = self._mk(db_session, "boss"); admin.identity = 1; db_session.commit()
+        self._FakeR.data = {
+            "ipActors:1.2.3.4": {str(a.id): "1730000000", str(admin.id): "1730000000"},
+            "ipActors:2001:db8:cafe::9": {"99999": "1"},
+        }
+        monkeypatch.setattr(rl.Redis, "from_url", staticmethod(lambda url: self._FakeR()))
+        rule = IpControl(subject_type="ip", ip="1.2.3.4/32", action="block", scope="full",
+                         direction="both", delay_ms=0, auto=False)
+        db_session.add(rule); db_session.commit()
+        linked = _link_recent_accounts(db_session, rule, rule.ip)
+        db_session.commit()
+        assert linked == ["linkme"]                       # admin skipped
+        rows = db_session.query(IpControl).filter(IpControl.subject_type == "user").all()
+        assert [r.user_id for r in rows] == [a.id]
+        assert rows[0].action == "block" and rows[0].expires_at is None
+        # dedupe: second call must not double-mirror
+        assert _link_recent_accounts(db_session, rule, rule.ip) == []
+        # v6 /64 rule matches actors by membership
+        r6 = IpControl(subject_type="ip", ip="2001:db8:cafe::/64", action="slow", scope="transfer",
+                       direction="both", delay_ms=100, auto=False)
+        db_session.add(r6); db_session.commit()
+        assert self._FakeR.data.get("ipActors:2001:db8:cafe::9") is not None
