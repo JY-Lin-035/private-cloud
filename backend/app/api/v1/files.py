@@ -718,7 +718,10 @@ def _file_access_role(db: Session, user_id: int, f) -> str | None:
             Collaboration.collaborator_id == user_id,
         )
     ).scalars().first()
-    return (c.permission or "editor").lower() if c else None
+    if not c:
+        return None
+    role = (c.permission or "editor").strip().lower()
+    return role if role in ("editor", "viewer") else "viewer"  # F6-3 whitelist, unknown => read-only
 
 
 def _load_editable(db: Session, user_id: int, file_uuid: str) -> FileModel:
@@ -836,18 +839,21 @@ async def save_file_content(
     if len(data) > MAX_EDIT_BYTES:
         raise HTTPException(status_code=413, detail="內容超過編輯上限 2MB")
     delta = len(data) - (f.size or 0)
-    if delta > 0:
-        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
+    # F6-1: quota belongs to the FILE OWNER (bytes live in their tree), not
+    # the caller. Collaborator edits must charge/refund the owner's account,
+    # matching the WS persist_content path.
+    owner_id = f.owner_id
+    if delta != 0:
+        acct = db.query(Account).filter(Account.id == owner_id).with_for_update().first()
         if acct is None:
             raise HTTPException(status_code=404, detail="帳號不存在")
-        if len(data) > acct.signal_file_size:
-            raise HTTPException(status_code=413, detail="超過單檔大小上限")
-        if (acct.used_size or 0) + delta > acct.total_file_size:
-            raise HTTPException(status_code=413, detail="空間不足，無法儲存")
-        acct.used_size = (acct.used_size or 0) + delta
-    elif delta < 0:
-        acct = db.query(Account).filter(Account.id == user_id).with_for_update().first()
-        if acct:
+        if delta > 0:
+            if len(data) > acct.signal_file_size:
+                raise HTTPException(status_code=413, detail="超過單檔大小上限")
+            if (acct.used_size or 0) + delta > acct.total_file_size:
+                raise HTTPException(status_code=413, detail="空間不足，無法儲存")
+            acct.used_size = (acct.used_size or 0) + delta
+        else:
             acct.used_size = max(0, (acct.used_size or 0) + delta)
     path = _os.path.join(settings.STORAGE_BASE_PATH, f.uuid)
     tmp = path + ".tmp"

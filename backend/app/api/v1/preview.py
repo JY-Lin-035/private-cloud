@@ -113,8 +113,13 @@ async def preview_raw(
     if uuid_s != uuid:
         raise HTTPException(status_code=403, detail="憑證與檔案不符")
     batch_ops.assert_not_deleting(redis, uuid)
-    f = db.execute(select(File).where(File.uuid == uuid, File.owner_id == uid)).scalar_one_or_none()
+    # F6-2: the token's uid is the ISSUER (possibly a collaborator). Re-check
+    # access via the role helper instead of requiring owner == issuer.
+    f = db.execute(select(File).where(File.uuid == uuid)).scalar_one_or_none()
     if f is None or f.deleted_at is not None or ext_of(f.name) not in SANDBOX_EXTS:
+        raise HTTPException(status_code=404, detail="檔案不存在")
+    from app.api.v1.files import _file_access_role
+    if _file_access_role(db, uid, f) is None:
         raise HTTPException(status_code=404, detail="檔案不存在")
     if (f.size or 0) > MAX_EDIT_BYTES:
         raise HTTPException(status_code=413, detail="檔案過大")

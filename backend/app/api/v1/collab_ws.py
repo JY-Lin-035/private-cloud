@@ -260,7 +260,9 @@ def _permission_role(file_uuid: str, user_id: int):
         collab = CollaborationRepository(db).get_by_file_and_collaborator(file_uuid, user_id)
         if collab is None:
             return None
-        return (collab.permission or "editor").lower()
+        role = (collab.permission or "editor").strip().lower()
+        # F6-3: whitelist; unknown roles fail closed as read-only viewer
+        return role if role in ("editor", "viewer") else "viewer"
     except Exception:
         return None
     finally:

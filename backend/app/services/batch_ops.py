@@ -287,9 +287,10 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                 from app.services.folder_service import FolderService
                 _fs = FolderService(db)
                 rset = set(restore_folders)
-                # DS5 F5-4: pure validation pass FIRST (no mutations), so an
-                # unresolvable conflict aborts the whole batch cleanly without
-                # partially-renamed state.
+                # DS5 F5-4/DS6 F6-4: pre-pass validates every boundary before
+                # the bulk clear below; NOTE _heal_name_conflict may rename in
+                # place — safe because all prior work is uncommitted and any
+                # failure path below calls db.rollback() discarding it all.
                 _brows = []
                 for chunk in _chunks(restore_folders):
                     _brows += list(db.execute(select(Folder).where(Folder.uuid.in_(chunk))).scalars().all())

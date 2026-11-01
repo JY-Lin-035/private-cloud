@@ -903,3 +903,57 @@ class TestWsDispatchBehavioral:
         calls = self._run(monkeypatch, "editor",
                           [{"type": "cursor", "cursor": {"i": 1}}], self.FU)
         assert not calls["persist"] and not calls["append"]
+
+
+class TestRedTeamRound6Locks:
+    """Locks for DS6 findings (F6-1/F6-2/F6-3)."""
+
+    def test_f6_1_collab_edit_charges_owner(self, db_session, sample_account, sample_home_folder, tmp_path, monkeypatch):
+        import uuid as _u
+        from datetime import datetime
+        from app.models.file import File
+        from app.models.account import Account
+        from app.models.collaboration import Collaboration
+        from app.services.folder_service import FolderService
+        monkeypatch.setattr("app.config.settings.STORAGE_BASE_PATH", str(tmp_path))
+        collab = Account(name="editor99", password="x", email="e@x.cc", signal_file_size=10**8,
+                         total_file_size=10**8, used_size=0, identity=0, enable=True,
+                         email_verified_at=datetime.utcnow())
+        db_session.add(collab); db_session.commit()
+        f = File(uuid=str(_u.uuid4()), owner_id=sample_account.id,
+                 parent_folder_id=sample_home_folder.uuid, name="s.txt",
+                 size=5, mime_type="text/plain", storage_path="p")
+        db_session.add(f)
+        db_session.add(Collaboration(file_uuid=f.uuid, owner_id=sample_account.id,
+                                     collaborator_id=collab.id, permission="editor"))
+        db_session.commit()
+        # write 105 bytes through the SAME persist path REST now shares semantics with
+        import app.services.collab_persist as CP
+        class _NoClose:
+            def __init__(self, s): self._s = s
+            def __getattr__(self, n): return getattr(self._s, n)
+            def close(self): pass
+        monkeypatch.setattr(CP, "SessionLocal", lambda: _NoClose(db_session))
+        from app.services.collab_persist import persist_content
+        ok = persist_content(f.uuid, "y" * 105)
+        assert ok
+        db_session.refresh(sample_account); db_session.refresh(collab)
+        assert sample_account.used_size == 100   # owner charged by delta (+100), not absolute
+        assert collab.used_size == 0             # collaborator untouched
+        # and REST PUT source must lock f.owner_id — assert the call site changed
+        import inspect
+        from app.api.v1 import files as F
+        src = inspect.getsource(F.save_file_content)
+        assert "Account.id == owner_id" in src and "owner_id = f.owner_id" in src
+
+    def test_f6_2_preview_raw_uses_role(self):
+        import inspect
+        from app.api.v1 import preview as P
+        src = inspect.getsource(P)
+        assert "_file_access_role" in src and "File.owner_id == uid" not in src
+
+    def test_f6_3_unknown_role_fails_closed(self):
+        import inspect
+        from app.api.v1 import files as F, collab_ws as C
+        assert '"editor", "viewer"' in inspect.getsource(F)
+        assert '"editor", "viewer"' in inspect.getsource(C)
