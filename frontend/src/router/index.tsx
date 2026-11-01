@@ -3,6 +3,7 @@ import { lazy } from 'react';
 import RouteError from '../components/RouteError';
 import Nav from '../components/Nav';
 import Footer from '../components/Footer';
+import { LandingIntro, LandingDetail } from '../components/Landing';
 import Home from '../pages/Home/Home';
 const LoginRegisterPage = lazy(() => import('../pages/LoginRegister/LoginRegisterPage'));
 const ResetPW = lazy(() => import('../pages/ResetPW/ResetPW'));
@@ -27,7 +28,11 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col min-h-screen">
           <Nav layoutClass="flex-0" />
-          <Home layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+          <div className="flex-1 overflow-y-auto">
+            <LandingIntro />
+            <Home layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+            <LandingDetail />
+          </div>
           <Footer layoutClass="flex-0" />
         </div>
       </>
@@ -41,7 +46,11 @@ const router = createBrowserRouter([
         <div className="fixed top-0 left-0 w-screen h-screen bg-gray-500 z-[-5] opacity-50"></div>
         <div className="flex flex-col min-h-screen">
           <Nav layoutClass="flex-0" />
-          <LoginRegisterPage layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+          <div className="flex-1 overflow-y-auto">
+            <LandingIntro />
+            <LoginRegisterPage layoutClass="flex-1 min-h-[calc(100vh-8rem)] md:min-h-[700px]" />
+            <LandingDetail />
+          </div>
           <Footer layoutClass="flex-0" />
         </div>
       </>
