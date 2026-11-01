@@ -78,8 +78,15 @@ class FolderService:
                     continue
                 seen.add(child_folder.uuid)
                 q.append(child_folder.uuid)
+                # DS4 G-1: trashing a folder revokes its share links, matching
+                # single-file delete (folder soft-delete previously left the
+                # `shared` hash intact so the link silently resurrected).
+                child_folder.shared = None
+                child_folder.share_password = None
                 self.folder_repo.soft_delete(child_folder.uuid)
             for child_file in file_repo.get_by_folder(cur):
+                child_file.shared = None
+                child_file.share_password = None
                 file_repo.soft_delete(child_file.uuid)
     
     def _hard_delete_children(self, folder_uuid: str) -> None:
@@ -253,6 +260,8 @@ class FolderService:
             else:
                 # Soft delete: recursively mark all children as deleted
                 self._soft_delete_children(folder_uuid)
+                folder.shared = None
+                folder.share_password = None
                 self.folder_repo.soft_delete(folder_uuid)
 
                 # Don't update parent folder size for soft delete (items still occupy space)
@@ -324,7 +333,9 @@ class FolderService:
                     break
                 if p.deleted_at is not None:
                     p.deleted_at = None
-                    self._heal_name_conflict(p)
+                    if self._heal_name_conflict(p) is False:
+                        self.db.rollback()
+                        return {'error': '上層資料夾名稱衝突，無法還原', 'stateCode': HTTPStatus.CONFLICT}
                     self.folder_repo.update(p)
                 anc = p.parent_id
 
@@ -689,7 +700,7 @@ class FolderService:
             ).limit(1)
         ).scalars().first()
         if not conflict:
-            return None
+            return None  # no rename needed (None == ok, unchanged)
         for _ in range(64):
             siblings = set(self.db.execute(
                 select(Folder.name).where(
@@ -712,7 +723,7 @@ class FolderService:
             folder.name = cand
             if not still:
                 return cand
-        return None
+        return False  # could not resolve a unique name -> caller must abort
 
     def _subtree_height(self, folder_uuid: str, budget: int = 2000) -> int:
         """Max depth (in folders) of the subtree rooted at uuid; capped scan."""

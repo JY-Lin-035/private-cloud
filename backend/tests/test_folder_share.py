@@ -93,8 +93,10 @@ class TestSelectedDownload:
         assert zf.read("in/deep.txt") == b"DEEP"
 
     def test_bad_path_falls_back_404(self, env):
+        # DS4 R13: traversal / overflow paths are now an explicit 400 (was a
+        # silent skip to 404), matching browse's behavior for the same input.
         _, _, _, err = svc(env).collect_shared_items("linkhash1", ["../../etc/passwd"], None)
-        assert err["stateCode"] == 404
+        assert err["stateCode"] == 400
 
     def test_full_folder_via_downloadItems_shape(self, env):
         from app.api.v1.share import share_browse
@@ -125,3 +127,32 @@ class TestDownloadFolderHandler:
         with pytest.raises(HTTPException) as exc:
             asyncio.run(share_download_folder(link="linkhash1", ticket=None, db=env["db"]))
         assert exc.value.status_code == 428
+
+
+class TestRedTeamRound13Locks:
+    """Locks for DS4 findings."""
+
+    def test_collect_budget_400(self, env=None):
+        from app.services.share_service import ShareService
+        import inspect
+        src = inspect.getsource(ShareService.collect_shared_items)
+        assert "分批下載" in src and "budget = 224" in src
+
+    def test_folder_trash_clears_share(self):
+        import inspect
+        from app.services.folder_service import FolderService
+        src = inspect.getsource(FolderService.delete)
+        src2 = inspect.getsource(FolderService._soft_delete_children)
+        assert "shared = None" in src and "shared = None" in src2
+
+    def test_heal_failure_protocol(self):
+        import inspect
+        from app.services.folder_service import FolderService
+        src = inspect.getsource(FolderService._heal_name_conflict)
+        assert "return False" in src
+
+    def test_viewer_write_gate_source(self):
+        import inspect
+        from app.api.v1 import collab_ws
+        src = inspect.getsource(collab_ws)
+        assert "_WRITE_TYPES" in src and "唯讀成員無法編輯" in src

@@ -121,8 +121,10 @@ async def tus_create_upload(
         if not filename:
             raise HTTPException(status_code=400, detail='Missing filename metadata')
 
+        if upload_length is None or str(upload_length).strip() == "":
+            raise HTTPException(status_code=400, detail='Missing Upload-Length')
         try:
-            file_size = int(upload_length or 0)
+            file_size = int(upload_length)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail='Invalid Upload-Length')
         if file_size < 0:

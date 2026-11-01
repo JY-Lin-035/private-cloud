@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone, timedelta
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.models.account import Account
 from app.models.file import File
@@ -9,6 +10,14 @@ from app.repositories.file_repository import FileRepository
 from app.utils.email_utils import mask_email
 from app.repositories.account_repository import AccountRepository
 from app.constants import HTTPStatus
+
+
+
+
+def _chunks(seq, n=500):
+    seq = list(seq)
+    for i in range(0, len(seq), n):
+        yield seq[i:i+n]
 
 
 class CollaborationService:
@@ -125,12 +134,21 @@ class CollaborationService:
     def get_owned_collaborations(self, owner_id: int) -> Optional[Dict[str, Any]]:
         """Get all collaborations initiated by the current user (inviter view)."""
         try:
-            collabs = self.collab_repo.get_by_owner(owner_id)
-            # Group by file_uuid
+            collabs = self.collab_repo.get_by_owner(owner_id)[:1000]
+            # DS4 J-1: batch loads instead of per-row queries
+            from app.models.file import File as _F
+            fmap = {}
+            for chunk in _chunks([c.file_uuid for c in collabs]):
+                for fo in self.db.execute(select(_F).where(_F.uuid.in_(chunk))).scalars().all():
+                    fmap[fo.uuid] = fo
+            cmap = {}
+            for chunk in _chunks([c.collaborator_id for c in collabs]):
+                for ac in self.db.execute(select(Account).where(Account.id.in_(chunk))).scalars().all():
+                    cmap[ac.id] = ac
             file_groups: Dict[str, Dict] = {}
             for c in collabs:
-                file = self.file_repo.get_by_uuid(c.file_uuid)
-                collaborator = self.account_repo.get_by_id(c.collaborator_id)
+                file = fmap.get(c.file_uuid)
+                collaborator = cmap.get(c.collaborator_id)
                 file_uuid = c.file_uuid
                 if file_uuid not in file_groups:
                     file_groups[file_uuid] = {
@@ -153,15 +171,29 @@ class CollaborationService:
     def get_my_collaborations(self, collaborator_id: int) -> Optional[Dict[str, Any]]:
         """Get all collaborations where user is invited (invitee view)."""
         try:
-            collabs = self.collab_repo.get_by_collaborator(collaborator_id)
+            collabs = self.collab_repo.get_by_collaborator(collaborator_id)[:1000]
+            # DS4 J-1: batch-load files/owners (was N+1) and hide trashed files
+            from app.models.file import File as _F
+            fuuids = [c.file_uuid for c in collabs]
+            fmap = {}
+            for chunk in _chunks(fuuids):
+                for fo in self.db.execute(select(_F).where(_F.uuid.in_(chunk))).scalars().all():
+                    fmap[fo.uuid] = fo
+            oids = {c.owner_id for c in collabs}
+            amap = {}
+            for chunk in _chunks(list(oids)):
+                for ac in self.db.execute(select(Account).where(Account.id.in_(chunk))).scalars().all():
+                    amap[ac.id] = ac
             items = []
             for c in collabs:
-                file = self.file_repo.get_by_uuid(c.file_uuid)
-                owner = self.account_repo.get_by_id(c.owner_id)
+                file = fmap.get(c.file_uuid)
+                if file is None or file.deleted_at is not None:
+                    continue
+                owner = amap.get(c.owner_id)
                 items.append({
                     'id': c.id,
                     'file_uuid': c.file_uuid,
-                    'file_name': file.name if file else '未知檔案',
+                    'file_name': file.name,
                     'owner_id': c.owner_id,
                     'owner_name': owner.name if owner else '未知',
                     'owner_email': mask_email(owner.email) if owner else '未知',

@@ -289,8 +289,10 @@ def batch_operation(user_id: int, folders: List[str], files: List[str], mode: st
                 rset = set(restore_folders)
                 for chunk in _chunks(restore_folders):
                     for b in db.execute(select(Folder).where(Folder.uuid.in_(chunk))).scalars().all():
-                        if b.parent_id not in rset:
-                            _fs._heal_name_conflict(b)
+                        if b.parent_id not in rset and _fs._heal_name_conflict(b) is False:
+                            db.rollback()
+                            return {"folders": 0, "files": 0, "freed_bytes": 0,
+                                    "skipped": [{"uuid": b.uuid, "reason": "上層資料夾名稱衝突，無法還原"}]}
                 db.flush()
                 for chunk in _chunks(restore_folders):
                     db.execute(update(Folder).where(

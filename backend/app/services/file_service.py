@@ -565,9 +565,10 @@ class FileService:
             
             file_size = file.size
 
-            # Clear share link
-            if file.shared:
+            # Clear share link (+ password hash) on trash — single-file path.
+            if file.shared or file.share_password:
                 file.shared = None
+                file.share_password = None
 
             if permanent:
                 # DS3 E1: commit the DB row removal FIRST (hard_delete also
@@ -637,7 +638,9 @@ class FileService:
                     aseen.add(anc.uuid)
                     if anc.deleted_at is not None:
                         anc.deleted_at = None
-                        self.folder_service._heal_name_conflict(anc)
+                        if self.folder_service._heal_name_conflict(anc) is False:
+                            self.db.rollback()
+                            return {'error': '上層資料夾名稱衝突，無法還原', 'stateCode': HTTPStatus.CONFLICT}
                         self.db.add(anc)
                     anc = self.folder_repo.get_by_uuid(anc.parent_id) if anc.parent_id else None
                 self.db.flush()

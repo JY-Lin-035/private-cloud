@@ -437,12 +437,14 @@ class ShareService:
             child_folders = self.db.execute(
                 select(Folder).where(
                     Folder.parent_id == cur.uuid,
+                    Folder.owner_id == folder.owner_id,
                     Folder.deleted_at.is_(None),
                 ).order_by(Folder.name)
             ).scalars().all()
             child_files = self.db.execute(
                 select(File).where(
                     File.parent_folder_id == cur.uuid,
+                    File.owner_id == folder.owner_id,
                     File.deleted_at.is_(None),
                 ).order_by(File.name)
             ).scalars().all()
@@ -463,14 +465,22 @@ class ShareService:
         if err:
             return None, None, None, err
         file_uuids, folder_uuids = [], []
-        budget = 4096  # total path segments resolved in one request (DS3 B4)
-        for p in paths[:1000]:
+        # DS4: budget must bound event-loop TIME. 4096 segments still cost ~7s
+        # of synchronous DB walks on the single worker; 224 keeps worst case
+        # well under ~1s. Paths are deduped, and overflow / illegal segments
+        # return an explicit 400 instead of silently dropping the remainder
+        # (a "partial zip" that looks like a full 200 is a correctness bug).
+        budget = 224
+        uniq = list(dict.fromkeys(paths[:1000]))
+        for p in uniq:
             segments = self._split_public_path(p)
-            if segments is None or not segments:
+            if segments is None:
+                return None, None, None, {'error': '非法的路徑', 'stateCode': HTTPStatus.BAD_REQUEST}
+            if not segments:
                 continue
             budget -= len(segments)
-            if budget <= 0:
-                break
+            if budget < 0:
+                return None, None, None, {'error': '本次請求的路徑總量超過上限，請分批下載', 'stateCode': HTTPStatus.BAD_REQUEST}
             parent = self._walk_shared(folder, segments[:-1])
             if not parent:
                 continue

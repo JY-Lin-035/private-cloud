@@ -248,34 +248,50 @@ def _reset_y_state(file_uuid: str, redis: Redis, content: str) -> None:
     redis.delete(f"collab_ybytes:{file_uuid}")
 
 
-def _check_permission(file_uuid: str, user_id: int) -> bool:
+def _permission_role(file_uuid: str, user_id: int):
+    """Return 'owner' | 'editor' | 'viewer' | None for the WS caller."""
     db = SessionLocal()
     try:
         file = FileRepository(db).get_by_uuid(file_uuid)
         if not file or file.deleted_at is not None:
-            return False
+            return None
         if file.owner_id == user_id:
-            return True
-        return CollaborationRepository(db).get_by_file_and_collaborator(file_uuid, user_id) is not None
+            return "owner"
+        collab = CollaborationRepository(db).get_by_file_and_collaborator(file_uuid, user_id)
+        if collab is None:
+            return None
+        return (collab.permission or "editor").lower()
     except Exception:
-        return False
+        return None
     finally:
         db.close()
 
 
-def _perm_ok(file_uuid: str, user_id: int, force: bool = False) -> bool:
+def _check_permission(file_uuid: str, user_id: int) -> bool:
+    return _permission_role(file_uuid, user_id) is not None
+
+
+_WRITE_TYPES = {"y_init_state", "y_update", "y_projection", "persist_text", "save", "switch_version"}
+
+
+def _perm_role_cached(file_uuid: str, user_id: int, force: bool = False):
+    """Cached role lookup; None = no access, 'viewer' = read-only member."""
     key = (file_uuid, user_id)
     now = time.time()
     with _perm_lock:
         cached = _perm_cache.get(key)
         if cached and not force and now - cached[1] < PERM_TTL:
-            return cached[0]
-    ok = _check_permission(file_uuid, user_id)
+            return cached[0] or None if cached[0] != "__none__" else None
+    role = _permission_role(file_uuid, user_id)
     with _perm_lock:
         if len(_perm_cache) > 10000:
             _perm_cache.clear()
-        _perm_cache[key] = (ok, now)
-    return ok
+        _perm_cache[key] = (role or "__none__", now)
+    return role
+
+
+def _perm_ok(file_uuid: str, user_id: int, force: bool = False) -> bool:
+    return _perm_role_cached(file_uuid, user_id, force) is not None
 
 
 def _session_alive(redis: Redis, user_id: int) -> bool:
@@ -428,7 +444,18 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
 
             msg_type = data.get("type") if isinstance(data, dict) else None
 
-            if msg_type == "y_init_state":
+            # DS4 F-1: 'viewer' collaborators are read-only. Enforce the
+            # permission column on every write-capable frame type (the column
+            # existed but was never checked before).
+            if msg_type in _WRITE_TYPES:
+                role = await asyncio.to_thread(_perm_role_cached, file_uuid, user_id)
+                if role is None:
+                    await websocket.close(code=4403)
+                    break
+                if role == "viewer":
+                    await websocket.send_json({"type": "write_error", "message": "唯讀成員無法編輯此檔案"})
+                    continue
+
                 if not await asyncio.to_thread(_perm_ok, file_uuid, user_id):
                     await websocket.close(code=4403)
                     break
