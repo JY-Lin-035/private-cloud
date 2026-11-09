@@ -1277,3 +1277,118 @@ class TestLinkRecentAccountsR20b:
                        direction="both", delay_ms=100, auto=False)
         db_session.add(r6); db_session.commit()
         assert self._FakeR.data.get("ipActors:2001:db8:cafe::9") is not None
+
+
+class _FakeZipRedis:
+    def __init__(self):
+        self.store = {}
+    def setex(self, k, ttl, v): self.store[k] = v
+    def get(self, k): return self.store.get(k)
+    def getdel(self, k): return self.store.pop(k, None)
+    def delete(self, k): return self.store.pop(k, None) and 1 or 0
+    def exists(self, k): return 1 if k in self.store else 0
+
+
+class TestNativeZipDownloadTokens:
+    """Round-22: folder/bulk zips move to one-time-token native downloads.
+    Locks the token lifecycle (issue/redeem/single-use/binding), the session
+    fallback, and zip integrity incl. exact Content-Length (sized=True)."""
+
+    def _build(self, monkeypatch, tmp_path, optional_user="user"):
+        import io, os
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from datetime import datetime
+        from app.models.base import Base
+        import app.models.account, app.models.folder, app.models.file, app.models.collaboration  # noqa
+        from app.models.account import Account
+        from app.models.folder import Folder
+        from app.models.file import File
+        from app.api.v1 import files as F, folders as FD
+        from app.api import dependencies as D
+
+        eng = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(eng)
+        S = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False)
+        db = S()
+        owner = Account(name="zipown", password="x", email="z@x.cc", signal_file_size=10**8,
+                        total_file_size=10**8, used_size=0, identity=0, enable=True,
+                        email_verified_at=datetime.utcnow())
+        intruder = Account(name="zipoth", password="x", email="i@x.cc", signal_file_size=10**8,
+                           total_file_size=10**8, used_size=0, identity=0, enable=True,
+                           email_verified_at=datetime.utcnow())
+        db.add_all([owner, intruder]); db.flush()
+        home = Folder(uuid="h"*8, owner_id=owner.id, parent_id=None, name="Home", size=0, is_system=True)
+        sub = Folder(uuid="s"*8, owner_id=owner.id, parent_id=home.uuid, name="sub", size=1500)
+        db.add_all([home, sub])
+        blobs = {}
+        for nm, size in (("a.bin", 1000), ("b.bin", 500)):
+            p = os.path.join(str(tmp_path), "empty_dir_marker") if False else os.path.join(str(tmp_path), nm)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f: f.write(nm[0].encode() * size)
+            blobs[nm] = (p, size)
+        fa = File(uuid="f"*8, owner_id=owner.id, parent_folder_id=sub.uuid, name="a.bin",
+                  size=1000, mime_type="application/octet-stream", storage_path=blobs["a.bin"][0])
+        fb = File(uuid="e"*8, owner_id=owner.id, parent_folder_id=sub.uuid, name="b.bin",
+                  size=500, mime_type="application/octet-stream", storage_path=blobs["b.bin"][0])
+        db.add_all([fa, fb]); db.commit()
+        self._oid, self._iid = owner.id, intruder.id
+
+        app = FastAPI()
+        app.include_router(F.router); app.include_router(FD.router)
+        def _gd():
+            yield S()
+        app.dependency_overrides[D.get_db] = _gd
+        app.dependency_overrides[D.get_current_user_id] = lambda: owner.id
+        app.dependency_overrides[D.get_current_user_id_optional] = (
+            lambda: owner.id if optional_user == "user" else None)
+        r = _FakeZipRedis()
+        app.dependency_overrides[D.get_redis] = lambda: r
+        return TestClient(app), r, (fa.uuid, fb.uuid, sub.uuid)
+
+    def _zip_entries(self, content):
+        import io, zipfile
+        zf = zipfile.ZipFile(io.BytesIO(content))
+        return set(zf.namelist())
+
+    def test_folder_token_roundtrip_singleuse_and_length(self, monkeypatch, tmp_path):
+        c, r, (fa, fb, sub) = self._build(monkeypatch, tmp_path, optional_user="none")
+        tok = c.get("/api/folders/downloadToken", params={"folder_uuid": sub}).json()["token"]
+        assert len(tok) == 64 and f"download_folder_token:{tok}" in r.store
+        res = c.get("/api/folders/download", params={"folder_uuid": sub, "token": tok})
+        assert res.status_code == 200
+        assert res.headers.get("content-length") == str(len(res.content))   # sized=True exact
+        assert "attachment" in res.headers.get("content-disposition", "")
+        assert self._zip_entries(res.content) >= {"sub/a.bin", "sub/b.bin"}
+        again = c.get("/api/folders/download", params={"folder_uuid": sub, "token": tok})
+        assert again.status_code == 401                                      # single-use
+
+    def test_folder_token_binding_and_session_fallback(self, monkeypatch, tmp_path):
+        c, r, (fa, fb, sub) = self._build(monkeypatch, tmp_path)
+        tok = c.get("/api/folders/downloadToken", params={"folder_uuid": sub}).json()["token"]
+        bad = c.get("/api/folders/download", params={"folder_uuid": "s"*7 + "9", "token": tok})
+        assert bad.status_code in (403, 404)                                 # wrong uuid
+        ok = c.get("/api/folders/download", params={"folder_uuid": sub})     # session only, no token
+        assert ok.status_code == 200 and len(ok.content) > 1000
+
+    def test_bulk_token_flow_integrity(self, monkeypatch, tmp_path):
+        c, r, (fa, fb, sub) = self._build(monkeypatch, tmp_path, optional_user="none")
+        res = c.post("/api/files/downloadBulkToken", json={"file_uuids": [fa, fb], "folder_uuids": []})
+        assert res.status_code == 200
+        tok = res.json()["token"]
+        d = c.get("/api/files/downloadBulk", params={"token": tok})
+        assert d.status_code == 200
+        assert d.headers.get("content-length") == str(len(d.content))
+        assert self._zip_entries(d.content) == {"a.bin", "b.bin"}
+        assert c.get("/api/files/downloadBulk", params={"token": tok}).status_code == 401
+
+    def test_source_locks(self):
+        src = open("app/services/zip_service.py").read()
+        assert "ZipStream(sized=True)" in src
+        fdr = open("app/api/v1/folders.py").read()
+        assert "download_folder_token" in fdr and "getdel" in fdr
+        fr = open("app/api/v1/files.py").read()
+        assert "download_bulk_token" in fr and "@router.get(\"/downloadBulk\")" in fr

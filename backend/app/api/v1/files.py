@@ -682,6 +682,59 @@ async def download_bulk(
     return zip_service.build_zip_response(items, 'meowcloud-download')
 
 
+class BulkTokenResponse(BaseModel):
+    token: str
+    expires_in: int
+
+
+@router.post("/downloadBulkToken")
+async def create_bulk_download_token(
+    request: BulkDownloadRequest,
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Reserve a selection for one-time, token-authenticated native zip download."""
+    if not request.file_uuids and not request.folder_uuids:
+        raise HTTPException(status_code=400, detail='沒有選擇任何項目')
+    batch_ops.assert_not_deleting(redis, *request.file_uuids, *request.folder_uuids)
+    import json as _json
+    token = secrets.token_hex(32)
+    expire = settings.DOWNLOAD_TOKEN_EXPIRE_SECONDS
+    payload = _json.dumps({"u": user_id, "f": request.file_uuids[:1000], "d": request.folder_uuids[:200]})
+    redis.setex(f"download_bulk_token:{token}", expire, payload)
+    return JSONResponse({"token": token, "expires_in": expire})
+
+
+@router.get("/downloadBulk")
+async def download_bulk_by_token(
+    token: str = Query(...),
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis)
+):
+    """Stream a previously reserved selection as one zip (single-use token)."""
+    import json as _json
+    redis_key = f"download_bulk_token:{token}"
+    try:
+        tdata = redis.getdel(redis_key)
+    except Exception:
+        tdata = redis.get(redis_key)
+        if tdata:
+            redis.delete(redis_key)
+    if not tdata:
+        raise HTTPException(status_code=401, detail="Invalid or expired download token")
+    tdata_str = tdata.decode() if isinstance(tdata, bytes) else tdata
+    try:
+        payload = _json.loads(tdata_str)
+        user_id = int(payload["u"])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid token data")
+    items, kept_files, kept_folders = zip_service.collect_zip_items(
+        db, user_id, payload.get("f", []), payload.get("d", [])
+    )
+    logger.info(f"Bulk zip (token) for user {user_id}: {kept_files} files, {kept_folders} folders, {len(items)} entries")
+    return zip_service.build_zip_response(items, 'meowcloud-download')
+
+
 # ================= preview / create / edit (P1) =================
 import os as _os
 import uuid as _uuid

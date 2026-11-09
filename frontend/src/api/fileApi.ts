@@ -1,15 +1,13 @@
 import { api } from './api';
 import { API_BASE_URL } from '../config/api';
 
-function saveBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+function nativeDownload(url: string) {
+  const tempLink = document.createElement('a');
+  tempLink.href = url;
+  tempLink.download = 'download';
+  document.body.appendChild(tempLink);
+  tempLink.click();
+  document.body.removeChild(tempLink);
 }
 
 export const fileApi = {
@@ -38,13 +36,7 @@ export const fileApi = {
       params: { file_uuid },
     });
     const data = response.data;
-    const url = `${API_BASE_URL}/api/files/download?file_uuid=${file_uuid}&token=${data.token}`;
-    const tempLink = document.createElement('a');
-    tempLink.href = url;
-    tempLink.download = 'download';
-    document.body.appendChild(tempLink);
-    tempLink.click();
-    document.body.removeChild(tempLink);
+    nativeDownload(`${API_BASE_URL}/api/files/download?file_uuid=${file_uuid}&token=${data.token}`);
   },
 
 
@@ -70,19 +62,22 @@ export const fileApi = {
     return response.data;
   },
 
-  // Download a folder as a streamed zip
-  downloadFolderZip: async (folderUuid: string, folderName: string) => {
-    const response = await api.get('/api/folders/download', {
+  // Download a folder as a zip: one-time token + native streaming download
+  // (browser shows the save dialog immediately and saves to disk progressively;
+  // the old blob path only revealed the dialog after the whole zip was in memory)
+  downloadFolderZip: async (folderUuid: string, _folderName: string) => {
+    const response = await api.get('/api/folders/downloadToken', {
       params: { folder_uuid: folderUuid },
-      responseType: 'blob',
     });
-    saveBlob(response.data as Blob, `${folderName}.zip`);
+    const data = response.data;
+    nativeDownload(`${API_BASE_URL}/api/folders/download?folder_uuid=${folderUuid}&token=${data.token}`);
   },
 
-  // Download multiple selected items as one zip
+  // Download multiple selected items as one zip via reserved one-time token
   downloadBulk: async (file_uuids: string[], folder_uuids: string[]) => {
-    const response = await api.post('/api/files/downloadBulk', { file_uuids, folder_uuids }, { responseType: 'blob' });
-    saveBlob(response.data as Blob, 'meowcloud-download.zip');
+    const response = await api.post('/api/files/downloadBulkToken', { file_uuids, folder_uuids });
+    const data = response.data;
+    nativeDownload(`${API_BASE_URL}/api/files/downloadBulk?token=${data.token}`);
   },
 
   // Restore file
