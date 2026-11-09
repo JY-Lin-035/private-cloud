@@ -1,6 +1,9 @@
+import secrets
+from typing import Optional
 from redis import Redis
 from app.services import batch_ops
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.schemas.folder import (
@@ -9,7 +12,8 @@ from app.schemas.folder import (
 )
 from app.services.folder_service import FolderService
 from app.services import zip_service
-from app.api.dependencies import get_db, get_current_user_id, get_redis
+from app.api.dependencies import get_db, get_current_user_id, get_current_user_id_optional, get_redis
+from app.config import settings
 from app.utils import logger as log
 
 router = APIRouter(prefix="/api/folders", tags=["folders"])
@@ -259,18 +263,62 @@ async def move_folders(
     return result
 
 
+@router.get("/downloadToken")
+async def get_folder_download_token(
+    folder_uuid: str,
+    db: Session = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+    user_id: int = Depends(get_current_user_id)
+):
+    """Short-lived one-time token enabling a native (streaming) folder zip download."""
+    batch_ops.assert_not_deleting(redis, folder_uuid)
+    svc = FolderService(db)
+    folder = svc.folder_repo.get_by_uuid(folder_uuid)
+    if not folder or folder.owner_id != user_id or folder.deleted_at:
+        raise HTTPException(status_code=404, detail='找不到資料夾')
+    token = secrets.token_hex(32)
+    expire = settings.DOWNLOAD_TOKEN_EXPIRE_SECONDS
+    redis.setex(f"download_folder_token:{token}", expire, f"{user_id}:{folder_uuid}")
+    return JSONResponse({"token": token, "folder_uuid": folder_uuid, "expires_in": expire})
+
+
 @router.get("/download")
 async def download_folder(
     folder_uuid: str = Query(...),
+    token: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id)
+    redis: Redis = Depends(get_redis),
+    user_id: Optional[int] = Depends(get_current_user_id_optional)
 ):
-    """Stream a whole folder as one zip archive."""
+    """Stream a whole folder as one zip archive (session or one-time token)."""
     svc = FolderService(db)
+    if token:
+        redis_key = f"download_folder_token:{token}"
+        try:
+            tdata = redis.getdel(redis_key)
+        except Exception:
+            tdata = redis.get(redis_key)
+            if tdata:
+                redis.delete(redis_key)
+        if not tdata:
+            raise HTTPException(status_code=401, detail="Invalid or expired download token")
+        tdata_str = tdata.decode() if isinstance(tdata, bytes) else tdata
+        parts = tdata_str.split(":")
+        if len(parts) != 2:
+            raise HTTPException(status_code=400, detail="Invalid token data")
+        try:
+            user_id = int(parts[0])
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid or expired download token")
+        if parts[1] != folder_uuid:
+            raise HTTPException(status_code=403, detail="Token does not match folder")
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     folder = svc.folder_repo.get_by_uuid(folder_uuid)
     if not folder or folder.owner_id != user_id or folder.deleted_at:
         raise HTTPException(status_code=404, detail='找不到資料夾')
 
     items, kept_files, _ = zip_service.collect_zip_items(db, user_id, [], [folder_uuid])
-    logger.info(f"Folder zip download for user {user_id}: {folder_uuid}, {kept_files} files")
+    logger.info(f"Folder zip download for user {user_id}: {folder_uuid}, {len(items)} zip entries")
     return zip_service.build_zip_response(items, folder.name)

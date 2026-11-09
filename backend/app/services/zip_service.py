@@ -97,7 +97,9 @@ def collect_zip_items(db: Session, user_id: int, file_uuids: list[str], folder_u
 
 
 def _prepare_zipstream(items) -> ZipStream:
-    zs = ZipStream()
+    # sized=True: STORED entries expose exact Content-Length without reading
+    # bodies, so browsers show real progress for native downloads.
+    zs = ZipStream(sized=True)
     for fs_path, arcname in items:
         if fs_path is None:
             zs.add(b'', arcname)  # directory entry
