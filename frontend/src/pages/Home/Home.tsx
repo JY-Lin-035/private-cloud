@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, ArrowRight } from 'lucide-react';
 import { authApi } from '../../api/authApi';
+import { CONTACT_EMAIL } from '../../config/api';
 import githubIcon from '../../assets/github.svg';
 
 function Home({ layoutClass = '' }: { layoutClass?: string }) {
@@ -93,12 +94,15 @@ function Home({ layoutClass = '' }: { layoutClass?: string }) {
             >
               <img src={githubIcon} alt='GitHub' className='w-6 h-6 brightness-0 invert' />
             </a>
-            <a
-              href='mailto:meow@jmail.jun.org.uk'
-              className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
-            >
-              <Mail className='w-6 h-6' />
-            </a>
+            {CONTACT_EMAIL && (
+              <a
+                href={`mailto:${CONTACT_EMAIL}`}
+                aria-label={`Email ${CONTACT_EMAIL}`}
+                className='p-3 bg-gray-700/60 border border-gray-500 text-gray-200 rounded-full hover:bg-gray-700 transition-all inline-flex items-center justify-center cursor-pointer'
+              >
+                <Mail className='w-6 h-6' />
+              </a>
+            )}
           </div>
         </div>
       </div>

@@ -161,6 +161,11 @@ if [ -z "$WS_PUBLIC" ]; then
     *)         WS_PUBLIC="$API_PUBLIC" ;;
   esac
 fi
+CONTACT_EMAIL="${MEOW_CONTACT_EMAIL:-}"
+if [ "$MODE" = custom ]; then
+  CONTACT_EMAIL=$(ask "聯絡 email（首頁信封按鈕；留空＝隱藏按鈕）" "${CONTACT_EMAIL:-MeowCloud@jun.org.uk}")
+fi
+[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="MeowCloud@jun.org.uk"
 SMTP_HOST=""; SMTP_USER=""; SMTP_PASSWORD=""; SMTP_FROM=""
 if [ "$MODE" = custom ]; then
   read -r -p "SMTP host（Enter 跳過）: " SMTP_HOST || true
@@ -219,6 +224,7 @@ EOF
   cat > "$REPO/frontend/.env" <<EOF
 VITE_API_BASE_URL=$API_PUBLIC
 VITE_WS_BASE_URL=$WS_PUBLIC
+VITE_CONTACT_EMAIL=$CONTACT_EMAIL
 EOF
   chmod 600 "$REPO/frontend/.env"
 
