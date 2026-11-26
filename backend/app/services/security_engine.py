@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from redis import Redis
 
 from app.config import settings
+from app.services import security_policy
 from app.utils.security_log import write_event
 
 WEIGHTS = {
@@ -161,6 +162,34 @@ def _incr_ttl(r, key, amount, ttl):
     pipe.incrby(key, amount)
     pipe.expire(key, ttl)
     return pipe.execute()[0]
+
+
+def _incr_windowed(r, key, amount, window):
+    """Increment a counter and (re)arm its TTL, keeping the window length the
+    bucket was OPENED with.
+
+    An admin raising or lowering a window must not retroactively stretch or
+    shrink buckets that already exist — those expire under the old rule and
+    only then pick the new window up. The length is pinned in a side key.
+    """
+    wkey = f"{key}:w"
+    pipe = r.pipeline()
+    pipe.incrby(key, amount)
+    pipe.get(wkey)
+    n, pinned = pipe.execute()
+    try:
+        window = int(pinned) if pinned is not None else int(window)
+    except (TypeError, ValueError):
+        window = int(window)
+    try:
+        if pinned is None:
+            r.set(wkey, str(window), nx=True, ex=window * 2)
+        else:
+            r.expire(wkey, window * 2)
+    except Exception:
+        pass
+    r.expire(key, window)
+    return n
 
 
 # ---------------------------------------------------------------- alerts
@@ -334,11 +363,22 @@ def match_rules_detail(ip, user_id, is_upload, is_download, is_share, is_stream=
     return blocked, delay, up_kbps, dn_kbps, blockers
 
 
-def _ensure_auto_rule(r, subject, action, scope, direction, hours):
-    """Create/refresh one auto rule. subject: dict of identifying fields."""
+def _ensure_auto_rule(r, subject, action, scope, direction, hours, snapshot=None):
+    """Create/refresh one auto rule. subject: dict of identifying fields.
+
+    Slow-lane parameters come from the policy registry, so an admin changing
+    the default delay/bandwidth changes what NEW auto rules look like without
+    rewriting rules that already exist.
+    """
     from sqlalchemy import select, delete as sa_delete
     from app.database import SessionLocal
     from app.models.ip_control import IpControl
+
+    snap = snapshot or security_policy.current()
+    up_delay = snap.value("slow.upload_delay_ms")
+    down_delay = snap.value("slow.download_delay_ms")
+    up_kbps = snap.value("slow.upload_kbps")
+    down_kbps = snap.value("slow.download_kbps")
 
     db = SessionLocal()
     try:
@@ -367,11 +407,11 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
             existing.expires_at = expires_new
             if action == "slow":
                 if direction in ("up", "both"):
-                    existing.delay_ms = settings.SEC_DEFAULT_UPLOAD_DELAY_MS
-                    existing.upload_kbps = settings.SEC_DEFAULT_UPLOAD_KBPS
+                    existing.delay_ms = up_delay
+                    existing.upload_kbps = up_kbps
                 if direction in ("down", "both"):
-                    existing.delay_ms = max(existing.delay_ms or 0, settings.SEC_DEFAULT_DOWNLOAD_DELAY_MS)
-                    existing.download_kbps = settings.SEC_DEFAULT_DOWNLOAD_KBPS
+                    existing.delay_ms = max(existing.delay_ms or 0, down_delay)
+                    existing.download_kbps = down_kbps
             db.commit()
             return bool(changed)
         subject_type = "user" if subject.get("user_id") is not None else ("ip_token" if subject.get("token") is not None else "ip")
@@ -380,9 +420,9 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
             ip=subject.get("ip"), token=subject.get("token"),
             user_id=subject.get("user_id"), username=subject.get("username"),
             action=action, scope=scope, direction=direction,
-            delay_ms=settings.SEC_DEFAULT_UPLOAD_DELAY_MS if direction in ("up", "both") else settings.SEC_DEFAULT_DOWNLOAD_DELAY_MS,
-            upload_kbps=settings.SEC_DEFAULT_UPLOAD_KBPS if direction in ("up", "both") else None,
-            download_kbps=settings.SEC_DEFAULT_DOWNLOAD_KBPS if direction in ("down", "both") else None,
+            delay_ms=up_delay if direction in ("up", "both") else down_delay,
+            upload_kbps=up_kbps if direction in ("up", "both") else None,
+            download_kbps=down_kbps if direction in ("down", "both") else None,
             reason="自動觸發（積分/流量閾值）", auto=True, expires_at=None if hours is None else expires_new,
         ))
         db.commit()
@@ -416,27 +456,29 @@ def record_event(kind, ip, actor=None, target=None, detail="",
         weight = WEIGHTS.get(kind) if score else None
         if weight and ip:
             r = _client()
+            snap = security_policy.current()
             is_auth = kind in AUTH_KINDS or (
                 kind == "rate_limit" and any(str(target or "").startswith(p) for p in AUTH_ENDPOINTS))
             if is_auth:
                 score_a = _incr_ttl(r, f"secScoreA:{ip}", weight, SCORE_TTL)
-                if score_a >= settings.SEC_SCORE_BLOCK_THRESHOLD:
+                if score_a >= snap.value("score.auth_block_threshold"):
                     _escalate_to_block(r, ip, actor, kind, score_a, audit_detail, target,
                                        actor_display=actor_display)
             else:
-                score = _incr_ttl(r, f"secScore:{ip}", weight, SCORE_TTL)
+                score_n = _incr_ttl(r, f"secScore:{ip}", weight, SCORE_TTL)
+                slow_at = snap.value("score.slow_threshold")
                 stage = int(r.get(f"secStage:{ip}") or 0)
-                if stage == 0 and score >= settings.SEC_SCORE_SLOW_THRESHOLD:
-                    if _ensure_auto_rule(r, {"ip": ip}, "slow", "transfer", "both", 1):
+                if stage == 0 and score_n >= slow_at:
+                    if _ensure_auto_rule(r, {"ip": ip}, "slow", "transfer", "both", 1, snapshot=snap):
                         r.setex(f"secStage:{ip}", STAGE_TTL, "1")
                         # The rule just became effective: without dropping the
                         # local cache the admin UI (and this worker) would keep
                         # serving the pre-slow decision for up to 60s.
                         invalidate_rules_cache()
-                        _alert(kind, ip, actor, target, f"{audit_detail}｜積分 {score}",
+                        _alert(kind, ip, actor, target, f"{audit_detail}｜積分 {score_n}",
                                "上傳/下載慢速 1 小時", actor_display=actor_display)
-                elif stage == 1 and score >= 2 * settings.SEC_SCORE_SLOW_THRESHOLD:
-                    _escalate_to_block(r, ip, actor, kind, score, audit_detail, target,
+                elif stage == 1 and score_n >= snap.value("score.escalated_block_threshold"):
+                    _escalate_to_block(r, ip, actor, kind, score_n, audit_detail, target,
                                        actor_display=actor_display)
     except Exception:
         import logging
@@ -534,7 +576,7 @@ def claim_stage(r, marker_key, ttl):
         return True
 
 
-def count_upload(user_id, ip, username=None):
+def count_upload(user_id, ip, username=None, snapshot=None):
     """Account upload volume, counted at the CREATION boundary (see files.py).
 
     Called once per successfully created upload — not per tus HEAD/PATCH or
@@ -546,35 +588,40 @@ def count_upload(user_id, ip, username=None):
         return
     try:
         r = _client()
+        snap = snapshot or security_policy.current()
         key = f"xfer:up:u{user_id}"
-        n = _incr_ttl(r, key, 1, 3600)
-        limit = settings.SEC_UPLOAD_HOURLY_LIMIT
+        window = snap.value("volume.upload_window_seconds")
+        n = _incr_windowed(r, key, 1, window)
+        limit = snap.value("volume.uploads_per_hour_per_account")
         stage = transfer_stage(n, limit)
         if stage and claim_stage(r, f"{key}:s{stage}", AUTO_RULE_HOURS * 3600):
             action = "slow" if stage == 1 else "block"
             if _ensure_auto_rule(r, {"user_id": user_id, "username": username, "ip": None, "token": None},
-                                 action, "transfer", "up", AUTO_RULE_HOURS):
+                                 action, "transfer", "up", AUTO_RULE_HOURS, snapshot=snap):
                 invalidate_rules_cache()
                 _alert("upload_volume", None, username or f"#{user_id}", "上傳",
-                       f"{n} 次/小時（閾值 {limit}）",
+                       f"{n} 次/{window}s（閾值 {limit}）",
                        "上傳限流（慢速）" if action == "slow" else "上傳 block（1h）",
                        extra={"拒絕來源": "帳號上傳量", "規則範圍": "transfer/up"})
     except Exception:
         pass
 
 
-def count_download(user_id, ip, token=None, username=None):
+def count_download(user_id, ip, token=None, username=None, snapshot=None):
     try:
         r = _client()
+        snap = snapshot or security_policy.current()
         if user_id:
             key = f"xfer:dn:u{user_id}"
-            n = _incr_ttl(r, key, 1, 3600)
-            limit = settings.SEC_DOWNLOAD_HOURLY_LIMIT
+            window = snap.value("volume.download_window_seconds")
+            n = _incr_windowed(r, key, 1, window)
+            limit = snap.value("volume.downloads_per_hour_per_account")
             subject = {"user_id": user_id, "username": username}
         elif ip and token:
             key = f"xfer:dn:a{ip}:{token[:8]}"
-            n = _incr_ttl(r, key, 1, 3600)
-            limit = settings.SEC_ANON_DOWNLOAD_HOURLY_LIMIT
+            window = snap.value("volume.anon_share_download_window_seconds")
+            n = _incr_windowed(r, key, 1, window)
+            limit = snap.value("volume.anon_share_downloads_per_hour")
             subject = {"ip": ip, "token": token}
             try:
                 hk = f"hotlinks:{normalize_ip(ip) or ip}"
@@ -587,11 +634,11 @@ def count_download(user_id, ip, token=None, username=None):
         stage = transfer_stage(n, limit)
         if stage and claim_stage(r, f"{key}:s{stage}", AUTO_RULE_HOURS * 3600):
             action = "slow" if stage == 1 else "block"
-            if _ensure_auto_rule(r, subject, action, "transfer", "down", AUTO_RULE_HOURS):
+            if _ensure_auto_rule(r, subject, action, "transfer", "down", AUTO_RULE_HOURS, snapshot=snap):
                 invalidate_rules_cache()
                 who = username or f"#{user_id}" if user_id else f"{mask_ip(ip)}→連結#{token[:8] if token else ''}"
                 _alert("download_volume", None if user_id else ip, who, "下載",
-                       f"{n} 次/小時（閾值 {limit}）",
+                       f"{n} 次/{window}s（閾值 {limit}）",
                        "下載限速" if action == "slow" else "下載 block（1h）",
                        extra={"拒絕來源": "帳號下載量" if user_id else "匿名分享下載量",
                               "規則範圍": "transfer/down"})
@@ -637,16 +684,22 @@ def should_log_reject(kind, ip, target, window=300):
         return True
 
 
-def flood_exceeded(ip, actor_display=None, target=None):
+def flood_exceeded(ip, actor_display=None, target=None, snapshot=None):
     try:
         r = _client()
-        n = _incr_ttl(r, f"glb:{ip}", 1, 3600)
-        limit = settings.SEC_GLOBAL_HOURLY_LIMIT
-        if n == limit + 1:
+        snap = snapshot or security_policy.current()
+        limit = snap.value("global.flood_requests_per_ip")
+        window = snap.value("global.flood_window_seconds")
+        n = _incr_windowed(r, f"glb:{ip}", 1, window)
+        # First rejection inside this window (SET NX marker) rather than
+        # `n == limit + 1`: after a threshold is lowered mid-window the
+        # counter is already past the new limit and the exact-crossing test
+        # would never report again.
+        if n > limit and should_log_reject("flood", ip, None, window):
             record_event("flood", ip, None, target,
                          f"超過全域 {limit} 次/小時（第 {n} 次）",
                          actor_display=actor_display,
-                         extra={"拒絕來源": "全站 flood", "門檻": f"{limit}/3600s"})
+                         extra={"拒絕來源": "全站 flood", "門檻": f"{limit}/{window}s"})
         return n > limit
     except Exception:
         return False

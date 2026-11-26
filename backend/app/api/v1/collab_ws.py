@@ -12,6 +12,7 @@ from redis import Redis
 from sqlalchemy import select
 
 from app.database import SessionLocal
+from app.services import security_policy
 from app.config import settings
 from app.repositories.file_repository import FileRepository
 from app.repositories.collaboration_repository import CollaborationRepository
@@ -391,7 +392,7 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
         if not await asyncio.to_thread(_perm_ok, file_uuid, user_id, True):
             await _reject(4403)
             return
-        if manager.count(file_uuid) >= settings.MAX_ROOM_CONNECTIONS:
+        if manager.count(file_uuid) >= security_policy.value("collab.room_max_connections"):
             await _reject(4429)
             return
 
@@ -440,7 +441,7 @@ async def websocket_collab(websocket: WebSocket, file_uuid: str):
             if time.monotonic() - window_start > 60:
                 window_start = time.monotonic()
                 msg_count = 0
-            if msg_count > settings.WS_MSG_PER_MIN:
+            if msg_count > security_policy.value("collab.ws_messages_per_minute"):
                 await websocket.close(code=4429)
                 break
 

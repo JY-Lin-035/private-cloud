@@ -46,7 +46,7 @@ class PreviewTokenRequest(BaseModel):
     uuid: str
 
 
-@router.post("/previewToken", dependencies=[Depends(rate_limit(30, 60))])
+@router.post("/previewToken", dependencies=[Depends(rate_limit(30, 60, "endpoint.preview_token"))])
 async def issue_preview_token(
     request: PreviewTokenRequest,
     http_request: Request,
@@ -91,7 +91,7 @@ def _sandbox_headers(f: File) -> dict:
     }
 
 
-@router.get("/raw", dependencies=[Depends(rate_limit(120, 60))])
+@router.get("/raw", dependencies=[Depends(rate_limit(120, 60, "endpoint.preview_raw"))])
 async def preview_raw(
     uuid: str = Query(...),
     ptk: str = Query(...),

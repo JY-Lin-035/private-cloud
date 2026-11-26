@@ -190,7 +190,7 @@ async def share_status(
     }
 
 
-@router.post("/verifyPassword", dependencies=[Depends(rate_limit(5, 300))])
+@router.post("/verifyPassword", dependencies=[Depends(rate_limit(5, 300, "endpoint.share_verify_password"))])
 async def share_verify_password(
     request: Request,
     body: ShareVerifyRequest,
@@ -202,17 +202,21 @@ async def share_verify_password(
     Defences: per-IP endpoint rate limit (decorator) + per token x IP failure
     lockout (10/15min, no bystander punishment) + argon2 verification cost.
     """
-    from app.services import security_engine
+    from app.services import security_engine, security_policy
     from app.utils.client_ip import request_client_ip
     client_ip = request_client_ip(request)
+    snapshot = security_policy.for_request(request)
+    max_failures = snapshot.value("share.password_failures_per_window")
+    lock_window = snapshot.value("share.password_window_seconds")
     lock_key = f"sharePwFail:{body.link}:{client_ip}"
     try:
         failures = int(redis_client.get(lock_key) or 0)
     except (ValueError, TypeError):
         failures = 0
-    if failures >= 10:
-        security_engine.record_event_async("pw_lock", client_ip, None, body.link[:8],
-                                           "該 IP 對此連結錯密碼已達 10 次，鎖定 15 分鐘")
+    if failures >= max_failures:
+        security_engine.record_event_async(
+            "pw_lock", client_ip, None, body.link[:8],
+            f"該 IP 對此連結錯密碼已達 {max_failures} 次，鎖定 {lock_window // 60} 分鐘")
         raise HTTPException(status_code=429, detail='嘗試次數過多，請 15 分鐘後再試')
 
     share_service = ShareService(db)
@@ -221,9 +225,10 @@ async def share_verify_password(
         if result.get('stateCode') == HTTPStatus.FORBIDDEN:  # wrong password
             attempts = redis_client.incr(lock_key)
             if attempts == 1:
-                redis_client.expire(lock_key, 900)
-            security_engine.record_event_async("pw_fail", client_ip, None, body.link[:8],
-                                               f"錯密碼（第 {attempts} 次）")
+                redis_client.expire(lock_key, lock_window)
+            security_engine.record_event_async(
+                "pw_fail", client_ip, None, body.link[:8],
+                f"錯密碼（第 {attempts}/{max_failures} 次）")
         raise HTTPException(status_code=result['stateCode'], detail=result['error'])
     redis_client.delete(lock_key)
     logger.info(f"Share password verified, ticket issued for link: {_m(body.link)}")
@@ -267,7 +272,7 @@ async def share_download_folder(
     return zip_service.build_zip_response(items, folder.name)
 
 
-@router.post("/downloadItems", dependencies=[Depends(rate_limit(10, 60))])
+@router.post("/downloadItems", dependencies=[Depends(rate_limit(10, 60, "endpoint.share_download_items"))])
 async def share_download_items(
     request: ShareItemsRequest,
     db: Session = Depends(get_db)

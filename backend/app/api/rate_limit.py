@@ -49,17 +49,21 @@ def _event_actor(request: Request) -> tuple[Optional[str], str, Optional[str]]:
     return None, UNVERIFIED_ACTOR, "none"
 
 
-def rate_limit(max_requests: int, window_seconds: int) -> Callable:
+def rate_limit(max_requests: int, window_seconds: int, policy_id: Optional[str] = None) -> Callable:
     """
     Create a rate limiting dependency.
-    
+
     Args:
-        max_requests: Maximum number of requests allowed
+        max_requests: Maximum number of requests allowed (code default)
         window_seconds: Time window in seconds
-    
+        policy_id: Registered threshold this route obeys. When given, the
+            effective limit is read from the request's policy snapshot — one
+            version per request, so a concurrent admin edit can never mix
+            halves of two configurations inside a single decision.
+
     Returns:
         A dependency function that can be used in FastAPI routes
-    
+
     Example:
         @router.post("/login", dependencies=[Depends(rate_limit(5, 10))])
     """
@@ -70,7 +74,15 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         """Check rate limit using Redis."""
         from app.utils.client_ip import request_client_ip
         client_ip = request_client_ip(request)
-        
+
+        if policy_id:
+            from app.services import security_policy
+            snapshot = security_policy.for_request(request)
+            limit = snapshot.value(policy_id)
+            window = security_policy.REGISTRY[policy_id].window_seconds or window_seconds
+        else:
+            limit, window = max_requests, window_seconds
+
         # Generate key for this IP and endpoint
         endpoint = request.url.path
         key = f"rate_limit:{client_ip}:{endpoint}"
@@ -84,11 +96,11 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         pipe.ttl(key)
         count, ttl = pipe.execute()
         if ttl is not None and ttl < 0:
-            redis_client.expire(key, window_seconds)
-            ttl = window_seconds
+            redis_client.expire(key, window)
+            ttl = window
         
         # Check if limit exceeded (count is post-increment)
-        if count > max_requests:
+        if count > limit:
             # Every rejected request is still audited AND still counted against
             # the bucket, but the violation SCORE is claimed once per window
             # with SET NX — atomic, so N workers handling one burst cannot all
@@ -100,13 +112,14 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
                 from app.services import security_engine
                 security_engine.record_event(
                     "rate_limit", client_ip, actor, route,
-                    f"限流 {max_requests}/{window_seconds}s 觸發（第 {count} 次）",
+                    f"限流 {limit}/{window}s 觸發（第 {count} 次）",
                     actor_display=actor_display,
                     extra={
                         "HTTP方法": request.method,
                         "路由": route,
+                        "政策": policy_id or "-",
                         "拒絕來源": "端點限流",
-                        "門檻": f"{max_requests}/{window_seconds}s",
+                        "門檻": f"{limit}/{window}s",
                         "規則範圍": "endpoint",
                         "處分": "HTTP 429",
                         "身分來源": identity_source,

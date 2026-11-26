@@ -222,7 +222,8 @@ class TestHotlinks:
     def test_anon_count_records_hotlink(self, monkeypatch):
         r = MagicMock()
         r.get.return_value = None
-        r.pipeline.return_value.execute.return_value = [1]
+        # (count, pinned-window) as returned by the windowed counter helper
+        r.pipeline.return_value.execute.return_value = [1, None]
         monkeypatch.setattr(sec, "_client", lambda: r)
         sec.count_download(None, "5.6.7.8", "aabbccdd" + "1" * 24)
         r.hset.assert_called_once_with("hotlinks:5.6.7.8", "aabbccdd", "aabbccdd" + "1" * 24)

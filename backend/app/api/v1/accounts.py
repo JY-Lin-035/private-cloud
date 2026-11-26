@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 logger = log.get_logger("accounts_api.log")
 
 
-@router.post("/register", dependencies=[Depends(rate_limit(5, 300))])
+@router.post("/register", dependencies=[Depends(rate_limit(5, 300, "endpoint.accounts_register"))])
 def register(
     request: RegisterRequest,
     db: Session = Depends(get_db),
@@ -63,7 +63,7 @@ def register(
         raise
 
 
-@router.post("/login", dependencies=[Depends(rate_limit(5, 30))])
+@router.post("/login", dependencies=[Depends(rate_limit(5, 30, "endpoint.accounts_login"))])
 def login(
     http_request: Request,
     request: LoginRequest,
@@ -152,7 +152,7 @@ def sign_out(
         raise
 
 
-@router.post("/getCode", dependencies=[Depends(rate_limit(1, 30))])
+@router.post("/getCode", dependencies=[Depends(rate_limit(1, 30, "endpoint.accounts_get_code"))])
 def get_code(
     request: GetCodeRequest,
     db: Session = Depends(get_db),
@@ -243,7 +243,7 @@ def modify_password(
         raise
 
 
-@router.put("/resetPW", dependencies=[Depends(rate_limit(2, 30))])
+@router.put("/resetPW", dependencies=[Depends(rate_limit(2, 30, "endpoint.accounts_reset_pw"))])
 def reset_password(
     request: ResetPasswordRequest,
     db: Session = Depends(get_db),

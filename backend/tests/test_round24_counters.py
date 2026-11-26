@@ -167,7 +167,7 @@ def test_tus_creation_books_exactly_one_upload(monkeypatch):
     from app.api.v1 import files as files_api
     booked = []
     monkeypatch.setattr(sec, "count_upload",
-                        lambda uid, ip, username=None: booked.append((uid, ip, username)))
+                        lambda uid, ip, username=None, snapshot=None: booked.append((uid, ip, username)))
     monkeypatch.setattr(files_api.FileService, "create_tus_upload",
                         lambda self, uid, parent, name, size: {"upload_id": "u-1"})
     monkeypatch.setattr(files_api.FileService, "append_tus_chunk",
@@ -188,7 +188,7 @@ def test_multipart_upload_books_one_upload(monkeypatch, tmp_path):
     from app.api.v1 import files as files_api
     booked = []
     monkeypatch.setattr(sec, "count_upload",
-                        lambda uid, ip, username=None: booked.append((uid, username)))
+                        lambda uid, ip, username=None, snapshot=None: booked.append((uid, username)))
     monkeypatch.setattr(files_api.FileService, "upload_file",
                         lambda self, uid, parent, f, size: {"stateCode": 200, "uuid": "f-1"})
 
@@ -257,7 +257,7 @@ def test_claim_stage_once_per_window():
 def test_count_upload_escalates_once_and_invalidates_cache(monkeypatch):
     r = _CountingRedis()
     monkeypatch.setattr(sec, "_client", lambda: r)
-    monkeypatch.setattr(sec, "_incr_ttl", lambda *a, **k: 601)  # over the 600 limit
+    monkeypatch.setattr(sec, "_incr_windowed", lambda *a, **k: 601)  # over the 600 limit
     rules, invalidations, alerts = [], [], []
     monkeypatch.setattr(sec, "_ensure_auto_rule",
                         lambda *a, **k: rules.append(a[1:]) or True)

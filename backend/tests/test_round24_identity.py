@@ -428,7 +428,8 @@ def test_flood_event_names_the_request_account(monkeypatch):
     monkeypatch.setattr(sec, "record_event", lambda *a, **k: calls.append((a, k)))
     r = _FakeRedis()
     monkeypatch.setattr(sec, "_client", lambda: r)
-    monkeypatch.setattr(sec, "_incr_ttl", lambda *a, **k: sec.settings.SEC_GLOBAL_HOURLY_LIMIT + 1)
+    monkeypatch.setattr(sec, "_incr_windowed",
+                        lambda *a, **k: sec.settings.SEC_GLOBAL_HOURLY_LIMIT + 1)
     monkeypatch.setattr(sec, "flood_exceeded", REAL["flood_exceeded"])
     assert sec.flood_exceeded("1.2.3.4", "alice", "/api/files/tus") is True
     (kind, ip, actor, target, detail), kwargs = calls[0]

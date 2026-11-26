@@ -16,6 +16,7 @@ from urllib.parse import parse_qs
 
 from app.config import settings
 from app.services import security_engine as sec
+from app.services import security_policy
 from app.utils.session_auth import resolve_session_identity
 
 UPLOAD_PREFIXES = ('/api/files/tus', '/api/files/uploadFile')
@@ -112,8 +113,13 @@ class ThrottleMiddleware:
             except Exception:
                 identity = None
             uid = identity["user_id"] if identity else None
+            # One policy version per request: flood, endpoint and volume
+            # decisions made inside this request all read this same snapshot.
+            snapshot = security_policy.current()
+            state = scope.setdefault("state", {})
+            state["policy_snapshot"] = snapshot
             if identity is not None:
-                scope.setdefault("state", {})["observed_identity"] = identity
+                state["observed_identity"] = identity
             actor_display = (sec.format_actor(identity["username"], identity["user_id"])
                              if identity else sec.UNVERIFIED_ACTOR)
             is_upload = path.startswith(UPLOAD_PREFIXES)
@@ -121,7 +127,7 @@ class ThrottleMiddleware:
             is_share = path.startswith(SHARE_PREFIX)
             is_stream = path.startswith(STREAM_PREFIXES)
 
-            if ip and await asyncio.to_thread(sec.flood_exceeded, ip, actor_display, path):
+            if ip and await asyncio.to_thread(sec.flood_exceeded, ip, actor_display, path, snapshot):
                 rh, payload = self._json_429(headers.get("origin"))
                 await send({"type": "http.response.start", "status": 429, "headers": rh})
                 await send({"type": "http.response.body", "body": payload})

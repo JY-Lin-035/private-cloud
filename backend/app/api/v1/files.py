@@ -42,7 +42,9 @@ async def _count_upload_created(request: Request, user_id: int) -> None:
         state = getattr(request, "state", None)
         user = getattr(state, "user", None) if state is not None else None
         username = user.get("username") if isinstance(user, dict) else None
-        await asyncio.to_thread(sec.count_upload, user_id, request_client_ip(request), username)
+        from app.services import security_policy
+        snapshot = security_policy.for_request(request)
+        await asyncio.to_thread(sec.count_upload, user_id, request_client_ip(request), username, snapshot)
     except Exception:
         pass  # accounting must never fail an upload that already succeeded
 
@@ -119,7 +121,7 @@ async def tus_options():
     )
 
 
-@router.post("/tus", dependencies=[Depends(rate_limit(30, 300))])
+@router.post("/tus", dependencies=[Depends(rate_limit(30, 300, "endpoint.files_tus_create"))])
 async def tus_create_upload(
     request: Request,
     upload_metadata: str = Header(None, alias='Upload-Metadata'),
@@ -374,7 +376,7 @@ async def get_file_list(
         raise
 
 
-@router.post("/uploadFile", dependencies=[Depends(rate_limit(30, 300))])
+@router.post("/uploadFile", dependencies=[Depends(rate_limit(30, 300, "endpoint.files_multipart"))])
 async def upload_file(
     request: Request,
     file: UploadFile = File(...),
@@ -824,7 +826,7 @@ class SaveContentRequest(BaseModel):
     if_updated_at: Optional[str] = None
 
 
-@router.post("/create", dependencies=[Depends(rate_limit(20, 300))])
+@router.post("/create", dependencies=[Depends(rate_limit(20, 300, "endpoint.files_create"))])
 async def create_text_file(
     request: CreateFileRequest,
     db: Session = Depends(get_db),
@@ -875,7 +877,7 @@ async def create_text_file(
             "updated_at": _fmt_dt(row.updated_at), "category": classify(name)}
 
 
-@router.get("/content", dependencies=[Depends(rate_limit(60, 60))])
+@router.get("/content", dependencies=[Depends(rate_limit(60, 60, "endpoint.files_content_read"))])
 async def get_file_content(
     uuid: str,
     db: Session = Depends(get_db),
@@ -898,7 +900,7 @@ async def get_file_content(
             "updated_at": _fmt_dt(f.updated_at), "name": f.name, "category": classify(f.name)}
 
 
-@router.put("/content", dependencies=[Depends(rate_limit(30, 60))])
+@router.put("/content", dependencies=[Depends(rate_limit(30, 60, "endpoint.files_content_write"))])
 async def save_file_content(
     request: SaveContentRequest,
     db: Session = Depends(get_db),
@@ -994,7 +996,7 @@ def _load_streamable(db: Session, user_id: int, file_uuid: str) -> FileModel:
     return f
 
 
-@router.get("/stream", dependencies=[Depends(rate_limit(300, 60))])
+@router.get("/stream", dependencies=[Depends(rate_limit(300, 60, "endpoint.files_stream"))])
 async def stream_file(
     request: Request,
     uuid: str,
