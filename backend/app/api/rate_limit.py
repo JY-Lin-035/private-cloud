@@ -85,9 +85,15 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         count, ttl = pipe.execute()
         if ttl is not None and ttl < 0:
             redis_client.expire(key, window_seconds)
+            ttl = window_seconds
         
         # Check if limit exceeded (count is post-increment)
         if count > max_requests:
+            # Every rejected request is still audited AND still counted against
+            # the bucket, but the violation SCORE is claimed once per window
+            # with SET NX — atomic, so N workers handling one burst cannot all
+            # book it, and one long burst costs one violation instead of fifty.
+            first_overage = _claim_window_strike(redis_client, key, ttl, count)
             actor, actor_display, identity_source = _event_actor(request)
             route = _route_id(request)
             try:
@@ -104,7 +110,9 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
                         "規則範圍": "endpoint",
                         "處分": "HTTP 429",
                         "身分來源": identity_source,
-                    })
+                        "違規計分": "是" if first_overage else "否（同一視窗重複）",
+                    },
+                    score=first_overage)
             except Exception:
                 pass
             # Public contract: a generic 429. Thresholds, routes and the
@@ -115,3 +123,17 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
             )
     
     return check_rate_limit
+
+
+def _claim_window_strike(redis_client: Redis, bucket_key: str, ttl, count) -> bool:
+    """True when this rejection is the first overage of the current window.
+
+    The marker shares the bucket's remaining TTL, so a new window can score
+    again while a long burst inside one window scores only once.
+    """
+    try:
+        return bool(redis_client.set(f"{bucket_key}:strike", str(count),
+                                     nx=True, ex=max(int(ttl or 1), 1)))
+    except Exception:
+        return True  # fail open: better one extra audit event than silence
+

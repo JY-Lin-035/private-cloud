@@ -170,9 +170,10 @@ def captured_events(fake_redis, monkeypatch):
     events = []
 
     def _capture(kind, ip, actor=None, target=None, detail="",
-                 actor_display=None, extra=None):
+                 actor_display=None, extra=None, score=True):
         events.append({"kind": kind, "actor": actor, "target": target,
-                       "detail": detail, "actor_display": actor_display, "extra": extra})
+                       "detail": detail, "actor_display": actor_display,
+                       "extra": extra, "score": score})
 
     monkeypatch.setattr(sec, "record_event", _capture)
     monkeypatch.setattr(sec, "flood_exceeded", lambda *a, **k: False)

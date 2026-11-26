@@ -394,12 +394,16 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
 # ---------------------------------------------------------------- events
 
 def record_event(kind, ip, actor=None, target=None, detail="",
-                 actor_display=None, extra=None):
+                 actor_display=None, extra=None, score=True):
     """Sync entry. Safe to call from threadpool or asyncio.to_thread.
 
     `extra` is a dict of admin-only context (HTTP method, route id, rejection
     source, threshold, outcome). It is appended to the audit line and rendered
     in the alert e-mail; it never reaches the client.
+
+    `score=False` records the event but does not feed the violation score —
+    used for repeat rejections inside an already-counted window, so a burst
+    costs one violation instead of N while every request stays auditable.
     """
     audit_detail = detail
     if extra:
@@ -409,7 +413,7 @@ def record_event(kind, ip, actor=None, target=None, detail="",
     try:
         write_event(kind, ip, actor_display if actor_display is not None else actor,
                     target, audit_detail)
-        weight = WEIGHTS.get(kind)
+        weight = WEIGHTS.get(kind) if score else None
         if weight and ip:
             r = _client()
             is_auth = kind in AUTH_KINDS or (
@@ -425,6 +429,10 @@ def record_event(kind, ip, actor=None, target=None, detail="",
                 if stage == 0 and score >= settings.SEC_SCORE_SLOW_THRESHOLD:
                     if _ensure_auto_rule(r, {"ip": ip}, "slow", "transfer", "both", 1):
                         r.setex(f"secStage:{ip}", STAGE_TTL, "1")
+                        # The rule just became effective: without dropping the
+                        # local cache the admin UI (and this worker) would keep
+                        # serving the pre-slow decision for up to 60s.
+                        invalidate_rules_cache()
                         _alert(kind, ip, actor, target, f"{audit_detail}｜積分 {score}",
                                "上傳/下載慢速 1 小時", actor_display=actor_display)
                 elif stage == 1 and score >= 2 * settings.SEC_SCORE_SLOW_THRESHOLD:
@@ -497,20 +505,60 @@ def record_admin(kind, ip, actor, target, detail=""):
 
 # ---------------------------------------------------------------- transfer counters
 
+# An auto slow/block rule lasts this many hours, so the "already escalated"
+# claim marker lives exactly as long: one escalation per stage per hour,
+# independent of where the threshold happens to sit.
+AUTO_RULE_HOURS = 1
+
+
+def transfer_stage(n, limit):
+    """0 = within limits, 1 = slow lane, 2 = block.
+
+    Deliberately a plain comparison instead of `n == limit + 1`: after an
+    admin lowers a threshold mid-window the counter is already past it and the
+    exact-crossing test would silently never fire again.
+    """
+    if n > 2 * limit:
+        return 2
+    if n > limit:
+        return 1
+    return 0
+
+
+def claim_stage(r, marker_key, ttl):
+    """Atomic once-per-window claim (SET NX). True only for the first caller,
+    also across workers — so repeated hits never add a second violation."""
+    try:
+        return bool(r.set(marker_key, "1", nx=True, ex=max(int(ttl), 1)))
+    except Exception:
+        return True
+
+
 def count_upload(user_id, ip, username=None):
+    """Account upload volume, counted at the CREATION boundary (see files.py).
+
+    Called once per successfully created upload — not per tus HEAD/PATCH or
+    per failed attempt — so a batch in progress is not miscounted as dozens of
+    uploads. Request-level abuse is still covered by the endpoint limiter and
+    the flood guard.
+    """
     if not user_id:
         return
     try:
         r = _client()
-        n = _incr_ttl(r, f"xfer:up:u{user_id}", 1, 3600)
+        key = f"xfer:up:u{user_id}"
+        n = _incr_ttl(r, key, 1, 3600)
         limit = settings.SEC_UPLOAD_HOURLY_LIMIT
-        if n == limit + 1 or n == 2 * limit + 1:
-            action = "slow" if n == limit + 1 else "block"
+        stage = transfer_stage(n, limit)
+        if stage and claim_stage(r, f"{key}:s{stage}", AUTO_RULE_HOURS * 3600):
+            action = "slow" if stage == 1 else "block"
             if _ensure_auto_rule(r, {"user_id": user_id, "username": username, "ip": None, "token": None},
-                                 action, "transfer", "up", 1):
+                                 action, "transfer", "up", AUTO_RULE_HOURS):
                 invalidate_rules_cache()
-                _alert("upload_volume", None, username or f"#{user_id}", "上傳", f"{n} 次/小時",
-                       "上傳限流（慢速）" if action == "slow" else "上傳 block（1h）")
+                _alert("upload_volume", None, username or f"#{user_id}", "上傳",
+                       f"{n} 次/小時（閾值 {limit}）",
+                       "上傳限流（慢速）" if action == "slow" else "上傳 block（1h）",
+                       extra={"拒絕來源": "帳號上傳量", "規則範圍": "transfer/up"})
     except Exception:
         pass
 
@@ -519,11 +567,13 @@ def count_download(user_id, ip, token=None, username=None):
     try:
         r = _client()
         if user_id:
-            n = _incr_ttl(r, f"xfer:dn:u{user_id}", 1, 3600)
+            key = f"xfer:dn:u{user_id}"
+            n = _incr_ttl(r, key, 1, 3600)
             limit = settings.SEC_DOWNLOAD_HOURLY_LIMIT
             subject = {"user_id": user_id, "username": username}
         elif ip and token:
-            n = _incr_ttl(r, f"xfer:dn:a{ip}:{token[:8]}", 1, 3600)
+            key = f"xfer:dn:a{ip}:{token[:8]}"
+            n = _incr_ttl(r, key, 1, 3600)
             limit = settings.SEC_ANON_DOWNLOAD_HOURLY_LIMIT
             subject = {"ip": ip, "token": token}
             try:
@@ -534,14 +584,17 @@ def count_download(user_id, ip, token=None, username=None):
                 pass
         else:
             return
-        if n == limit + 1 or n == 2 * limit + 1:
-            action = "slow" if n == limit + 1 else "block"
-            if _ensure_auto_rule(r, subject, action, "transfer", "down", 1):
+        stage = transfer_stage(n, limit)
+        if stage and claim_stage(r, f"{key}:s{stage}", AUTO_RULE_HOURS * 3600):
+            action = "slow" if stage == 1 else "block"
+            if _ensure_auto_rule(r, subject, action, "transfer", "down", AUTO_RULE_HOURS):
                 invalidate_rules_cache()
                 who = username or f"#{user_id}" if user_id else f"{mask_ip(ip)}→連結#{token[:8] if token else ''}"
                 _alert("download_volume", None if user_id else ip, who, "下載",
                        f"{n} 次/小時（閾值 {limit}）",
-                       "下載限速" if action == "slow" else "下載 block（1h）")
+                       "下載限速" if action == "slow" else "下載 block（1h）",
+                       extra={"拒絕來源": "帳號下載量" if user_id else "匿名分享下載量",
+                              "規則範圍": "transfer/down"})
     except Exception:
         pass
 
@@ -655,7 +708,7 @@ def recent_ip_actors(ip, limit=20):
 
 
 def record_event_async(kind, ip, actor=None, target=None, detail="",
-                       actor_display=None, extra=None):
+                       actor_display=None, extra=None, score=True):
     """Fire-and-forget for async (middleware/handler) contexts."""
     asyncio.create_task(asyncio.to_thread(
-        record_event, kind, ip, actor, target, detail, actor_display, extra))
+        record_event, kind, ip, actor, target, detail, actor_display, extra, score))

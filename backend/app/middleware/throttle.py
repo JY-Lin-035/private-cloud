@@ -142,8 +142,6 @@ class ThrottleMiddleware:
             if ip and uid:
                 asyncio.create_task(asyncio.to_thread(sec.track_actor, ip, uid))
 
-            if is_upload:
-                asyncio.create_task(asyncio.to_thread(sec.count_upload, uid, ip))
             if is_download and path not in NO_COUNT_PREFIXES and (not is_stream or not headers.get("range") or headers.get("range").strip().startswith("bytes=0-")):
                 # stream/raw seeks are not new downloads; count playback sessions once
                 if uid:

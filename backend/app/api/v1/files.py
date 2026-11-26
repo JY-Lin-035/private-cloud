@@ -1,4 +1,5 @@
 from urllib.parse import quote
+import asyncio
 import base64
 import secrets
 from typing import Optional
@@ -23,6 +24,27 @@ from app.utils import logger as log
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 logger = log.get_logger("files_api.log")
+
+
+async def _count_upload_created(request: Request, user_id: int) -> None:
+    """Book account upload volume at the boundary where an upload begins to
+    exist: ONE per created TUS session, ONE per multipart file.
+
+    The old counter lived in the throttle middleware and fired on every
+    `/api/files/tus*` request, so a resumable upload's HEAD/PATCH/cancel all
+    counted as "uploads" — a legitimate batch could hit the hourly ceiling
+    while doing nothing wrong. Request-level abuse is still covered by the
+    endpoint limiter and the flood guard; this is the *transfer volume* knob.
+    """
+    try:
+        from app.services import security_engine as sec
+        from app.utils.client_ip import request_client_ip
+        state = getattr(request, "state", None)
+        user = getattr(state, "user", None) if state is not None else None
+        username = user.get("username") if isinstance(user, dict) else None
+        await asyncio.to_thread(sec.count_upload, user_id, request_client_ip(request), username)
+    except Exception:
+        pass  # accounting must never fail an upload that already succeeded
 
 
 def _decode_tus_metadata(metadata_header: Optional[str]) -> dict:
@@ -145,6 +167,7 @@ async def tus_create_upload(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         upload_id = result['upload_id']
+        await _count_upload_created(request, user_id)
         location = str(_tus_location(request, upload_id))
         body = await _read_body_capped(request, file_size)
         if body:
@@ -353,6 +376,7 @@ async def get_file_list(
 
 @router.post("/uploadFile", dependencies=[Depends(rate_limit(30, 300))])
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     parent_folder_uuid: str = Form(None),
     relative_path: str = Form(None),
@@ -407,6 +431,7 @@ async def upload_file(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
         
         logger.info("File uploaded successfully")
+        await _count_upload_created(request, user_id)
         return result
     except Exception as e:
         logger.error(f"Upload file endpoint error: {e}")
