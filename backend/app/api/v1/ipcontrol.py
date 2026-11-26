@@ -403,15 +403,26 @@ async def admin_hotlinks(request: Request, ip: str = Query(..., max_length=45), 
 
 
 @router.get("/admin/ipactors")
-async def admin_ip_actors(request: Request, ip: str = Query(..., max_length=45)):
-    """Accounts recently observed acting from this IP (last activity included).
+async def admin_ip_actors(request: Request, db: Session = Depends(get_db),
+                          ip: Optional[str] = Query(None, max_length=45),
+                          rule_id: Optional[int] = Query(None)):
+    """Accounts recently observed acting from an IP (with last activity).
 
     Correlation context ONLY: an entry here never proves who triggered a given
-    rejection — that is the event's own verified actor. Shared egress IPs list
-    several legitimate users, so the admin UI shows these separately.
+    rejection — that is the event's own verified actor, and shared egress IPs
+    legitimately show several accounts. Accepts `rule_id` so the admin UI can
+    ask per listed rule without ever receiving the unmasked address.
     """
     require_admin(request)
-    return {"ip": sec.mask_ip(ip), "accounts": sec.recent_ip_actors(ip)}
+    raw = ip
+    if rule_id is not None:
+        rule = db.get(IpControl, rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="找不到該規則")
+        raw = rule.ip
+    if not raw:
+        raise HTTPException(status_code=400, detail="需要提供 ip 或 rule_id")
+    return {"ip": sec.mask_ip(raw), "accounts": sec.recent_ip_actors(raw)}
 
 
 # ---------------------------------------------------------------- risk thresholds

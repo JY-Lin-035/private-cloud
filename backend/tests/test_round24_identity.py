@@ -472,6 +472,32 @@ def test_admin_ipactors_endpoint_masks_and_requires_admin(monkeypatch):
     req = MagicMock()
     from app.constants import Identity
     req.state.user = {"identity": Identity.ADMIN, "id": 1, "username": "boss"}
-    resp = asyncio.run(api.admin_ip_actors(req, ip="203.0.113.9"))
+    resp = asyncio.run(api.admin_ip_actors(req, db=MagicMock(), ip="203.0.113.9", rule_id=None))
     assert resp["ip"] == sec.mask_ip("203.0.113.9")
     assert resp["accounts"][0]["username"] == "alice"
+
+
+def test_admin_ipactors_accepts_rule_id_so_ips_stay_masked(monkeypatch):
+    """The list UI only ever sees masked addresses; a rule id must be enough
+    to ask for that rule's recent accounts without leaking the real IP."""
+    from unittest.mock import MagicMock
+    from fastapi import HTTPException
+    from app.api.v1 import ipcontrol as api
+    from app.models.ip_control import IpControl
+
+    monkeypatch.setattr(sec, "recent_ip_actors",
+                        lambda ip, limit=20: [{"user_id": 7, "username": "alice", "last_seen": "t"}])
+    db = MagicMock()
+    db.get.return_value = IpControl(id=4, subject_type="ip", ip="198.51.100.9",
+                                    action="slow", scope="transfer", direction="both",
+                                    delay_ms=0, auto=False)
+    req = MagicMock()
+    req.state.user = {"identity": 1, "id": 1, "username": "boss"}
+    resp = asyncio.run(api.admin_ip_actors(req, db=db, rule_id=4))
+    assert resp["ip"] == sec.mask_ip("198.51.100.9")
+    assert resp["accounts"][0]["username"] == "alice"
+
+    db.get.return_value = None
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.admin_ip_actors(req, db=db, rule_id=99))
+    assert exc.value.status_code == 404
