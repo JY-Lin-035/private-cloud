@@ -277,17 +277,23 @@ def invalidate_rules_cache():
         _rules_cache["ts"] = 0.0
 
 
-def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
+def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False, token=None):
     blocked, delay, up_kbps, dn_kbps, _ = match_rules_detail(
-        ip, user_id, is_upload, is_download, is_share, is_stream)
+        ip, user_id, is_upload, is_download, is_share, is_stream, token)
     return blocked, delay, up_kbps, dn_kbps
 
 
-def match_rules_detail(ip, user_id, is_upload, is_download, is_share, is_stream=False):
+def match_rules_detail(ip, user_id, is_upload, is_download, is_share, is_stream=False, token=None):
     """Return (block, delay_ms, upload_kbps, download_kbps, blocking_rule_ids).
 
     `blocking_rule_ids` is only meaningful when block is True; the throttle
     layer records it so admins can see WHICH rule produced a 429.
+
+    `token` is the share link the request actually targets. An `ip_token` rule
+    is scoped to ONE link on that address: without it, blocking one shared
+    folder silently blocked every other link leaving from the same IP. When
+    the link cannot be determined (unparseable/oversized body) the rule still
+    applies — punishment stays at least as strict as before, never looser.
 
     Stream precedence: dedicated `stream`-scope rules own playback traffic
     (download_kbps column carries the stream cap); while any stream rule matches,
@@ -307,7 +313,9 @@ def match_rules_detail(ip, user_id, is_upload, is_download, is_share, is_stream=
         if st == "ip":
             return bool(ip) and ip_matches(_rule_matcher(r), nip, ip)
         if st == "ip_token":
-            return bool(ip) and is_share and ip_matches(_rule_matcher(r), nip, ip)
+            if not (ip and is_share) or not ip_matches(_rule_matcher(r), nip, ip):
+                return False
+            return token is None or (r.get("token") or "") == token
         return st == "user" and bool(user_id) and r["user_id"] == user_id
 
     rules = _active_rules()
@@ -382,7 +390,21 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours, snapshot=None
 
     db = SessionLocal()
     try:
-        q = select(IpControl).where(IpControl.auto.is_(True))
+        # Merge key is (subject + DIRECTION) among AUTO rules.
+        #
+        # Direction has to be part of the key: an upload-volume escalation
+        # ("up") and a download-volume one ("down") used to fight over the same
+        # row, each rewriting the other's direction and silently flipping which
+        # half of the traffic was punished.
+        #
+        # Scope is deliberately NOT part of it: the punishment ladder upgrades
+        # one row in place (transfer/slow -> full/block). Excluding scope keeps
+        # "a permanent block is terminal" true regardless of which stage asks,
+        # and keeps one IP at one auto rule per direction.
+        #
+        # AUTO never merges into a manual rule — the admin's parameters win.
+        q = select(IpControl).where(IpControl.auto.is_(True),
+                                    IpControl.direction == direction)
         if subject.get("user_id") is not None:
             q = q.where(IpControl.user_id == subject["user_id"], IpControl.token.is_(None))
         elif subject.get("token") is not None:

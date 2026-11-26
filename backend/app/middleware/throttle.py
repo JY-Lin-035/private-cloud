@@ -28,6 +28,11 @@ DOWNLOAD_PREFIXES = (
 STREAM_PREFIXES = ('/api/files/stream',)
 NO_COUNT_PREFIXES = ('/api/files/raw',)
 SHARE_PREFIX = '/api/share/'
+# Some share endpoints carry the link in a query string, others in a JSON body.
+# ip_token rules and anonymous download accounting must treat both the same
+# way, otherwise a body-based route escapes the very restriction aimed at it.
+SHARE_JSON_LINK_PATHS = ('/api/share/status', '/api/share/verifyPassword', '/api/share/downloadItems')
+_MAX_JSON_SNIFF = 256 * 1024
 
 
 class _Pacer:
@@ -65,6 +70,54 @@ class ThrottleMiddleware:
             headers.append(("access-control-allow-origin".encode(), origin.encode()))
             headers.append(("access-control-allow-credentials".encode(), b"true"))
         return headers, payload
+
+    async def _share_link(self, scope, headers, receive):
+        """Resolve which share link a request targets -> (token, receive).
+
+        `None` means "could not tell" (unknown link): ip_token rules then apply
+        as before rather than silently not matching, so tightening a scope can
+        never loosen protection. When the link had to be read out of a JSON
+        body, the body is replayed verbatim for the application.
+        """
+        path = scope.get("path", "")
+        if not path.startswith(SHARE_PREFIX):
+            return None, receive
+        qs = parse_qs(scope.get("query_string", b"").decode(errors="ignore"))
+        token = (qs.get("link") or [""])[0].strip()
+        if token:
+            return token, receive
+        if scope.get("method") not in ("POST", "PUT", "PATCH") or path not in SHARE_JSON_LINK_PATHS:
+            return None, receive
+        try:
+            length = int(headers.get("content-length") or -1)
+        except ValueError:
+            length = -1
+        if "json" not in (headers.get("content-type") or "") or not 0 <= length <= _MAX_JSON_SNIFF:
+            return None, receive
+
+        chunks = []
+        while True:
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                break
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+        body = b"".join(chunks)
+        played = {"done": False}
+
+        async def replay():
+            if not played["done"]:
+                played["done"] = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        try:
+            data = json.loads(body.decode("utf-8", errors="ignore"))
+        except Exception:
+            data = None
+        link = data.get("link") if isinstance(data, dict) else None
+        return (str(link).strip() or None), replay
 
     async def _record_rule_block(self, ip, method, path, actor_display, blockers):
         """Audit an active-rule rejection. Log-only (no scoring): the rule that
@@ -126,6 +179,9 @@ class ThrottleMiddleware:
             is_download = path.startswith(DOWNLOAD_PREFIXES)
             is_share = path.startswith(SHARE_PREFIX)
             is_stream = path.startswith(STREAM_PREFIXES)
+            share_token, receive = await self._share_link(scope, headers, receive)
+            if share_token:
+                scope["state"]["share_token"] = share_token
 
             if ip and await asyncio.to_thread(sec.flood_exceeded, ip, actor_display, path, snapshot):
                 rh, payload = self._json_429(headers.get("origin"))
@@ -134,7 +190,8 @@ class ThrottleMiddleware:
                 return
 
             blocked, delay_ms, up_kbps, dn_kbps, blockers = await asyncio.to_thread(
-                sec.match_rules_detail, ip, uid, is_upload, is_download, is_share, is_stream)
+                sec.match_rules_detail, ip, uid, is_upload, is_download, is_share, is_stream,
+                share_token)
             if blocked:
                 await self._record_rule_block(ip, scope.get("method", ""), path,
                                               actor_display, blockers)
@@ -152,11 +209,8 @@ class ThrottleMiddleware:
                 # stream/raw seeks are not new downloads; count playback sessions once
                 if uid:
                     asyncio.create_task(asyncio.to_thread(sec.count_download, uid, ip, None))
-                elif is_share:
-                    qs = parse_qs(scope.get("query_string", b"").decode(errors="ignore"))
-                    token = (qs.get("link") or [""])[0]
-                    if token:
-                        asyncio.create_task(asyncio.to_thread(sec.count_download, None, ip, token))
+                elif is_share and share_token:
+                    asyncio.create_task(asyncio.to_thread(sec.count_download, None, ip, share_token))
 
             if is_upload and up_kbps:
                 pacer = _Pacer(up_kbps * 1024)
