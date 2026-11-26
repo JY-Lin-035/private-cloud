@@ -5,9 +5,16 @@ value is compared (constant time) against `session:{user_id}` in Redis.
 """
 import hmac
 import json
+import re as _re
 from typing import Optional
 
 from redis import Redis
+
+# Single definition of "this cookie header carries a session cookie".
+# OriginGuard (CSRF trigger), Throttle (identity observation) and
+# SessionMiddleware (authorisation) all ask through these two helpers, so a
+# request can never be "credentialed" to one layer and anonymous to another.
+_SESSION_MARKER = _re.compile(r"(?:^|;)\s*[Ss]ession\s*=")
 
 
 def parse_session_cookie(cookie_header: Optional[str]) -> Optional[str]:
@@ -21,9 +28,7 @@ def parse_session_cookie(cookie_header: Optional[str]) -> Optional[str]:
     """
     if not cookie_header:
         return None
-    import re as _re
-    n = len(_re.findall(r"(?:^|;)\s*[Ss]ession\s*=", cookie_header))
-    if n != 1:
+    if len(_SESSION_MARKER.findall(cookie_header)) != 1:
         return None
     try:
         from http.cookies import SimpleCookie
@@ -33,6 +38,15 @@ def parse_session_cookie(cookie_header: Optional[str]) -> Optional[str]:
         return m.value if m else None
     except Exception:
         return None
+
+
+def has_session_cookie(cookie_header: Optional[str]) -> bool:
+    """Whether a session-ish cookie is present at all (OriginGuard's CSRF
+    trigger). Shares parse_session_cookie's detector so the two cookie views
+    in the pipeline can never disagree about 'is this request credentialed'."""
+    if not cookie_header:
+        return False
+    return bool(_SESSION_MARKER.search(cookie_header))
 
 
 def split_session_value(value: Optional[str]) -> Optional[tuple[int, str]]:
@@ -87,3 +101,44 @@ def resolve_session_uid(redis: Redis, value: Optional[str]) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return uid if uid > 0 else None
+
+
+def resolve_session_identity(redis: Redis,
+                             cookie_header: Optional[str]) -> Optional[dict]:
+    """Return {'user_id', 'username'} for ATTRIBUTION purposes, or None.
+
+    Stricter than resolve_session_uid on purpose: a security event may only
+    name an account when every link in the chain agrees.
+
+      * exactly one `session` cookie (duplicate cookies are ambiguous -> drop)
+      * the `id|token` value matches Redis (constant-time, see above)
+      * the Redis account blob names the SAME id the cookie prefix claims
+        (a stale/partial session_data must never frame another account)
+
+    Deliberately does NOT renew or extend anything, and never exposes the
+    stored email — only the display name / id are safe for admin logs.
+    """
+    value = parse_session_cookie(cookie_header)
+    parsed = split_session_value(value) if value else None
+    if not parsed:
+        return None
+    uid, raw = parsed
+    data = verify_session_value(redis, raw)
+    if not data:
+        return None
+    # Legacy session blobs stored the id under 'id'; the auth layer accepts
+    # both, so attribution must too (otherwise a real signed-in request would
+    # be reported as 本請求未驗證帳號 while SessionMiddleware authorised it).
+    data_uid = None
+    for field in ("user_id", "id"):
+        try:
+            candidate = int(data.get(field))
+        except (TypeError, ValueError):
+            continue
+        if candidate > 0:
+            data_uid = candidate
+            break
+    if data_uid is None or data_uid != uid:
+        return None
+    username = data.get("username")
+    return {"user_id": uid, "username": str(username) if username else None}

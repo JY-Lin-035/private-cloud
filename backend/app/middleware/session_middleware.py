@@ -5,7 +5,6 @@ from redis import Redis
 from app.config import settings
 from app.utils import logger as log
 from app.constants import HTTPStatus
-import json
 
 logger = log.get_logger("session_middleware.log")
 
@@ -57,7 +56,8 @@ class SessionMiddleware(BaseHTTPMiddleware):
 
         # Extract session cookie
         raw_cookie = request.headers.get('cookie') or ''
-        from app.utils.session_auth import parse_session_cookie
+        from app.utils.session_auth import (parse_session_cookie, split_session_value,
+                                            verify_session_value)
         session_token = parse_session_cookie(raw_cookie)
         if session_token is None and 'session' in raw_cookie.lower():
             # a session-ish cookie exists but the single trusted parser
@@ -65,54 +65,25 @@ class SessionMiddleware(BaseHTTPMiddleware):
             logger.info("Session middleware - Rejected malformed/duplicate session cookie")
             return Response(status_code=HTTPStatus.UNAUTHORIZED)
         if session_token:
-            # Validate session format (id|token)
-            if '|' not in session_token:
+            parsed = split_session_value(session_token)
+            if not parsed:
                 logger.info(f"Session middleware - Invalid session format, path: {request.url.path}")
                 return Response(status_code=HTTPStatus.UNAUTHORIZED)
-            
-            user_id, token_value = session_token.split('|', 1)
-            
-            try:
-                user_id = int(user_id)
-            except ValueError:
-                logger.info(f"Session middleware - Invalid user_id in session, path: {request.url.path}")
+            user_id = parsed[0]
+
+            # One verification implementation for the whole app: the shared
+            # helper compares the token against Redis in constant time, so
+            # middleware / Throttle / checkSession can never disagree about
+            # who is signed in.
+            user_dict = verify_session_value(self.redis, session_token)
+            if user_dict is None:
+                logger.info(f"Session middleware - Session not found or mismatched, user_id: {user_id}")
                 return Response(status_code=HTTPStatus.UNAUTHORIZED)
-            
-            # Check session in Redis
-            stored_token = self.redis.get(f"session:{user_id}")
-            if not stored_token:
-                logger.info(f"Session middleware - Session not found in Redis, user_id: {user_id}")
-                return Response(status_code=HTTPStatus.UNAUTHORIZED)
-            
-            # Handle both string and bytes
-            if isinstance(stored_token, bytes):
-                stored_token_str = stored_token.decode()
-            else:
-                stored_token_str = stored_token
-            
-            if stored_token_str != session_token:
-                logger.info(f"Session middleware - Session token mismatch, user_id: {user_id}")
-                return Response(status_code=HTTPStatus.UNAUTHORIZED)
-            
-            # Get user data from Redis
-            user_data = self.redis.get(f"session_data:{user_id}")
-            if user_data:
-                try:
-                    if isinstance(user_data, bytes):
-                        user_data_str = user_data.decode()
-                    else:
-                        user_data_str = user_data
-                    user_dict = json.loads(user_data_str)
-                    # Inject user into request state
-                    request.state.user = user_dict
-                    request.state.user_id = user_id
-                except json.JSONDecodeError as e:
-                    logger.error(f"Session middleware - Failed to parse user data: {e}")
-                    return Response(status_code=HTTPStatus.UNAUTHORIZED)
-            else:
-                logger.info(f"Session middleware - User data not found in Redis, user_id: {user_id}")
-                return Response(status_code=HTTPStatus.UNAUTHORIZED)
-            
+
+            # Inject user into request state
+            request.state.user = user_dict
+            request.state.user_id = user_id
+
             # Extend session expiration.
             # Passive background-polling endpoints (the announcement ticker) must NOT
             # keep a session alive, otherwise an idle-but-open tab would never expire.

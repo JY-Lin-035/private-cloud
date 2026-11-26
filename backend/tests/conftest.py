@@ -155,7 +155,7 @@ def _isolate_security_engine(monkeypatch):
     monkeypatch.setattr(security_engine, "record_event", _noop)
     monkeypatch.setattr(security_engine, "record_event_async", _noop_async)
     monkeypatch.setattr(security_engine, "_send_alert", _noop)
-    monkeypatch.setattr(security_engine, "flood_exceeded", lambda ip: False)
+    monkeypatch.setattr(security_engine, "flood_exceeded", lambda *a, **k: False)
 
 
 @pytest.fixture(autouse=True)

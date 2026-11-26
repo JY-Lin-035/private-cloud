@@ -397,3 +397,15 @@ async def admin_hotlinks(request: Request, ip: str = Query(..., max_length=45), 
             owner = db.get(Account, d.owner_id)
             links.append({"token": token, "item": d.name, "type": "folder", "owner": owner.name if owner else "?"})
     return {"links": links}
+
+
+@router.get("/admin/ipactors")
+async def admin_ip_actors(request: Request, ip: str = Query(..., max_length=45)):
+    """Accounts recently observed acting from this IP (last activity included).
+
+    Correlation context ONLY: an entry here never proves who triggered a given
+    rejection — that is the event's own verified actor. Shared egress IPs list
+    several legitimate users, so the admin UI shows these separately.
+    """
+    require_admin(request)
+    return {"ip": sec.mask_ip(ip), "accounts": sec.recent_ip_actors(ip)}

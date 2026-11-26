@@ -4,6 +4,7 @@ All entry points are best-effort: failures here must never break user requests.
 """
 import asyncio
 import ipaddress
+import json
 import threading
 from datetime import datetime, timedelta
 
@@ -39,6 +40,19 @@ STRIKE_HOURS = (1, 3, 6, 12, 24, 72)
 STAGE_TTL = 3 * 3600
 SCORE_TTL = 3600
 ALERT_COOLDOWN_S = 600
+# Admin-facing wording for a rejection whose *own* request carried no verified
+# identity. ipActors (accounts recently seen from an IP) stay a separate
+# signal — they must never be back-filled as this request's actor.
+UNVERIFIED_ACTOR = "本請求未驗證帳號"
+
+
+def format_actor(username=None, user_id=None):
+    """Display string for the account that triggered THIS request."""
+    if username:
+        return str(username)
+    if user_id:
+        return f"#{user_id}"
+    return UNVERIFIED_ACTOR
 
 _lock = threading.Lock()
 _redis = None
@@ -170,19 +184,24 @@ def _send_alert(subject, body):
         pass
 
 
-def _alert(kind, ip, actor, target, detail, action_taken=""):
+def _alert(kind, ip, actor, target, detail, action_taken="", actor_display=None, extra=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     subject = f"[MeowCloud 資安警報] {kind} — {mask_ip(ip)}"
-    body = (
-        f"時間: {now} (UTC+8)\n"
-        f"事件: {kind}\n"
-        f"來源IP: {mask_ip(ip)}\n"
-        f"關聯帳號: {actor or '匿名（無帳號）'}\n"
-        f"目標: {target or '-'}\n"
-        f"明細: {detail}\n"
-        f"動作: {action_taken or '僅記錄'}"
-    )
-    _send_alert(subject, body)
+    lines = [
+        f"時間: {now} (UTC+8)",
+        f"事件: {kind}",
+        f"來源IP: {mask_ip(ip)}",
+        f"觸發帳號: {actor_display if actor_display is not None else (actor or UNVERIFIED_ACTOR)}",
+    ]
+    for label, value in (extra or {}).items():
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+    lines += [
+        f"目標: {target or '-'}",
+        f"明細: {detail}",
+        f"動作: {action_taken or '僅記錄'}",
+    ]
+    _send_alert(subject, "\n".join(lines))
 
 
 # ---------------------------------------------------------------- controls
@@ -230,7 +249,16 @@ def invalidate_rules_cache():
 
 
 def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
-    """Return (block, delay_ms, upload_kbps, download_kbps) merged from active rules.
+    blocked, delay, up_kbps, dn_kbps, _ = match_rules_detail(
+        ip, user_id, is_upload, is_download, is_share, is_stream)
+    return blocked, delay, up_kbps, dn_kbps
+
+
+def match_rules_detail(ip, user_id, is_upload, is_download, is_share, is_stream=False):
+    """Return (block, delay_ms, upload_kbps, download_kbps, blocking_rule_ids).
+
+    `blocking_rule_ids` is only meaningful when block is True; the throttle
+    layer records it so admins can see WHICH rule produced a 429.
 
     Stream precedence: dedicated `stream`-scope rules own playback traffic
     (download_kbps column carries the stream cap); while any stream rule matches,
@@ -242,6 +270,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
     delay = 0
     up_kbps = None
     dn_kbps = None
+    blockers = []
     nip = normalize_ip(ip)
 
     def _subject_hit(r):
@@ -264,6 +293,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
                 continue
             if r["action"] == "block":
                 blocked = True
+                blockers.append(f"rule#{r.get('id')}(stream)")
                 continue
             delay = max(delay, r["delay_ms"])
             v = r["download_kbps"]
@@ -277,6 +307,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
         if r["scope"] == "full":
             if r["action"] == "block":
                 blocked = True
+                blockers.append(f"rule#{r.get('id')}(full)")
                 continue
             delay = max(delay, r["delay_ms"])
             if is_transfer:
@@ -289,6 +320,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
                 continue
             if r["action"] == "block":
                 blocked = True
+                blockers.append(f"rule#{r.get('id')}(transfer/{r.get('direction')})")
                 continue
             delay = max(delay, r["delay_ms"])
             if is_upload:
@@ -299,7 +331,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
                 v = r["download_kbps"]
                 if v:
                     dn_kbps = v if dn_kbps is None else min(dn_kbps, v)
-    return blocked, delay, up_kbps, dn_kbps
+    return blocked, delay, up_kbps, dn_kbps, blockers
 
 
 def _ensure_auto_rule(r, subject, action, scope, direction, hours):
@@ -361,10 +393,22 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
 
 # ---------------------------------------------------------------- events
 
-def record_event(kind, ip, actor=None, target=None, detail=""):
-    """Sync entry. Safe to call from threadpool or asyncio.to_thread."""
+def record_event(kind, ip, actor=None, target=None, detail="",
+                 actor_display=None, extra=None):
+    """Sync entry. Safe to call from threadpool or asyncio.to_thread.
+
+    `extra` is a dict of admin-only context (HTTP method, route id, rejection
+    source, threshold, outcome). It is appended to the audit line and rendered
+    in the alert e-mail; it never reaches the client.
+    """
+    audit_detail = detail
+    if extra:
+        rendered = "；".join(f"{k}={v}" for k, v in extra.items() if v not in (None, ""))
+        if rendered:
+            audit_detail = f"{detail}｜{rendered}" if detail else rendered
     try:
-        write_event(kind, ip, actor, target, detail)
+        write_event(kind, ip, actor_display if actor_display is not None else actor,
+                    target, audit_detail)
         weight = WEIGHTS.get(kind)
         if weight and ip:
             r = _client()
@@ -373,22 +417,25 @@ def record_event(kind, ip, actor=None, target=None, detail=""):
             if is_auth:
                 score_a = _incr_ttl(r, f"secScoreA:{ip}", weight, SCORE_TTL)
                 if score_a >= settings.SEC_SCORE_BLOCK_THRESHOLD:
-                    _escalate_to_block(r, ip, actor, kind, score_a, detail)
+                    _escalate_to_block(r, ip, actor, kind, score_a, audit_detail, target,
+                                       actor_display=actor_display)
             else:
                 score = _incr_ttl(r, f"secScore:{ip}", weight, SCORE_TTL)
                 stage = int(r.get(f"secStage:{ip}") or 0)
                 if stage == 0 and score >= settings.SEC_SCORE_SLOW_THRESHOLD:
                     if _ensure_auto_rule(r, {"ip": ip}, "slow", "transfer", "both", 1):
                         r.setex(f"secStage:{ip}", STAGE_TTL, "1")
-                        _alert(kind, ip, actor, target, f"{detail}｜積分 {score}", "上傳/下載慢速 1 小時")
+                        _alert(kind, ip, actor, target, f"{audit_detail}｜積分 {score}",
+                               "上傳/下載慢速 1 小時", actor_display=actor_display)
                 elif stage == 1 and score >= 2 * settings.SEC_SCORE_SLOW_THRESHOLD:
-                    _escalate_to_block(r, ip, actor, kind, score, detail)
+                    _escalate_to_block(r, ip, actor, kind, score, audit_detail, target,
+                                       actor_display=actor_display)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("security_engine.record_event failed")
 
 
-def _escalate_to_block(r, ip, actor, kind, score, detail):
+def _escalate_to_block(r, ip, actor, kind, score, detail, target=None, actor_display=None):
     strikes = r.incr(f"secStrikes:{ip}")
     r.expire(f"secStrikes:{ip}", 7 * 24 * 3600)
     # One escalation per completed violation episode: clear both score buckets
@@ -405,8 +452,8 @@ def _escalate_to_block(r, ip, actor, kind, score, detail):
     if hours is None and kind in DISABLE_ATTESTED_KINDS and actor:
         extra = _disable_account(actor)
     label = "永久" if hours is None else f"{hours} 小時"
-    _alert(kind, ip, actor, "", f"{detail}｜積分 {score}",
-           f"全站 429 冷卻 {label}（第 {strikes} 次）{extra}")
+    _alert(kind, ip, actor, target, f"{detail}｜積分 {score}",
+           f"全站 429 冷卻 {label}（第 {strikes} 次）{extra}", actor_display=actor_display)
 
 
 def _disable_account(username):
@@ -522,13 +569,32 @@ def clear_pw_failures(token):
         pass
 
 
-def flood_exceeded(ip):
+def should_log_reject(kind, ip, target, window=300):
+    """True only for the FIRST rejection logged per (kind, ip, route).
+
+    A blocked IP retries hard; without this marker one incident would flood
+    the audit log. Counters keep counting every rejected request — only the
+    admin-facing record is de-duplicated.
+    """
+    try:
+        r = _client()
+        key = f"secLogged:{kind}:{normalize_ip(ip) or ip}:{target or '-'}"
+        return bool(r.set(key, "1", nx=True, ex=max(int(window), 1)))
+    except Exception:
+        return True
+
+
+def flood_exceeded(ip, actor_display=None, target=None):
     try:
         r = _client()
         n = _incr_ttl(r, f"glb:{ip}", 1, 3600)
-        if n == settings.SEC_GLOBAL_HOURLY_LIMIT + 1:
-            record_event("flood", ip, None, None, f"超過全域 {settings.SEC_GLOBAL_HOURLY_LIMIT} 次/小時")
-        return n > settings.SEC_GLOBAL_HOURLY_LIMIT
+        limit = settings.SEC_GLOBAL_HOURLY_LIMIT
+        if n == limit + 1:
+            record_event("flood", ip, None, target,
+                         f"超過全域 {limit} 次/小時（第 {n} 次）",
+                         actor_display=actor_display,
+                         extra={"拒絕來源": "全站 flood", "門檻": f"{limit}/3600s"})
+        return n > limit
     except Exception:
         return False
 
@@ -555,6 +621,41 @@ def get_ip_scores(limit=10):
     return out
 
 
-def record_event_async(kind, ip, actor=None, target=None, detail=""):
+def recent_ip_actors(ip, limit=20):
+    """Accounts recently observed acting from `ip` (admin display only).
+
+    This is correlation, NOT proof of who triggered a given request — keep it
+    out of the attribution path (see UNVERIFIED_ACTOR).
+    """
+    if not ip:
+        return []
+    out = []
+    try:
+        r = _client()
+        key = f"ipActors:{normalize_ip(ip)}"
+        for uid, ts in (r.hgetall(key) or {}).items():
+            uid = uid.decode() if isinstance(uid, bytes) else uid
+            try:
+                ts = int(ts)
+            except (TypeError, ValueError):
+                continue
+            name = None
+            try:
+                raw = r.get(f"session_data:{uid}")
+                if raw:
+                    name = json.loads(raw.decode() if isinstance(raw, bytes) else raw).get("username")
+            except Exception:
+                name = None
+            out.append({"user_id": int(uid), "username": name or f"#{uid}",
+                        "last_seen": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")})
+        out.sort(key=lambda x: x["last_seen"], reverse=True)
+    except Exception:
+        return []
+    return out[:limit]
+
+
+def record_event_async(kind, ip, actor=None, target=None, detail="",
+                       actor_display=None, extra=None):
     """Fire-and-forget for async (middleware/handler) contexts."""
-    asyncio.create_task(asyncio.to_thread(record_event, kind, ip, actor, target, detail))
+    asyncio.create_task(asyncio.to_thread(
+        record_event, kind, ip, actor, target, detail, actor_display, extra))

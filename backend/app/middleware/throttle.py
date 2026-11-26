@@ -16,7 +16,7 @@ from urllib.parse import parse_qs
 
 from app.config import settings
 from app.services import security_engine as sec
-from app.utils.session_auth import parse_session_cookie, resolve_session_uid
+from app.utils.session_auth import resolve_session_identity
 
 UPLOAD_PREFIXES = ('/api/files/tus', '/api/files/uploadFile')
 DOWNLOAD_PREFIXES = (
@@ -52,11 +52,6 @@ class ThrottleMiddleware:
         self.app = app
 
     @staticmethod
-    def _session_cookie(headers):
-        """Return the raw session cookie value (unverified)."""
-        return parse_session_cookie(headers.get("cookie"))
-
-    @staticmethod
     def _json_429(origin):
         payload = json.dumps({"detail": "請求過多，請稍後再試"}).encode()
         headers = [
@@ -69,6 +64,24 @@ class ThrottleMiddleware:
             headers.append(("access-control-allow-origin".encode(), origin.encode()))
             headers.append(("access-control-allow-credentials".encode(), b"true"))
         return headers, payload
+
+    async def _record_rule_block(self, ip, method, path, actor_display, blockers):
+        """Audit an active-rule rejection. Log-only (no scoring): the rule that
+        blocked the request is already the punishment, and a blocked IP retries
+        hard, so repeats are collapsed to one line per route per 5 minutes."""
+        try:
+            fresh = await asyncio.to_thread(sec.should_log_reject, "rule_block", ip, path, 300)
+            if not fresh:
+                return
+            await asyncio.to_thread(
+                sec.record_event, "rule_block", ip, None, path,
+                "生效規則拒絕",
+                actor_display=actor_display,
+                extra={"HTTP方法": method, "拒絕來源": "規則封鎖",
+                       "規則範圍": "、".join(blockers) if blockers else "-",
+                       "處分": "HTTP 429"})
+        except Exception:
+            pass
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -87,28 +100,38 @@ class ThrottleMiddleware:
             path = scope.get("path", "")
             # A user id is only trusted after the cookie value is verified
             # against Redis; an unauthenticated caller cannot frame another
-            # account by sending a forged `session=42|...` prefix.
-            uid = None
-            raw_session = self._session_cookie(headers)
-            if raw_session:
-                try:
-                    uid = await asyncio.to_thread(resolve_session_uid, sec._client(), raw_session)
-                except Exception:
-                    uid = None
+            # account by sending a forged `session=42|...` prefix. The same
+            # verified identity is stashed for inner layers (audit attribution
+            # only — it never authorises anything and never renews the
+            # session), so public routes that skip SessionMiddleware can still
+            # say whose cookie tripped a rejection.
+            identity = None
+            try:
+                identity = await asyncio.to_thread(
+                    resolve_session_identity, sec._client(), headers.get("cookie"))
+            except Exception:
+                identity = None
+            uid = identity["user_id"] if identity else None
+            if identity is not None:
+                scope.setdefault("state", {})["observed_identity"] = identity
+            actor_display = (sec.format_actor(identity["username"], identity["user_id"])
+                             if identity else sec.UNVERIFIED_ACTOR)
             is_upload = path.startswith(UPLOAD_PREFIXES)
             is_download = path.startswith(DOWNLOAD_PREFIXES)
             is_share = path.startswith(SHARE_PREFIX)
             is_stream = path.startswith(STREAM_PREFIXES)
 
-            if ip and await asyncio.to_thread(sec.flood_exceeded, ip):
+            if ip and await asyncio.to_thread(sec.flood_exceeded, ip, actor_display, path):
                 rh, payload = self._json_429(headers.get("origin"))
                 await send({"type": "http.response.start", "status": 429, "headers": rh})
                 await send({"type": "http.response.body", "body": payload})
                 return
 
-            blocked, delay_ms, up_kbps, dn_kbps = await asyncio.to_thread(
-                sec.match_rules, ip, uid, is_upload, is_download, is_share, is_stream)
+            blocked, delay_ms, up_kbps, dn_kbps, blockers = await asyncio.to_thread(
+                sec.match_rules_detail, ip, uid, is_upload, is_download, is_share, is_stream)
             if blocked:
+                await self._record_rule_block(ip, scope.get("method", ""), path,
+                                              actor_display, blockers)
                 rh, payload = self._json_429(headers.get("origin"))
                 await send({"type": "http.response.start", "status": 429, "headers": rh})
                 await send({"type": "http.response.body", "body": payload})

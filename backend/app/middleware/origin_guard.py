@@ -42,9 +42,8 @@ def _origin_ok(value: str | None) -> bool:
 
 
 def _has_session_cookie(headers: dict[str, str]) -> bool:
-    import re as _re
-    cookie = headers.get("cookie") or ""
-    return bool(_re.search(r"(?:^|;)\s*[Ss]ession\s*=", cookie))
+    from app.utils.session_auth import has_session_cookie
+    return has_session_cookie(headers.get("cookie"))
 
 
 # Unauthenticated auth endpoints that are still CSRF-relevant (login-CSRF:
