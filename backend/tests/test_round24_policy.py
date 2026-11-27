@@ -17,9 +17,9 @@ from tests.test_round24_identity import REAL
 
 
 @pytest.fixture
-def sqlite(monkeypatch):
+def sqlite(monkeypatch, tmp_path):
     """Back the version table with SQLite; reset every process cache."""
-    eng = create_engine("sqlite://", echo=False)
+    eng = create_engine(f"sqlite:///{tmp_path / 'policy.sqlite'}", echo=False)
     SecurityPolicyVersion.__table__.create(bind=eng)
     factory = sessionmaker(bind=eng)
     monkeypatch.setattr("app.database.SessionLocal", factory)
@@ -475,6 +475,23 @@ def test_policy_update_validates_and_records_audit(sqlite, monkeypatch):
     assert exc.value.status_code == 409 and "v1" in exc.value.detail
     # the rejected writes left no trace
     assert sp.current(force=True).version == 1
+
+
+def test_policy_put_routes_to_policy_handler(sqlite, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    api = _api()
+    app = FastAPI()
+    app.include_router(api.router)
+    monkeypatch.setattr(api, "require_admin", lambda request: {})
+    monkeypatch.setattr(api, "_admin_stamp", lambda request: ("fixture", 1))
+    monkeypatch.setattr(api, "write_event", lambda *args: None)
+    response = TestClient(app).put("/api/ipcontrol/admin/policies", json={
+        "expected_version": 0, "changes": {"global.flood_requests_per_ip": 4900},
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == 1
 
 
 def test_policy_history_and_rollback_endpoints(sqlite, monkeypatch):

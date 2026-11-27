@@ -288,7 +288,7 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
     return {"id": rule.id, "linked_accounts": linked}
 
 
-@router.put("/admin/{rule_id}")
+@router.put("/admin/{rule_id:int}")
 async def admin_update(rule_id: int, payload: ControlUpdate, request: Request, db: Session = Depends(get_db)):
     admin = require_admin(request)
     rule = db.get(IpControl, rule_id)
