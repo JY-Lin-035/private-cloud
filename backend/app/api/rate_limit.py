@@ -3,6 +3,23 @@ from typing import Callable, Optional
 from redis import Redis
 from app.api.dependencies import get_redis
 
+_FIXED_WINDOW = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then redis.call('DEL', KEYS[2]) end
+redis.call('EXPIRE', KEYS[1], ARGV[2], 'NX')
+local scored = 0
+if count > tonumber(ARGV[1]) then
+    local until_ms = redis.call('PEXPIRETIME', KEYS[1])
+    if redis.call('SET', KEYS[2], '1', 'NX', 'PXAT', until_ms) then scored = 1 end
+end
+return {count, scored}
+"""
+
+
+def _count_request(redis_client, key, limit, window):
+    count, scored = redis_client.eval(_FIXED_WINDOW, 2, key, f"{key}:strike", limit, window)
+    return count, bool(scored)
+
 
 def _route_id(request: Request) -> str:
     """Fixed route identifier for audit output.
@@ -87,17 +104,8 @@ def rate_limit(max_requests: int, window_seconds: int, policy_id: Optional[str] 
         endpoint = request.url.path
         key = f"rate_limit:{client_ip}:{endpoint}"
         
-        # Atomic fixed-window: INCR and only (re)arm the TTL when the key has
-        # none. Setting EXPIRE on every hit would let a persistent attacker
-        # slide the window open forever (permanent 429 for the whole bucket),
-        # and get-then-incr raced under concurrency.
-        pipe = redis_client.pipeline()
-        pipe.incr(key)
-        pipe.ttl(key)
-        count, ttl = pipe.execute()
-        if ttl is not None and ttl < 0:
-            redis_client.expire(key, window)
-            ttl = window
+        # The score marker shares the bucket's exact expiry, in one operation.
+        count, first_overage = _count_request(redis_client, key, limit, window)
         
         # Check if limit exceeded (count is post-increment)
         if count > limit:
@@ -105,7 +113,6 @@ def rate_limit(max_requests: int, window_seconds: int, policy_id: Optional[str] 
             # the bucket, but the violation SCORE is claimed once per window
             # with SET NX — atomic, so N workers handling one burst cannot all
             # book it, and one long burst costs one violation instead of fifty.
-            first_overage = _claim_window_strike(redis_client, key, ttl, count)
             actor, actor_display, identity_source = _event_actor(request)
             route = _route_id(request)
             try:
@@ -136,17 +143,3 @@ def rate_limit(max_requests: int, window_seconds: int, policy_id: Optional[str] 
             )
     
     return check_rate_limit
-
-
-def _claim_window_strike(redis_client: Redis, bucket_key: str, ttl, count) -> bool:
-    """True when this rejection is the first overage of the current window.
-
-    The marker shares the bucket's remaining TTL, so a new window can score
-    again while a long burst inside one window scores only once.
-    """
-    try:
-        return bool(redis_client.set(f"{bucket_key}:strike", str(count),
-                                     nx=True, ex=max(int(ttl or 1), 1)))
-    except Exception:
-        return True  # fail open: better one extra audit event than silence
-

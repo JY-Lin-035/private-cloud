@@ -11,6 +11,7 @@ Registered *inside* CORSMiddleware so early 403s still carry CORS headers.
 import json
 
 from app.config import settings
+from app.utils.session_auth import cookie_header
 
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -79,7 +80,7 @@ class OriginGuardMiddleware:
         origin = headers.get("origin")
         referer = headers.get("referer")
 
-        if not _has_session_cookie(headers):
+        if not _has_session_cookie({"cookie": cookie_header(scope)}):
             # Login-CSRF guard: no cookie yet, but if this is one of the auth
             # endpoints and a browser Origin is attached, it must be trusted.
             path = scope.get("path", "")

@@ -164,6 +164,18 @@ def _incr_ttl(r, key, amount, ttl):
     return pipe.execute()[0]
 
 
+_RENEWABLE_WINDOW = """
+local count = redis.call('INCRBY', KEYS[1], ARGV[1])
+local window = tonumber(ARGV[2])
+if count ~= tonumber(ARGV[1]) then
+    window = tonumber(redis.call('GET', KEYS[2])) or 3600
+end
+redis.call('EXPIRE', KEYS[1], window)
+redis.call('SET', KEYS[2], window, 'PXAT', redis.call('PEXPIRETIME', KEYS[1]))
+return count
+"""
+
+
 def _incr_windowed(r, key, amount, window):
     """Increment a counter and (re)arm its TTL, keeping the window length the
     bucket was OPENED with.
@@ -172,24 +184,7 @@ def _incr_windowed(r, key, amount, window):
     shrink buckets that already exist — those expire under the old rule and
     only then pick the new window up. The length is pinned in a side key.
     """
-    wkey = f"{key}:w"
-    pipe = r.pipeline()
-    pipe.incrby(key, amount)
-    pipe.get(wkey)
-    n, pinned = pipe.execute()
-    try:
-        window = int(pinned) if pinned is not None else int(window)
-    except (TypeError, ValueError):
-        window = int(window)
-    try:
-        if pinned is None:
-            r.set(wkey, str(window), nx=True, ex=window * 2)
-        else:
-            r.expire(wkey, window * 2)
-    except Exception:
-        pass
-    r.expire(key, window)
-    return n
+    return r.eval(_RENEWABLE_WINDOW, 2, key, f"{key}:w", amount, window)
 
 
 # ---------------------------------------------------------------- alerts
@@ -390,19 +385,8 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours, snapshot=None
 
     db = SessionLocal()
     try:
-        # Merge key is (subject + DIRECTION) among AUTO rules.
-        #
-        # Direction has to be part of the key: an upload-volume escalation
-        # ("up") and a download-volume one ("down") used to fight over the same
-        # row, each rewriting the other's direction and silently flipping which
-        # half of the traffic was punished.
-        #
-        # Scope is deliberately NOT part of it: the punishment ladder upgrades
-        # one row in place (transfer/slow -> full/block). Excluding scope keeps
-        # "a permanent block is terminal" true regardless of which stage asks,
-        # and keeps one IP at one auto rule per direction.
-        #
-        # AUTO never merges into a manual rule — the admin's parameters win.
+        # Match auto rules by subject, scope and direction. The IP strike
+        # ladder is an explicit promotion, handled separately below.
         q = select(IpControl).where(IpControl.auto.is_(True),
                                     IpControl.direction == direction)
         if subject.get("user_id") is not None:
@@ -411,8 +395,18 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours, snapshot=None
             q = q.where(IpControl.ip == subject.get("ip"), IpControl.token == subject["token"])
         else:
             q = q.where(IpControl.ip == subject["ip"], IpControl.token.is_(None))
-        existing = db.execute(q).scalars().first()
-        expires_new = None if hours is None else datetime.utcnow() + timedelta(hours=hours)
+        now = datetime.utcnow()
+        existing = db.execute(q.where(IpControl.scope == scope)).scalars().first()
+        if direction == "both" and subject.get("ip") and not subject.get("token"):
+            if action == "slow" and scope == "transfer":
+                covering = db.execute(q.where(IpControl.scope == "full", IpControl.action == "block",
+                                              IpControl.expires_at.is_(None) | (IpControl.expires_at > now))).scalars().first()
+                if covering:
+                    return False
+            if not existing and action == "block" and scope == "full":
+                existing = db.execute(q.where(IpControl.scope == "transfer", IpControl.action == "slow",
+                                               IpControl.expires_at.is_not(None))).scalars().first()
+        expires_new = None if hours is None else now + timedelta(hours=hours)
         if existing:
             if existing.expires_at is None:
                 return False  # permanent rules are terminal; only admins lift them
@@ -706,7 +700,7 @@ def should_log_reject(kind, ip, target, window=300):
         return True
 
 
-def flood_exceeded(ip, actor_display=None, target=None, snapshot=None):
+def flood_exceeded(ip, actor_display=None, target=None, snapshot=None, method=None):
     try:
         r = _client()
         snap = snapshot or security_policy.current()
@@ -721,7 +715,8 @@ def flood_exceeded(ip, actor_display=None, target=None, snapshot=None):
             record_event("flood", ip, None, target,
                          f"超過全域 {limit} 次/小時（第 {n} 次）",
                          actor_display=actor_display,
-                         extra={"拒絕來源": "全站 flood", "門檻": f"{limit}/{window}s"})
+                         extra={"HTTP方法": method, "拒絕來源": "全站 flood",
+                                "門檻": f"{limit}/{window}s", "規則範圍": "全站", "處分": "HTTP 429"})
         return n > limit
     except Exception:
         return False

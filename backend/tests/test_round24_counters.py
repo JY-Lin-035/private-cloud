@@ -227,7 +227,7 @@ class _FakeRequest:
 
     async def stream(self):
         if False:
-            yield b'' 
+            yield b''
 
 
 def _b64(s):

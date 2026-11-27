@@ -55,9 +55,9 @@ class SessionMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Extract session cookie
-        raw_cookie = request.headers.get('cookie') or ''
-        from app.utils.session_auth import (parse_session_cookie, split_session_value,
+        from app.utils.session_auth import (cookie_header, parse_session_cookie, split_session_value,
                                             verify_session_value)
+        raw_cookie = cookie_header(request.scope)
         session_token = parse_session_cookie(raw_cookie)
         if session_token is None and 'session' in raw_cookie.lower():
             # a session-ish cookie exists but the single trusted parser

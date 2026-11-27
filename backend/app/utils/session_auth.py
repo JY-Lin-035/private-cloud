@@ -17,6 +17,11 @@ from redis import Redis
 _SESSION_MARKER = _re.compile(r"(?:^|;)\s*[Ss]ession\s*=")
 
 
+def cookie_header(scope) -> str:
+    return "; ".join(value.decode("latin-1") for key, value in scope.get("headers", ())
+                     if key.lower() == b"cookie")
+
+
 def parse_session_cookie(cookie_header: Optional[str]) -> Optional[str]:
     """Extract the raw `session` cookie value using the SAME parser the auth
     layer (Starlette SimpleCookie) uses, and fail closed on duplicates.
@@ -86,7 +91,13 @@ def verify_session_value(redis: Redis, value: Optional[str]) -> Optional[dict]:
         data = redis.get(f"session_data:{uid}")
         if not data:
             return None
-        return json.loads(_decode(data))
+        user = json.loads(_decode(data))
+        if not isinstance(user, dict):
+            return None
+        ids = [user[field] for field in ("user_id", "id") if field in user]
+        if not ids or any(type(value) not in (int, str) or str(value) != str(uid) for value in ids):
+            return None
+        return user
     except Exception:
         return None
 

@@ -15,7 +15,7 @@ import Uppy, { type Meta, type UppyFile } from '@uppy/core';
 import Tus, { type TusBody } from '@uppy/tus';
 
 import { API_BASE_URL } from '../config/api';
-import { UploadCooldown, isRateLimited } from './uploadCooldown';
+import { UploadCooldown, isRateLimited, statusOf } from './uploadCooldown';
 
 const MAX_PARALLEL_FILES = 3;
 const CHUNK_SIZE = 50 * 1024 * 1024;
@@ -60,6 +60,7 @@ function ownerKey(): string {
 
 function build(): UploadSession {
   const cooldown = new UploadCooldown();
+  const requestFiles = new WeakMap<object, string>();
   const uppy = new Uppy<Meta, TusBody>({
     autoProceed: false,
     allowMultipleUploadBatches: true,
@@ -76,7 +77,14 @@ function build(): UploadSession {
     limit: MAX_PARALLEL_FILES,
     withCredentials: true,
     retryDelays: RETRY_LADDER_MS,
-    allowedMetaFields: ['name', 'type'],
+    allowedMetaFields: [], // the custom header below is the sole metadata writer
+    storeFingerprintForResuming: false,
+    urlStorage: {
+      findAllUploads: async () => [],
+      findUploadsByFingerprint: async () => [],
+      removeUpload: async () => {},
+      addUpload: async () => '',
+    },
     removeFingerprintOnSuccess: true,
     headers: (file) => {
       // Destination is whatever was snapshotted when the file was ADDED, not
@@ -98,49 +106,61 @@ function build(): UploadSession {
         'Upload-Metadata': metadata,
       };
     },
-    onBeforeRequest: async () => {
-      // Local gate: while the batch is cooling down nothing new leaves the
-      // browser — including the HEAD that a resume needs, which tus-js would
-      // otherwise turn into a brand new POST when the server answers 429.
-      await cooldown.wait();
+    onBeforeRequest: async (request, file) => {
+      requestFiles.set(request, file.id);
+      while (cooldown.isCooling()) await cooldown.wait();
     },
-    onShouldRetry: (error, _attempt, _options, defaultShouldRetry) => {
-      if (!isRateLimited(error)) return defaultShouldRetry(error);
-      const decision = cooldown.noteRateLimited();
-      const requests = tusRequests(uppy);
-      if (!requests) return true;
-      if (decision.action === 'exhausted') {
-        requests.pause(null); // frozen: only a manual resume opens it again
-      } else {
-        // pauses the WHOLE batch and drops concurrency to one request, then
-        // ramps back up — the "release a trickle first" behaviour.
-        requests.rateLimit(decision.delayMs);
+    onAfterResponse: (request, response) => {
+      const status = response.getStatus();
+      const method = request.getMethod();
+      if (status === 429 && method !== 'DELETE') {
+        const decision = cooldown.noteRateLimited();
+        const queue = uppy.getPlugin('Tus')?.requests;
+        if (queue && decision.action !== 'merged') {
+          queue.limit = 1;
+          queue.pause(decision.action === 'episode' ? decision.delayMs : null);
+        }
       }
-      // Let @uppy/tus do its requeue bookkeeping; the queue is already paused
-      // so it will not spend its own (shared) retry ladder entry.
-      return defaultShouldRetry(error);
+      if (method === 'HEAD' && (status < 200 || status >= 300)) {
+        // Reject the response before tus-js can discard the existing URL and POST again.
+        const message = status === 404 || status === 410
+          ? '無法確認此檔案的上傳狀態，請先檢查檔案是否已完成。'
+          : `無法取得續傳進度（HTTP ${status}）`;
+        throw Object.assign(new Error(message), { status });
+      }
+      if (method === 'POST' && status === 201) {
+        const id = requestFiles.get(request);
+        const file = id && uppy.getFile(id);
+        const location = response.getHeader('Location');
+        if (file && location) {
+          const uploadUrl = new URL(location, new URL(request.getURL(), window.location.href)).href;
+          uppy.setFileState(file.id, { tus: { ...file.tus, uploadUrl } });
+        }
+      }
+    },
+    onShouldRetry: (error, attempt, _options, defaultShouldRetry) => {
+      if (isRateLimited(error)) return defaultShouldRetry(error);
+      const status = statusOf(error);
+      if (status !== null && status >= 400 && status < 500 && status !== 409 && status !== 423) return false;
+      return attempt < 3 && defaultShouldRetry(error);
     },
   });
 
-  // Any file that finishes proves the limiter has released us again.
-  uppy.on('upload-success', () => cooldown.noteSuccess());
+  uppy.on('complete', ({ failed }) => {
+    if (!failed?.length && uppy.getFiles().every((file) => file.progress.uploadComplete)) {
+      cooldown.noteSuccess();
+      const queue = uppy.getPlugin('Tus')?.requests;
+      if (queue) queue.limit = MAX_PARALLEL_FILES;
+    }
+  });
 
   return {
     uppy,
     cooldown,
-    resumeQueue: () => tusRequests(uppy)?.resume(),
+    resumeQueue: () => uppy.getPlugin('Tus')?.requests.pause(
+      Math.max(0, cooldown.snapshot().resumeAt - Date.now()),
+    ),
   };
-}
-
-function tusRequests(uppy: UploadUppy) {
-  const tus = uppy.getPlugin('Tus') as { requests?: RateLimitedLike } | undefined;
-  return tus?.requests;
-}
-
-interface RateLimitedLike {
-  rateLimit: (ms: number) => void;
-  pause: (ms?: number | null) => void;
-  resume: () => void;
 }
 
 export function getUploadSession(): UploadSession {

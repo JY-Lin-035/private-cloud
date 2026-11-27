@@ -68,7 +68,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       sync();
     };
 
-    const onComplete_ = (result: { failed?: unknown[]; successful?: unknown[] }) => {
+    const onComplete_ = (result: { failed?: UploadFile[]; successful?: UploadFile[] }) => {
       const ok = result.successful?.length ?? 0;
       const failed = result.failed?.length ?? 0;
       if (ok > 0) {
@@ -77,7 +77,7 @@ function UpLoad({ parentFolderUuid, onHidden, onRefresh, onComplete }: UpLoadPro
       }
       if (failed === 0 && ok > 0) {
         cbs.current.onComplete(['上傳完成!'], 'text-green-500');
-        uppy.cancelAll();
+        uppy.removeFiles(result.successful?.map((file) => file.id) ?? []);
       }
       sync();
     };

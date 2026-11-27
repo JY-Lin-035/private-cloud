@@ -88,14 +88,12 @@ export default function PolicyThresholds() {
     setNotice(null);
     try {
       const changes: Record<string, number> = {};
-      Object.entries(drafts).forEach(([id, raw]) => { if (raw !== '') changes[id] = Number(raw); });
-      if (Object.keys(changes).length) {
-        await ipControlApi.updatePolicies({ changes, expected_version: version, reason: reason.trim() || undefined });
+      const reset_ids: string[] = [];
+      for (const row of diff) {
+        if (row.after === 'default') reset_ids.push(row.id);
+        else changes[row.id] = row.after;
       }
-      const toReset = resetIds.filter((id) => drafts[id] === undefined);
-      if (toReset.length) {
-        await ipControlApi.resetPolicies({ ids: toReset, expected_version: version, reason: reason.trim() || '恢復預設' });
-      }
+      await ipControlApi.updatePolicies({ changes, reset_ids, expected_version: version, reason: reason.trim() });
       setDrafts({});
       setResetIds([]);
       setReason('');
@@ -112,7 +110,13 @@ export default function PolicyThresholds() {
     if (version === null) return;
     setBusy(true);
     try {
-      await ipControlApi.rollbackPolicy({ to_version: to, expected_version: version, reason: `回滾至 v${to}` });
+      const preview = await ipControlApi.previewPolicyRollback(to, version);
+      const lines = Object.values(preview.changed).map((row) => `${row.label}：${row.before} → ${row.after}`);
+      const reason = window.prompt(
+        `回滾至 v${to} 將建立新版本。目前部署設定下的差異：\n${lines.join('\n') || '有效值無差異'}\n請輸入回滾理由：`,
+      )?.trim();
+      if (!reason) return;
+      await ipControlApi.rollbackPolicy({ to_version: to, expected_version: preview.version, reason });
       setNotice({ text: `已回滾，建立新版本`, ok: true });
       reload();
     } catch (e) {
@@ -238,13 +242,13 @@ export default function PolicyThresholds() {
           <div className="text-sm text-cyan-200 mb-2">儲存前確認（{diff.length} 項變更）</div>
           <ul className="text-xs text-gray-300 list-disc pl-5 mb-2">
             {diff.map((d) => (
-              <li key={d.id}>{d.label}：{d.before} → {d.after === 'default' ? '預設' : `${d.after} ${d.unit}`}</li>
+              <li key={d.id}>{d.label}：{d.before} → {d.after === 'default' ? `${items[d.id].deployment_value} ${d.unit}（移除覆寫）` : `${d.after} ${d.unit}`}</li>
             ))}
           </ul>
           <div className="flex flex-wrap items-center gap-2">
-            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="變更理由（寫入稽核）"
+            <input value={reason} maxLength={200} onChange={(e) => setReason(e.target.value)} placeholder="變更理由（寫入稽核）"
               className="flex-1 min-w-[200px] bg-gray-700 text-white px-2 py-1.5 rounded border border-gray-600 text-sm focus:outline-none focus:ring-1 focus:ring-cyan-500" />
-            <button disabled={busy} onClick={() => void save()}
+            <button disabled={busy || !reason.trim()} onClick={() => void save()}
               className="px-3 py-1.5 rounded bg-cyan-600 text-white text-sm cursor-pointer hover:bg-cyan-500 disabled:opacity-50">
               {busy ? '處理中…' : `儲存為 v${(version ?? 0) + 1}`}
             </button>

@@ -169,7 +169,6 @@ async def tus_create_upload(
             raise HTTPException(status_code=result['stateCode'], detail=result['error'])
 
         upload_id = result['upload_id']
-        await _count_upload_created(request, user_id)
         location = str(_tus_location(request, upload_id))
         body = await _read_body_capped(request, file_size)
         if body:
@@ -181,6 +180,7 @@ async def tus_create_upload(
             if finalize_result and 'error' in finalize_result:
                 raise HTTPException(status_code=finalize_result['stateCode'], detail=finalize_result['error'])
 
+        await _count_upload_created(request, user_id)
         return JSONResponse(
             status_code=201,
             headers={

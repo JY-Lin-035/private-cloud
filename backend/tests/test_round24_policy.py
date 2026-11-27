@@ -163,6 +163,24 @@ def test_group_is_applied_atomically(sqlite):
     assert snap.overrides == {} and snap.version == 0
 
 
+def test_edit_and_reset_share_one_version(sqlite):
+    flood = "global.flood_requests_per_ip"
+    upload = "slow.upload_kbps"
+    sp.commit({flood: 4000}, expected_version=0)
+    with pytest.raises(sp.PolicyError):
+        sp.commit({upload: -1}, reset_ids=[flood], expected_version=1)
+    assert sp.current(force=True).value(flood) == 4000
+    result = sp.commit({upload: 64}, reset_ids=[flood], expected_version=1)
+    assert result["version"] == 2
+    assert set(result["changed"]) == {flood, upload}
+    assert sp.current(force=True).overrides == {upload: 64}
+
+
+def test_websocket_policy_cannot_be_changed(sqlite):
+    with pytest.raises(sp.PolicyError, match="唯讀"):
+        sp.commit({"collab.room_max_connections": 80}, expected_version=0)
+
+
 # ------------------------------------------------------------------ versioning
 
 def test_commit_stale_write_conflicts(sqlite):
@@ -177,7 +195,11 @@ def test_commit_stale_write_conflicts(sqlite):
 def test_rollback_creates_new_version_and_keeps_history(sqlite):
     sp.commit({"global.flood_requests_per_ip": 4000}, actor="boss", reason="v1", expected_version=0)
     sp.commit({"global.flood_requests_per_ip": 1000}, actor="boss", reason="v2", expected_version=1)
+    preview = sp.preview_rollback(1, 2)
+    assert sp.current(force=True).version == 2
+    assert preview["changed"]["global.flood_requests_per_ip"]["after"] == 4000
     out = sp.rollback_to(1, actor="boss", reason="回到 v1", expected_version=2)
+    assert out["changed"] == preview["changed"]
     assert out["version"] == 3 and out["rolled_back_to"] == 1
     assert sp.value("global.flood_requests_per_ip") == 4000
     hist = sp.history()
@@ -247,6 +269,13 @@ def test_incr_windowed_pins_the_original_window():
             self.store = {}
             self.ttls = {}
 
+        def eval(self, script, numkeys, key, marker, amount, window):
+            count = self.store.get(key, 0) + amount
+            duration = self.store.get(marker, 3600) if count != amount else window
+            self.store.update({key: count, marker: duration})
+            self.ttls.update({key: duration, marker: duration})
+            return count
+
         def pipeline(self):
             outer = self
 
@@ -291,10 +320,10 @@ def test_incr_windowed_pins_the_original_window():
 
     r = R()
     assert sec._incr_windowed(r, "bkt", 1, 3600) == 1
-    assert r.ttls["bkt"] == 3600 and r.ttls["bkt:w"] == 7200
+    assert r.ttls["bkt"] == 3600 and r.ttls["bkt:w"] == 3600
     # an admin raising the window must NOT stretch a bucket that is already open
     assert sec._incr_windowed(r, "bkt", 1, 7200) == 2
-    assert r.ttls["bkt"] == 3600 and r.ttls["bkt:w"] == 7200
+    assert r.ttls["bkt"] == 3600 and r.ttls["bkt:w"] == 3600
 
 
 def test_lowered_flood_threshold_still_reports(monkeypatch):
@@ -333,6 +362,11 @@ def test_rate_limit_obeys_admin_override(monkeypatch):
     class CountingRedis:
         def __init__(self):
             self.counts = {}
+
+        def eval(self, script, numkeys, key, marker, limit, window):
+            self.counts[key] = self.counts.get(key, 0) + 1
+            count = self.counts[key]
+            return [count, int(count > limit and bool(self.set(marker, '1', nx=True, ex=window)))]
 
         def pipeline(self):
             outer = self

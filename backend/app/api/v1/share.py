@@ -217,7 +217,7 @@ async def share_verify_password(
         security_engine.record_event_async(
             "pw_lock", client_ip, None, body.link[:8],
             f"該 IP 對此連結錯密碼已達 {max_failures} 次，鎖定 {lock_window // 60} 分鐘")
-        raise HTTPException(status_code=429, detail='嘗試次數過多，請 15 分鐘後再試')
+        raise HTTPException(status_code=429, detail='請求過多，請稍後再試')
 
     share_service = ShareService(db)
     result = share_service.verify_share_password(body.link, body.password)

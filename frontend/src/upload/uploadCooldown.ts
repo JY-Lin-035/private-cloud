@@ -76,7 +76,7 @@ export class UploadCooldown {
       this.emit();
       return {
         action: 'merged',
-        delayMs: Math.max(this.resumeAt - this.now(), this.capMs()),
+        delayMs: this.resumeAt - this.now(),
       };
     }
     this.episodes += 1;
@@ -167,13 +167,14 @@ export class UploadCooldown {
 
 /** HTTP status behind a @uppy/tus error (or any XHR-shaped error), if any. */
 export function statusOf(error: unknown): number | null {
-  const response = (error as { originalResponse?: { getStatus?: () => number } })
-    ?.originalResponse;
-  if (response && typeof response.getStatus === 'function') {
-    return response.getStatus();
+  // tus-js-client wraps errors thrown by its response hook in DetailedError.
+  for (let depth = 0; error && depth < 4; depth++) {
+    const err = error as { originalResponse?: { getStatus: () => number }; status?: number; causingError?: unknown };
+    if (err.originalResponse) return err.originalResponse.getStatus();
+    if (typeof err.status === 'number') return err.status;
+    error = err.causingError;
   }
-  const status = (error as { status?: number; originalRequest?: unknown })?.status;
-  return typeof status === 'number' ? status : null;
+  return null;
 }
 
 export const isRateLimited = (error: unknown): boolean => statusOf(error) === 429;

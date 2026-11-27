@@ -1005,7 +1005,7 @@ class TestSaveContentQuotaBehavioral:
         app.dependency_overrides[D.get_db] = _gd
         app.dependency_overrides[D.get_current_user_id] = lambda: owner.id
         rmock = MagicMock()
-        rmock.pipeline.return_value.execute.return_value = [1, 500]
+        rmock.eval.return_value = [1, 0]
         rmock.smembers.return_value = set()
         rmock.get.return_value = None
         rmock.exists.return_value = 0

@@ -69,6 +69,13 @@ class _FakeRedis:
     def ttl_seconds(self, key):
         return self.ttl
 
+    def eval(self, script, numkeys, key, marker, limit, window):
+        pipe = self.pipeline()
+        pipe.incr(key)
+        pipe.ttl(key)
+        count, ttl = pipe.execute()
+        return [count, int(count > limit and bool(self.set(marker, '1', nx=True, ex=ttl)))]
+
     def pipeline(self):
         outer = self
 

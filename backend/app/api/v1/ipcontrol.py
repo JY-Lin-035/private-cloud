@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -430,7 +430,8 @@ async def admin_ip_actors(request: Request, db: Session = Depends(get_db),
 # revertible). "規則" (endpoints above) = what is already in effect today.
 
 class PolicyUpdate(BaseModel):
-    changes: dict[str, int]
+    changes: dict[str, StrictInt] = Field(max_length=64)
+    reset_ids: list[str] = Field(default_factory=list, max_length=64)
     expected_version: int
     reason: Optional[str] = Field(None, max_length=200)
 
@@ -476,7 +477,7 @@ async def admin_policy_update(payload: PolicyUpdate, request: Request):
     admin = require_admin(request)
     actor, actor_id = _admin_stamp(request)
     try:
-        result = security_policy.commit(payload.changes, actor=actor, actor_id=actor_id,
+        result = security_policy.commit(payload.changes, reset_ids=payload.reset_ids, actor=actor, actor_id=actor_id,
                                        reason=payload.reason,
                                        expected_version=payload.expected_version)
     except security_policy.StaleVersion as exc:
@@ -510,6 +511,17 @@ async def admin_policy_reset(payload: PolicyReset, request: Request):
                 f"恢復預設：{', '.join(result.get('reset') or []) or '-'}")
     sec.invalidate_rules_cache()
     return result
+
+
+@router.get("/admin/policies/rollback-preview")
+def admin_policy_rollback_preview(request: Request, to_version: int, expected_version: int):
+    require_admin(request)
+    try:
+        return security_policy.preview_rollback(to_version, expected_version)
+    except security_policy.StaleVersion as exc:
+        raise _stale(exc)
+    except security_policy.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/admin/policies/rollback")

@@ -179,12 +179,12 @@ POLICIES: tuple[Policy, ...] = (
        subject="同上", window="桶長度；改此值只對新开的桶生效", action="同上"),
     _p(id="slow.upload_delay_ms", label="預設上傳延遲", group="慢速規則",
        default=2000, unit="毫秒", setting="SEC_DEFAULT_UPLOAD_DELAY_MS", allow_zero=True,
-       max_value=60000, subject="套用規則的請求（每請求）", window="無（每次請求皆套用）",
+       min_value=0, max_value=60000, subject="套用規則的請求（每請求）", window="無（每次請求皆套用）",
        action="回應前等待，不拒絕",
        depends="寫入自動 slow／block 規則時作為預設值；已存在的規則不受影響"),
     _p(id="slow.download_delay_ms", label="預設下載延遲", group="慢速規則",
        default=0, unit="毫秒", setting="SEC_DEFAULT_DOWNLOAD_DELAY_MS", allow_zero=True,
-       max_value=60000, subject="套用規則的請求（每請求）", window="無（每次請求皆套用）",
+       min_value=0, max_value=60000, subject="套用規則的請求（每請求）", window="無（每次請求皆套用）",
        action="回應前等待，不拒絕",
        depends="雙向（both）自動規則共用同一個延遲值"),
     _p(id="slow.upload_kbps", label="預設上傳頻寬", group="慢速規則",
@@ -217,6 +217,13 @@ POLICIES: tuple[Policy, ...] = (
 
 REGISTRY: dict[str, Policy] = {p.id: p for p in POLICIES}
 GROUPS: tuple[str, ...] = tuple(dict.fromkeys(p.group for p in POLICIES))
+WINDOW_IDS = {
+    "global.flood_requests_per_ip": "global.flood_window_seconds",
+    "volume.uploads_per_hour_per_account": "volume.upload_window_seconds",
+    "volume.downloads_per_hour_per_account": "volume.download_window_seconds",
+    "volume.anon_share_downloads_per_hour": "volume.anon_share_download_window_seconds",
+    "share.password_failures_per_window": "share.password_window_seconds",
+}
 
 
 class PolicyError(ValueError):
@@ -260,7 +267,10 @@ def validate(changes: dict[str, int]) -> dict[str, int]:
     value can never be half-applied."""
     out: dict[str, int] = {}
     for pid, value in changes.items():
-        out[pid] = _valid(get(pid), value)
+        item = get(pid)
+        if not item.editable:
+            raise PolicyError(f"{item.label}為唯讀")
+        out[pid] = _valid(item, value)
     _validate_dependencies(out)
     return out
 
@@ -268,9 +278,9 @@ def validate(changes: dict[str, int]) -> dict[str, int]:
 def _validate_dependencies(changes: dict[str, int]) -> None:
     # score escalation is expressed as a multiple of the slow threshold; keep
     # the derived value from being *below* the stage it escalates from.
-    slow = changes.get("score.slow_threshold")
+    slow = changes.get("score.slow_threshold", deployment_value("score.slow_threshold"))
     escalated = changes.get("score.escalated_block_threshold")
-    if slow is not None and escalated is not None and escalated <= slow:
+    if escalated is not None and escalated <= slow:
         raise PolicyError("慢速升級封鎖積分必須大於慢速門檻")
 
 
@@ -284,13 +294,15 @@ class Snapshot:
     def value(self, policy_id: str) -> int:
         if policy_id in self.overrides:
             return self.overrides[policy_id]
+        if policy_id == "score.escalated_block_threshold":
+            return 2 * self.value("score.slow_threshold")
         return deployment_value(policy_id)
 
     def window(self, policy_id: str, fallback: int) -> int:
         """Bucket length for `policy_id`, taken from its own
         `<policy_id>_window_seconds` policy when one is registered."""
-        candidate = f"{policy_id}_window_seconds"
-        if candidate in REGISTRY:
+        candidate = WINDOW_IDS.get(policy_id)
+        if candidate is not None:
             return self.value(candidate)
         return fallback
 
@@ -317,7 +329,7 @@ def _read_latest():
         if row is None:
             return 0, {}
         payload = json.loads(row.payload) if row.payload else {}
-        return row.id, {k: int(v) for k, v in payload.items() if k in REGISTRY}
+        return row.id, validate({k: v for k, v in payload.items() if k in REGISTRY})
     finally:
         db.close()
 
@@ -325,26 +337,23 @@ def _read_latest():
 def current(force: bool = False) -> Snapshot:
     """Hot-path read: never touches SQL more often than REFRESH_SECONDS."""
     global _snapshot, _fetched_at
-    now = time.monotonic()
     with _lock:
+        now = time.monotonic()
         fresh = _snapshot is not None and (now - _fetched_at) < REFRESH_SECONDS
         if fresh and not force:
             return _snapshot
-    try:
-        version, overrides = _read_latest()
-    except Exception:
-        with _lock:
-            if _snapshot is not None:
-                # stale-but-valid beats "no protection at all"; retry soon
-                _fetched_at = now - REFRESH_SECONDS + 1.0
-                return _snapshot
-            snapshot = Snapshot(version=0, overrides={})     # cold start: defaults
-    else:
-        snapshot = Snapshot(version=version, overrides=overrides)
-    with _lock:
-        _snapshot = snapshot
-        _fetched_at = time.monotonic()
-    return snapshot
+        try:
+            version, overrides = _read_latest()
+        except Exception:
+            if force:
+                raise
+            if _snapshot is None:
+                _snapshot = Snapshot(version=0)
+            _fetched_at = time.monotonic() + RETRY_AFTER_FAILURE - REFRESH_SECONDS
+        else:
+            _snapshot = Snapshot(version=version, overrides=overrides)
+            _fetched_at = time.monotonic()
+        return _snapshot
 
 
 def value(policy_id: str, snapshot: Optional[Snapshot] = None) -> int:
@@ -380,7 +389,7 @@ def describe(policy_id: str, snapshot: Optional[Snapshot] = None) -> dict:
     elif p.setting and getattr(settings, p.setting, None) != p.default:
         value_, source = getattr(settings, p.setting), "部署設定"
     else:
-        value_, source = p.default, "程式預設"
+        value_, source = snap.value(p.id), "程式預設"
     window = p.window
     if p.window_seconds is not None:
         actual = snap.window(p.id, p.window_seconds)
@@ -397,8 +406,8 @@ def describe(policy_id: str, snapshot: Optional[Snapshot] = None) -> dict:
         "unit": p.unit,
         "subject": p.subject,
         "window": window,
-        "window_seconds": p.window_seconds,
-        "window_editable": f"{p.id}_window_seconds" in REGISTRY,
+        "window_seconds": snap.window(p.id, p.window_seconds) if p.window_seconds is not None else None,
+        "window_editable": p.id in WINDOW_IDS,
         "action": p.action,
         "editable": p.editable,
         "allow_zero": p.allow_zero,
@@ -472,25 +481,35 @@ def _insert(payload: dict, *, diff: dict, actor, actor_id, reason, expected: int
 def _diff_for(before: Snapshot, after_payload: dict) -> dict:
     """Effective-value changes only (a no-op edit records nothing)."""
     diff = {}
+    after = Snapshot(before.version, after_payload)
     for pid in REGISTRY:
         b = before.value(pid)
-        a = after_payload.get(pid, deployment_value(pid))
+        a = after.value(pid)
         if a != b:
             diff[pid] = {"before": b, "after": a, "label": REGISTRY[pid].label}
     return diff
 
 
-def commit(changes: dict[str, int], *, actor=None, actor_id=None, reason="",
+def commit(changes: dict[str, int], *, reset_ids=(), actor=None, actor_id=None, reason="",
            expected_version: int) -> dict:
     """Apply a validated group of edits as ONE new version."""
     snap = current(force=True)
     if snap.version != expected_version:
         raise StaleVersion(snap.version)
-    clean = validate(changes)
+    clean = {pid: _valid(get(pid), value) for pid, value in changes.items()}
+    for pid in clean:
+        if not get(pid).editable:
+            raise PolicyError(f"{get(pid).label}為唯讀")
     payload = dict(snap.overrides)
+    if clean.keys() & set(reset_ids):
+        raise PolicyError("不能同時修改和重設同一項門檻")
+    for pid in reset_ids:
+        get(pid)
+        payload.pop(pid, None)
     payload.update(clean)
+    validate(payload)
     diff = _diff_for(snap, payload)
-    if not diff:
+    if payload == snap.overrides or (not reset_ids and not diff):
         return {"version": snap.version, "changed": {}, "noop": True}
     version = _insert(payload, diff=diff, actor=actor, actor_id=actor_id,
                       reason=reason, expected=snap.version, action="update")
@@ -520,10 +539,7 @@ def reset_to_defaults(policy_ids: list[str], *, actor=None, actor_id=None, reaso
     return {"version": version, "changed": diff, "reset": sorted(policy_ids)}
 
 
-def rollback_to(version: int, *, actor=None, actor_id=None, reason="",
-                expected_version: int) -> dict:
-    """Re-publish an older payload AS A NEW version (history stays append-only)."""
-    from sqlalchemy import select
+def _rollback_payload(version: int, expected_version: int):
     from app.database import SessionLocal
     from app.models.security_policy import SecurityPolicyVersion
 
@@ -542,6 +558,18 @@ def rollback_to(version: int, *, actor=None, actor_id=None, reason="",
                        if k in REGISTRY}
         finally:
             db.close()
+    return snap, validate(payload)
+
+
+def preview_rollback(version: int, expected_version: int) -> dict:
+    snap, payload = _rollback_payload(version, expected_version)
+    return {"version": snap.version, "changed": _diff_for(snap, payload)}
+
+
+def rollback_to(version: int, *, actor=None, actor_id=None, reason="",
+                expected_version: int) -> dict:
+    """Re-publish an older payload as a new version."""
+    snap, payload = _rollback_payload(version, expected_version)
     diff = _diff_for(snap, payload)
     new_version = _insert(payload, diff=diff, actor=actor, actor_id=actor_id,
                           reason=reason, expected=snap.version, action="rollback")

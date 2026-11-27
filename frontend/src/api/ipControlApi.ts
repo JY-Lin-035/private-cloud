@@ -73,7 +73,7 @@ export const ipControlApi = {
     return r.data.history as PolicyVersion[];
   },
 
-  updatePolicies: async (body: { changes: Record<string, number>; expected_version: number; reason?: string }) => {
+  updatePolicies: async (body: { changes: Record<string, number>; reset_ids: string[]; expected_version: number; reason: string }) => {
     const r = await api.put('/api/ipcontrol/admin/policies', body);
     return r.data as { version: number; changed: Record<string, PolicyChange> };
   },
@@ -81,6 +81,13 @@ export const ipControlApi = {
   resetPolicies: async (body: { ids: string[]; expected_version: number; reason?: string }) => {
     const r = await api.post('/api/ipcontrol/admin/policies/reset', body);
     return r.data as { version: number; changed: Record<string, PolicyChange> };
+  },
+
+  previewPolicyRollback: async (toVersion: number, expectedVersion: number): Promise<{ version: number; changed: Record<string, PolicyChange> }> => {
+    const r = await api.get('/api/ipcontrol/admin/policies/rollback-preview', {
+      params: { to_version: toVersion, expected_version: expectedVersion },
+    });
+    return r.data;
   },
 
   rollbackPolicy: async (body: { to_version: number; expected_version: number; reason?: string }) => {
