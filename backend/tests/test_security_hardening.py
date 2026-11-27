@@ -976,7 +976,6 @@ class TestSaveContentQuotaBehavioral:
         from app.models.file import File
         from app.api.v1 import files as F
         from app.api import dependencies as D
-        from app.services.feature_flag_service import FeatureFlagService
 
         eng = create_engine("sqlite://", connect_args={"check_same_thread": False},
                             poolclass=StaticPool)
@@ -996,8 +995,7 @@ class TestSaveContentQuotaBehavioral:
         self._oid, self._fid, self._dbfile = owner.id, f.uuid, db
 
         monkeypatch.setattr(F.settings, "STORAGE_BASE_PATH", str(tmp_path))
-        monkeypatch.setattr(FeatureFlagService, "effective_enabled",
-                            lambda self, key, default=False: True)
+        monkeypatch.setattr(F, "is_feature_enabled", lambda key, default=False: True)
         def _gd():
             yield S()
         app = FastAPI()
@@ -1005,7 +1003,7 @@ class TestSaveContentQuotaBehavioral:
         app.dependency_overrides[D.get_db] = _gd
         app.dependency_overrides[D.get_current_user_id] = lambda: owner.id
         rmock = MagicMock()
-        rmock.pipeline.return_value.execute.return_value = [1, 500]
+        rmock.eval.return_value = [1, 0]
         rmock.smembers.return_value = set()
         rmock.get.return_value = None
         rmock.exists.return_value = 0

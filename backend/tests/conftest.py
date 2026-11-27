@@ -141,6 +141,22 @@ def assert_error(resp: dict, code: int) -> None:
     assert resp["stateCode"] == code, f"{code} != {resp['stateCode']}"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_policy_registry():
+    """Never let the hot-path policy read hit the (unconfigured) MySQL database.
+
+    Tests that specifically exercise the versioned storage patch
+    `app.database.SessionLocal` and clear this cache themselves.
+    """
+    import time
+
+    from app.services import security_policy
+
+    security_policy._snapshot = security_policy.Snapshot(version=0, overrides={})
+    security_policy._fetched_at = time.monotonic() + 1e9
+    yield
+
+
 @pytest.fixture(autouse=True)
 def _isolate_security_engine(monkeypatch):
     """Keep unit tests from touching real Redis / SMTP / security.log."""
@@ -155,7 +171,7 @@ def _isolate_security_engine(monkeypatch):
     monkeypatch.setattr(security_engine, "record_event", _noop)
     monkeypatch.setattr(security_engine, "record_event_async", _noop_async)
     monkeypatch.setattr(security_engine, "_send_alert", _noop)
-    monkeypatch.setattr(security_engine, "flood_exceeded", lambda ip: False)
+    monkeypatch.setattr(security_engine, "flood_exceeded", lambda *a, **k: False)
 
 
 @pytest.fixture(autouse=True)

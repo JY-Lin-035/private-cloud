@@ -17,7 +17,7 @@ from app.constants import HTTPStatus
 router = APIRouter(prefix="/api/collaboration", tags=["collaboration"])
 
 
-@router.post("/wsTicket", dependencies=[Depends(rate_limit(30, 60))])
+@router.post("/wsTicket", dependencies=[Depends(rate_limit(30, 60, "endpoint.collab_ws_ticket"))])
 def issue_ws_ticket(
     body: WsTicketRequest,
     db: Session = Depends(get_db),
@@ -49,7 +49,7 @@ def issue_ws_ticket(
     return {"ticket": token, "expires_in": settings.WS_TICKET_TTL_SECONDS}
 
 
-@router.post("/addCollaborator", dependencies=[Depends(rate_limit(15, 60))])
+@router.post("/addCollaborator", dependencies=[Depends(rate_limit(15, 60, "endpoint.collab_add_collaborator"))])
 def add_collaborator(
     request: CollaborationAddRequest,
     db: Session = Depends(get_db),

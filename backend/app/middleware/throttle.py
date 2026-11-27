@@ -16,7 +16,8 @@ from urllib.parse import parse_qs
 
 from app.config import settings
 from app.services import security_engine as sec
-from app.utils.session_auth import parse_session_cookie, resolve_session_uid
+from app.services import security_policy
+from app.utils.session_auth import cookie_header, resolve_session_identity
 
 UPLOAD_PREFIXES = ('/api/files/tus', '/api/files/uploadFile')
 DOWNLOAD_PREFIXES = (
@@ -27,6 +28,23 @@ DOWNLOAD_PREFIXES = (
 STREAM_PREFIXES = ('/api/files/stream',)
 NO_COUNT_PREFIXES = ('/api/files/raw',)
 SHARE_PREFIX = '/api/share/'
+# Some share endpoints carry the link in a query string, others in a JSON body.
+# ip_token rules and anonymous download accounting must treat both the same
+# way, otherwise a body-based route escapes the very restriction aimed at it.
+SHARE_JSON_LINK_PATHS = ('/api/share/status', '/api/share/verifyPassword', '/api/share/downloadItems')
+SHARE_QUERY_LINK_PATHS = ('/api/share/browse', '/api/share/downloadFile', '/api/share/downloadFolder')
+_MAX_JSON_SNIFF = 256 * 1024
+_AUDIT_PATHS = frozenset(p.route for p in security_policy.POLICIES if p.route) | frozenset(
+    (*UPLOAD_PREFIXES, *DOWNLOAD_PREFIXES, *SHARE_JSON_LINK_PATHS, *SHARE_QUERY_LINK_PATHS)
+)
+
+
+def _audit_route(path):
+    if path in _AUDIT_PATHS:
+        return path
+    if path.startswith('/api/files/tus/'):
+        return '/api/files/tus/{upload_id}'
+    return '未解析路由'
 
 
 class _Pacer:
@@ -52,11 +70,6 @@ class ThrottleMiddleware:
         self.app = app
 
     @staticmethod
-    def _session_cookie(headers):
-        """Return the raw session cookie value (unverified)."""
-        return parse_session_cookie(headers.get("cookie"))
-
-    @staticmethod
     def _json_429(origin):
         payload = json.dumps({"detail": "請求過多，請稍後再試"}).encode()
         headers = [
@@ -69,6 +82,72 @@ class ThrottleMiddleware:
             headers.append(("access-control-allow-origin".encode(), origin.encode()))
             headers.append(("access-control-allow-credentials".encode(), b"true"))
         return headers, payload
+
+    async def _share_link(self, scope, headers, receive):
+        """Resolve which share link a request targets -> (token, receive).
+
+        `None` means "could not tell" (unknown link): ip_token rules then apply
+        as before rather than silently not matching, so tightening a scope can
+        never loosen protection. When the link had to be read out of a JSON
+        body, the body is replayed verbatim for the application.
+        """
+        path = scope.get("path", "")
+        if not path.startswith(SHARE_PREFIX):
+            return None, receive
+        if scope.get("method") == "GET" and path in SHARE_QUERY_LINK_PATHS:
+            qs = parse_qs(scope.get("query_string", b"").decode(errors="replace"), keep_blank_values=True)
+            # FastAPI's scalar query parameters take the last value.
+            return (qs.get("link") or [None])[-1], receive
+        if scope.get("method") != "POST" or path not in SHARE_JSON_LINK_PATHS:
+            return None, receive
+        try:
+            length = int(headers.get("content-length") or -1)
+        except ValueError:
+            length = -1
+        if "json" not in (headers.get("content-type") or "") or not 0 <= length <= _MAX_JSON_SNIFF:
+            return None, receive
+
+        messages = []
+        size = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            size += len(message.get("body", b""))
+            if size > _MAX_JSON_SNIFF or not message.get("more_body", False):
+                break
+        queued = iter(messages)
+
+        async def replay():
+            message = next(queued, None)
+            return message if message is not None else await receive()
+
+        if size > _MAX_JSON_SNIFF or messages[-1]["type"] != "http.request":
+            return None, replay
+
+        try:
+            data = json.loads(b"".join(m.get("body", b"") for m in messages))
+        except (ValueError, UnicodeError, RecursionError):
+            data = None
+        link = data.get("link") if isinstance(data, dict) else None
+        return (link if isinstance(link, str) else None), replay
+
+    async def _record_rule_block(self, ip, method, path, actor_display, blockers):
+        """Audit an active-rule rejection. Log-only (no scoring): the rule that
+        blocked the request is already the punishment, and a blocked IP retries
+        hard, so repeats are collapsed to one line per route per 5 minutes."""
+        try:
+            fresh = await asyncio.to_thread(sec.should_log_reject, "rule_block", ip, path, 300)
+            if not fresh:
+                return
+            await asyncio.to_thread(
+                sec.record_event, "rule_block", ip, None, path,
+                "生效規則拒絕",
+                actor_display=actor_display,
+                extra={"HTTP方法": method, "拒絕來源": "規則封鎖",
+                       "規則範圍": "、".join(blockers) if blockers else "-",
+                       "處分": "HTTP 429"})
+        except Exception:
+            pass
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -87,28 +166,49 @@ class ThrottleMiddleware:
             path = scope.get("path", "")
             # A user id is only trusted after the cookie value is verified
             # against Redis; an unauthenticated caller cannot frame another
-            # account by sending a forged `session=42|...` prefix.
-            uid = None
-            raw_session = self._session_cookie(headers)
-            if raw_session:
-                try:
-                    uid = await asyncio.to_thread(resolve_session_uid, sec._client(), raw_session)
-                except Exception:
-                    uid = None
+            # account by sending a forged `session=42|...` prefix. The same
+            # verified identity is stashed for inner layers (audit attribution
+            # only — it never authorises anything and never renews the
+            # session), so public routes that skip SessionMiddleware can still
+            # say whose cookie tripped a rejection.
+            identity = None
+            try:
+                identity = await asyncio.to_thread(
+                    resolve_session_identity, sec._client(), cookie_header(scope))
+            except Exception:
+                identity = None
+            uid = identity["user_id"] if identity else None
+            # One policy version per request: flood, endpoint and volume
+            # decisions made inside this request all read this same snapshot.
+            snapshot = await asyncio.to_thread(security_policy.current)
+            state = scope.setdefault("state", {})
+            state["policy_snapshot"] = snapshot
+            if identity is not None:
+                state["observed_identity"] = identity
+            actor_display = (sec.format_actor(identity["username"], identity["user_id"])
+                             if identity else sec.UNVERIFIED_ACTOR)
             is_upload = path.startswith(UPLOAD_PREFIXES)
             is_download = path.startswith(DOWNLOAD_PREFIXES)
             is_share = path.startswith(SHARE_PREFIX)
             is_stream = path.startswith(STREAM_PREFIXES)
-
-            if ip and await asyncio.to_thread(sec.flood_exceeded, ip):
+            audit_route = _audit_route(path)
+            if ip and await asyncio.to_thread(
+                sec.flood_exceeded, ip, actor_display, audit_route, snapshot, scope.get("method"),
+            ):
                 rh, payload = self._json_429(headers.get("origin"))
                 await send({"type": "http.response.start", "status": 429, "headers": rh})
                 await send({"type": "http.response.body", "body": payload})
                 return
 
-            blocked, delay_ms, up_kbps, dn_kbps = await asyncio.to_thread(
-                sec.match_rules, ip, uid, is_upload, is_download, is_share, is_stream)
+            share_token, receive = await self._share_link(scope, headers, receive)
+            if share_token:
+                state["share_token"] = share_token
+            blocked, delay_ms, up_kbps, dn_kbps, blockers = await asyncio.to_thread(
+                sec.match_rules_detail, ip, uid, is_upload, is_download, is_share, is_stream,
+                share_token)
             if blocked:
+                await self._record_rule_block(ip, scope.get("method", ""), audit_route,
+                                              actor_display, blockers)
                 rh, payload = self._json_429(headers.get("origin"))
                 await send({"type": "http.response.start", "status": 429, "headers": rh})
                 await send({"type": "http.response.body", "body": payload})
@@ -119,17 +219,12 @@ class ThrottleMiddleware:
             if ip and uid:
                 asyncio.create_task(asyncio.to_thread(sec.track_actor, ip, uid))
 
-            if is_upload:
-                asyncio.create_task(asyncio.to_thread(sec.count_upload, uid, ip))
             if is_download and path not in NO_COUNT_PREFIXES and (not is_stream or not headers.get("range") or headers.get("range").strip().startswith("bytes=0-")):
                 # stream/raw seeks are not new downloads; count playback sessions once
                 if uid:
-                    asyncio.create_task(asyncio.to_thread(sec.count_download, uid, ip, None))
-                elif is_share:
-                    qs = parse_qs(scope.get("query_string", b"").decode(errors="ignore"))
-                    token = (qs.get("link") or [""])[0]
-                    if token:
-                        asyncio.create_task(asyncio.to_thread(sec.count_download, None, ip, token))
+                    asyncio.create_task(asyncio.to_thread(sec.count_download, uid, ip, None, snapshot=snapshot))
+                elif is_share and share_token:
+                    asyncio.create_task(asyncio.to_thread(sec.count_download, None, ip, share_token, snapshot=snapshot))
 
             if is_upload and up_kbps:
                 pacer = _Pacer(up_kbps * 1024)

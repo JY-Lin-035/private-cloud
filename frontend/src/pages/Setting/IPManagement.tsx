@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Pencil, Ban, ShieldCheck, X } from "lucide-react";
 import { ipControlApi, type ControlRule } from "../../api/ipControlApi";
+import PolicyThresholds from "./PolicyThresholds";
 import { authApi } from "../../api/authApi";
 
 interface Props { layoutClass?: string }
@@ -171,7 +172,7 @@ function IPManagement({ layoutClass = "" }: Props) {
   const nav = useNavigate();
   const [loading, setLoading] = useState(true);
   const [adminUser, setAdminUser] = useState(false);
-  const [tab, setTab] = useState<'ip' | 'user'>('ip');
+  const [tab, setTab] = useState<'ip' | 'user' | 'thresholds'>('ip');
   const [rules, setRules] = useState<ControlRule[]>([]);
   const [scores, setScores] = useState<{ masked: string; score: number | string }[]>([]);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
@@ -182,6 +183,45 @@ function IPManagement({ layoutClass = "" }: Props) {
   const [editForm, setEditForm] = useState<FormState>(emptyForm);
   const [hotLinks, setHotLinks] = useState<{ token: string; item: string; type: string; owner: string }[] | null>(null);
   const [hotLoading, setHotLoading] = useState(false);
+  const [actors, setActors] = useState<Record<number, 'loading' | { user_id: number; username: string; last_seen: string }[]>>({});
+
+  async function showActors(r: ControlRule) {
+    if (actors[r.id]) {
+      setActors((a) => { const n = { ...a }; delete n[r.id]; return n; });
+      return;
+    }
+    setActors((a) => ({ ...a, [r.id]: 'loading' }));
+    try {
+      const list = await ipControlApi.ipActorsByRule(r.id);
+      setActors((a) => ({ ...a, [r.id]: list }));
+    } catch {
+      setActors((a) => ({ ...a, [r.id]: [] }));
+    }
+  }
+
+  function renderActors(r: ControlRule) {
+    if (r.subject_type !== 'ip' || !r.ip_masked) return null;
+    const state = actors[r.id];
+    return (
+      <div className="mt-1">
+        <button onClick={() => void showActors(r)}
+          className="text-[11px] px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer whitespace-nowrap">
+          {state ? '收合活動時間' : '查看活動時間'}
+        </button>
+        {state === 'loading' && <span className="text-[11px] text-gray-500 ml-2">查詢中…</span>}
+        {Array.isArray(state) && (
+          <ul className="mt-1 flex flex-col gap-0.5">
+            {state.length === 0
+              ? <li className="text-[11px] text-gray-500">無紀錄</li>
+              : state.map((a) => (
+                <li key={a.user_id} className="text-[11px] text-gray-400">{a.username}｜最後活動 {a.last_seen}</li>
+              ))}
+          </ul>
+        )}
+        <p className="text-[11px] text-gray-600 mt-0.5">同一出口可能多人共用；這裡只是關聯，觸發某次拒絕的帳號以事件本身為準。</p>
+      </div>
+    );
+  }
 
   const setF = (patch: Partial<FormState>) => setForm(p => ({ ...p, ...patch }));
   const setE = (patch: Partial<FormState>) => setEditForm(p => ({ ...p, ...patch }));
@@ -323,6 +363,14 @@ function IPManagement({ layoutClass = "" }: Props) {
           </div>
         )}
 
+        {/* tabs */}
+        <div className="mb-2 flex gap-2">
+          <button onClick={() => setTab('ip')} className={`px-4 py-1.5 rounded-t text-sm cursor-pointer ${tab === 'ip' ? 'bg-gray-700 text-white' : 'text-gray-400'}`}>IP 管控</button>
+          <button onClick={() => setTab('user')} className={`px-4 py-1.5 rounded-t text-sm cursor-pointer ${tab === 'user' ? 'bg-gray-700 text-white' : 'text-gray-400'}`}>帳號管控</button>
+          <button onClick={() => setTab('thresholds')} className={`px-4 py-1.5 rounded-t text-sm cursor-pointer ${tab === 'thresholds' ? 'bg-gray-700 text-white' : 'text-gray-400'}`}>風控門檻</button>
+        </div>
+
+        {tab === 'thresholds' ? <PolicyThresholds /> : (<>
         <div className="mb-4 bg-gray-800/50 rounded-lg border border-gray-700 p-4">
           <FormFields f={form} set={setF} />
           {form.subject_type === 'ip_token' && (
@@ -364,12 +412,6 @@ function IPManagement({ layoutClass = "" }: Props) {
           </div>
         </div>
 
-        {/* tabs */}
-        <div className="mb-2 flex gap-2">
-          <button onClick={() => setTab('ip')} className={`px-4 py-1.5 rounded-t text-sm cursor-pointer ${tab === 'ip' ? 'bg-gray-700 text-white' : 'text-gray-400'}`}>IP 管控</button>
-          <button onClick={() => setTab('user')} className={`px-4 py-1.5 rounded-t text-sm cursor-pointer ${tab === 'user' ? 'bg-gray-700 text-white' : 'text-gray-400'}`}>帳號管控</button>
-        </div>
-
         <div className="w-full rounded-lg border border-gray-700 bg-gray-800/50 overflow-x-auto">
           <table className="w-full text-left">
             <thead>
@@ -378,7 +420,7 @@ function IPManagement({ layoutClass = "" }: Props) {
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[20%]">對象</th>
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[22%]">處置</th>
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[14%]">到期</th>
-                <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[20%]">近期帳號</th>
+                <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 w-[20%]">近期觀察帳號（僅關聯）</th>
                 <th className="px-3 py-3 text-xs font-semibold uppercase tracking-wider text-cyan-400 bg-gray-800 text-center">操作</th>
               </tr>
             </thead>
@@ -393,16 +435,19 @@ function IPManagement({ layoutClass = "" }: Props) {
                   <td className={cell}>{statusPill(r)}</td>
                   <td className={cell}>{r.expires_at ? fmt(r.expires_at) : <span className="text-gray-500">無限期</span>}</td>
                   <td className={cell}>
-                    {r.recent_accounts.length === 0 ? <span className="text-xs text-gray-500">匿名（無帳號）</span> : (
-                      <div className="flex flex-col gap-1">
-                        {r.recent_accounts.map(u => (
-                          <span key={u} className="flex items-center gap-2 text-sm">
-                            {u}
-                            <button onClick={() => suspend(u)} className="text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 cursor-pointer whitespace-nowrap">停用</button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    {r.recent_accounts.length === 0
+                      ? <span className="text-xs text-gray-500">近一小時此 IP 無已驗證帳號活動</span>
+                      : (
+                        <div className="flex flex-col gap-1">
+                          {r.recent_accounts.map(u => (
+                            <span key={u} className="flex items-center gap-2 text-sm">
+                              {u}
+                              <button onClick={() => suspend(u)} className="text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 cursor-pointer whitespace-nowrap">停用</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    {renderActors(r)}
                   </td>
                   <td className={cell + ' text-center'}>
                     <span className="flex items-center justify-center gap-3">
@@ -422,6 +467,7 @@ function IPManagement({ layoutClass = "" }: Props) {
         <p className="mt-4 text-xs text-gray-500">
           處置台階：傳輸慢速 → 全站限速 → 全站 429 → 停用帳號。介面顯示的 IP 一律中段遮罩。
         </p>
+        </>)}
       </div>
 
       {/* edit modal — table rows never reflow */}

@@ -4,12 +4,14 @@ All entry points are best-effort: failures here must never break user requests.
 """
 import asyncio
 import ipaddress
+import json
 import threading
 from datetime import datetime, timedelta
 
 from redis import Redis
 
 from app.config import settings
+from app.services import security_policy
 from app.utils.security_log import write_event
 
 WEIGHTS = {
@@ -39,6 +41,19 @@ STRIKE_HOURS = (1, 3, 6, 12, 24, 72)
 STAGE_TTL = 3 * 3600
 SCORE_TTL = 3600
 ALERT_COOLDOWN_S = 600
+# Admin-facing wording for a rejection whose *own* request carried no verified
+# identity. ipActors (accounts recently seen from an IP) stay a separate
+# signal — they must never be back-filled as this request's actor.
+UNVERIFIED_ACTOR = "本請求未驗證帳號"
+
+
+def format_actor(username=None, user_id=None):
+    """Display string for the account that triggered THIS request."""
+    if username:
+        return str(username)
+    if user_id:
+        return f"#{user_id}"
+    return UNVERIFIED_ACTOR
 
 _lock = threading.Lock()
 _redis = None
@@ -149,6 +164,29 @@ def _incr_ttl(r, key, amount, ttl):
     return pipe.execute()[0]
 
 
+_RENEWABLE_WINDOW = """
+local count = redis.call('INCRBY', KEYS[1], ARGV[1])
+local window = tonumber(ARGV[2])
+if count ~= tonumber(ARGV[1]) then
+    window = tonumber(redis.call('GET', KEYS[2])) or 3600
+end
+redis.call('EXPIRE', KEYS[1], window)
+redis.call('SET', KEYS[2], window, 'PXAT', redis.call('PEXPIRETIME', KEYS[1]))
+return count
+"""
+
+
+def _incr_windowed(r, key, amount, window):
+    """Increment a counter and (re)arm its TTL, keeping the window length the
+    bucket was OPENED with.
+
+    An admin raising or lowering a window must not retroactively stretch or
+    shrink buckets that already exist — those expire under the old rule and
+    only then pick the new window up. The length is pinned in a side key.
+    """
+    return r.eval(_RENEWABLE_WINDOW, 2, key, f"{key}:w", amount, window)
+
+
 # ---------------------------------------------------------------- alerts
 
 def _send_alert(subject, body):
@@ -170,19 +208,24 @@ def _send_alert(subject, body):
         pass
 
 
-def _alert(kind, ip, actor, target, detail, action_taken=""):
+def _alert(kind, ip, actor, target, detail, action_taken="", actor_display=None, extra=None):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     subject = f"[MeowCloud 資安警報] {kind} — {mask_ip(ip)}"
-    body = (
-        f"時間: {now} (UTC+8)\n"
-        f"事件: {kind}\n"
-        f"來源IP: {mask_ip(ip)}\n"
-        f"關聯帳號: {actor or '匿名（無帳號）'}\n"
-        f"目標: {target or '-'}\n"
-        f"明細: {detail}\n"
-        f"動作: {action_taken or '僅記錄'}"
-    )
-    _send_alert(subject, body)
+    lines = [
+        f"時間: {now} (UTC+8)",
+        f"事件: {kind}",
+        f"來源IP: {mask_ip(ip)}",
+        f"觸發帳號: {actor_display if actor_display is not None else (actor or UNVERIFIED_ACTOR)}",
+    ]
+    for label, value in (extra or {}).items():
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+    lines += [
+        f"目標: {target or '-'}",
+        f"明細: {detail}",
+        f"動作: {action_taken or '僅記錄'}",
+    ]
+    _send_alert(subject, "\n".join(lines))
 
 
 # ---------------------------------------------------------------- controls
@@ -229,8 +272,23 @@ def invalidate_rules_cache():
         _rules_cache["ts"] = 0.0
 
 
-def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
-    """Return (block, delay_ms, upload_kbps, download_kbps) merged from active rules.
+def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False, token=None):
+    blocked, delay, up_kbps, dn_kbps, _ = match_rules_detail(
+        ip, user_id, is_upload, is_download, is_share, is_stream, token)
+    return blocked, delay, up_kbps, dn_kbps
+
+
+def match_rules_detail(ip, user_id, is_upload, is_download, is_share, is_stream=False, token=None):
+    """Return (block, delay_ms, upload_kbps, download_kbps, blocking_rule_ids).
+
+    `blocking_rule_ids` is only meaningful when block is True; the throttle
+    layer records it so admins can see WHICH rule produced a 429.
+
+    `token` is the share link the request actually targets. An `ip_token` rule
+    is scoped to ONE link on that address: without it, blocking one shared
+    folder silently blocked every other link leaving from the same IP. When
+    the link cannot be determined (unparseable/oversized body) the rule still
+    applies — punishment stays at least as strict as before, never looser.
 
     Stream precedence: dedicated `stream`-scope rules own playback traffic
     (download_kbps column carries the stream cap); while any stream rule matches,
@@ -242,6 +300,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
     delay = 0
     up_kbps = None
     dn_kbps = None
+    blockers = []
     nip = normalize_ip(ip)
 
     def _subject_hit(r):
@@ -249,7 +308,9 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
         if st == "ip":
             return bool(ip) and ip_matches(_rule_matcher(r), nip, ip)
         if st == "ip_token":
-            return bool(ip) and is_share and ip_matches(_rule_matcher(r), nip, ip)
+            if not (ip and is_share) or not ip_matches(_rule_matcher(r), nip, ip):
+                return False
+            return token is None or (r.get("token") or "") == token
         return st == "user" and bool(user_id) and r["user_id"] == user_id
 
     rules = _active_rules()
@@ -264,6 +325,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
                 continue
             if r["action"] == "block":
                 blocked = True
+                blockers.append(f"rule#{r.get('id')}(stream)")
                 continue
             delay = max(delay, r["delay_ms"])
             v = r["download_kbps"]
@@ -277,6 +339,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
         if r["scope"] == "full":
             if r["action"] == "block":
                 blocked = True
+                blockers.append(f"rule#{r.get('id')}(full)")
                 continue
             delay = max(delay, r["delay_ms"])
             if is_transfer:
@@ -289,6 +352,7 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
                 continue
             if r["action"] == "block":
                 blocked = True
+                blockers.append(f"rule#{r.get('id')}(transfer/{r.get('direction')})")
                 continue
             delay = max(delay, r["delay_ms"])
             if is_upload:
@@ -299,26 +363,50 @@ def match_rules(ip, user_id, is_upload, is_download, is_share, is_stream=False):
                 v = r["download_kbps"]
                 if v:
                     dn_kbps = v if dn_kbps is None else min(dn_kbps, v)
-    return blocked, delay, up_kbps, dn_kbps
+    return blocked, delay, up_kbps, dn_kbps, blockers
 
 
-def _ensure_auto_rule(r, subject, action, scope, direction, hours):
-    """Create/refresh one auto rule. subject: dict of identifying fields."""
+def _ensure_auto_rule(r, subject, action, scope, direction, hours, snapshot=None):
+    """Create/refresh one auto rule. subject: dict of identifying fields.
+
+    Slow-lane parameters come from the policy registry, so an admin changing
+    the default delay/bandwidth changes what NEW auto rules look like without
+    rewriting rules that already exist.
+    """
     from sqlalchemy import select, delete as sa_delete
     from app.database import SessionLocal
     from app.models.ip_control import IpControl
 
+    snap = snapshot or security_policy.current()
+    up_delay = snap.value("slow.upload_delay_ms")
+    down_delay = snap.value("slow.download_delay_ms")
+    up_kbps = snap.value("slow.upload_kbps")
+    down_kbps = snap.value("slow.download_kbps")
+
     db = SessionLocal()
     try:
-        q = select(IpControl).where(IpControl.auto.is_(True))
+        # Match auto rules by subject, scope and direction. The IP strike
+        # ladder is an explicit promotion, handled separately below.
+        q = select(IpControl).where(IpControl.auto.is_(True),
+                                    IpControl.direction == direction)
         if subject.get("user_id") is not None:
             q = q.where(IpControl.user_id == subject["user_id"], IpControl.token.is_(None))
         elif subject.get("token") is not None:
             q = q.where(IpControl.ip == subject.get("ip"), IpControl.token == subject["token"])
         else:
             q = q.where(IpControl.ip == subject["ip"], IpControl.token.is_(None))
-        existing = db.execute(q).scalars().first()
-        expires_new = None if hours is None else datetime.utcnow() + timedelta(hours=hours)
+        now = datetime.utcnow()
+        existing = db.execute(q.where(IpControl.scope == scope)).scalars().first()
+        if direction == "both" and subject.get("ip") and not subject.get("token"):
+            if action == "slow" and scope == "transfer":
+                covering = db.execute(q.where(IpControl.scope == "full", IpControl.action == "block",
+                                              IpControl.expires_at.is_(None) | (IpControl.expires_at > now))).scalars().first()
+                if covering:
+                    return False
+            if not existing and action == "block" and scope == "full":
+                existing = db.execute(q.where(IpControl.scope == "transfer", IpControl.action == "slow",
+                                               IpControl.expires_at.is_not(None))).scalars().first()
+        expires_new = None if hours is None else now + timedelta(hours=hours)
         if existing:
             if existing.expires_at is None:
                 return False  # permanent rules are terminal; only admins lift them
@@ -335,11 +423,11 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
             existing.expires_at = expires_new
             if action == "slow":
                 if direction in ("up", "both"):
-                    existing.delay_ms = settings.SEC_DEFAULT_UPLOAD_DELAY_MS
-                    existing.upload_kbps = settings.SEC_DEFAULT_UPLOAD_KBPS
+                    existing.delay_ms = up_delay
+                    existing.upload_kbps = up_kbps
                 if direction in ("down", "both"):
-                    existing.delay_ms = max(existing.delay_ms or 0, settings.SEC_DEFAULT_DOWNLOAD_DELAY_MS)
-                    existing.download_kbps = settings.SEC_DEFAULT_DOWNLOAD_KBPS
+                    existing.delay_ms = max(existing.delay_ms or 0, down_delay)
+                    existing.download_kbps = down_kbps
             db.commit()
             return bool(changed)
         subject_type = "user" if subject.get("user_id") is not None else ("ip_token" if subject.get("token") is not None else "ip")
@@ -348,9 +436,9 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
             ip=subject.get("ip"), token=subject.get("token"),
             user_id=subject.get("user_id"), username=subject.get("username"),
             action=action, scope=scope, direction=direction,
-            delay_ms=settings.SEC_DEFAULT_UPLOAD_DELAY_MS if direction in ("up", "both") else settings.SEC_DEFAULT_DOWNLOAD_DELAY_MS,
-            upload_kbps=settings.SEC_DEFAULT_UPLOAD_KBPS if direction in ("up", "both") else None,
-            download_kbps=settings.SEC_DEFAULT_DOWNLOAD_KBPS if direction in ("down", "both") else None,
+            delay_ms=up_delay if direction in ("up", "both") else down_delay,
+            upload_kbps=up_kbps if direction in ("up", "both") else None,
+            download_kbps=down_kbps if direction in ("down", "both") else None,
             reason="自動觸發（積分/流量閾值）", auto=True, expires_at=None if hours is None else expires_new,
         ))
         db.commit()
@@ -361,34 +449,59 @@ def _ensure_auto_rule(r, subject, action, scope, direction, hours):
 
 # ---------------------------------------------------------------- events
 
-def record_event(kind, ip, actor=None, target=None, detail=""):
-    """Sync entry. Safe to call from threadpool or asyncio.to_thread."""
+def record_event(kind, ip, actor=None, target=None, detail="",
+                 actor_display=None, extra=None, score=True):
+    """Sync entry. Safe to call from threadpool or asyncio.to_thread.
+
+    `extra` is a dict of admin-only context (HTTP method, route id, rejection
+    source, threshold, outcome). It is appended to the audit line and rendered
+    in the alert e-mail; it never reaches the client.
+
+    `score=False` records the event but does not feed the violation score —
+    used for repeat rejections inside an already-counted window, so a burst
+    costs one violation instead of N while every request stays auditable.
+    """
+    audit_detail = detail
+    if extra:
+        rendered = "；".join(f"{k}={v}" for k, v in extra.items() if v not in (None, ""))
+        if rendered:
+            audit_detail = f"{detail}｜{rendered}" if detail else rendered
     try:
-        write_event(kind, ip, actor, target, detail)
-        weight = WEIGHTS.get(kind)
+        write_event(kind, ip, actor_display if actor_display is not None else actor,
+                    target, audit_detail)
+        weight = WEIGHTS.get(kind) if score else None
         if weight and ip:
             r = _client()
+            snap = security_policy.current()
             is_auth = kind in AUTH_KINDS or (
                 kind == "rate_limit" and any(str(target or "").startswith(p) for p in AUTH_ENDPOINTS))
             if is_auth:
                 score_a = _incr_ttl(r, f"secScoreA:{ip}", weight, SCORE_TTL)
-                if score_a >= settings.SEC_SCORE_BLOCK_THRESHOLD:
-                    _escalate_to_block(r, ip, actor, kind, score_a, detail)
+                if score_a >= snap.value("score.auth_block_threshold"):
+                    _escalate_to_block(r, ip, actor, kind, score_a, audit_detail, target,
+                                       actor_display=actor_display)
             else:
-                score = _incr_ttl(r, f"secScore:{ip}", weight, SCORE_TTL)
+                score_n = _incr_ttl(r, f"secScore:{ip}", weight, SCORE_TTL)
+                slow_at = snap.value("score.slow_threshold")
                 stage = int(r.get(f"secStage:{ip}") or 0)
-                if stage == 0 and score >= settings.SEC_SCORE_SLOW_THRESHOLD:
-                    if _ensure_auto_rule(r, {"ip": ip}, "slow", "transfer", "both", 1):
+                if stage == 0 and score_n >= slow_at:
+                    if _ensure_auto_rule(r, {"ip": ip}, "slow", "transfer", "both", 1, snapshot=snap):
                         r.setex(f"secStage:{ip}", STAGE_TTL, "1")
-                        _alert(kind, ip, actor, target, f"{detail}｜積分 {score}", "上傳/下載慢速 1 小時")
-                elif stage == 1 and score >= 2 * settings.SEC_SCORE_SLOW_THRESHOLD:
-                    _escalate_to_block(r, ip, actor, kind, score, detail)
+                        # The rule just became effective: without dropping the
+                        # local cache the admin UI (and this worker) would keep
+                        # serving the pre-slow decision for up to 60s.
+                        invalidate_rules_cache()
+                        _alert(kind, ip, actor, target, f"{audit_detail}｜積分 {score_n}",
+                               "上傳/下載慢速 1 小時", actor_display=actor_display)
+                elif stage == 1 and score_n >= snap.value("score.escalated_block_threshold"):
+                    _escalate_to_block(r, ip, actor, kind, score_n, audit_detail, target,
+                                       actor_display=actor_display)
     except Exception:
         import logging
         logging.getLogger(__name__).exception("security_engine.record_event failed")
 
 
-def _escalate_to_block(r, ip, actor, kind, score, detail):
+def _escalate_to_block(r, ip, actor, kind, score, detail, target=None, actor_display=None):
     strikes = r.incr(f"secStrikes:{ip}")
     r.expire(f"secStrikes:{ip}", 7 * 24 * 3600)
     # One escalation per completed violation episode: clear both score buckets
@@ -405,8 +518,8 @@ def _escalate_to_block(r, ip, actor, kind, score, detail):
     if hours is None and kind in DISABLE_ATTESTED_KINDS and actor:
         extra = _disable_account(actor)
     label = "永久" if hours is None else f"{hours} 小時"
-    _alert(kind, ip, actor, "", f"{detail}｜積分 {score}",
-           f"全站 429 冷卻 {label}（第 {strikes} 次）{extra}")
+    _alert(kind, ip, actor, target, f"{detail}｜積分 {score}",
+           f"全站 429 冷卻 {label}（第 {strikes} 次）{extra}", actor_display=actor_display)
 
 
 def _disable_account(username):
@@ -450,34 +563,81 @@ def record_admin(kind, ip, actor, target, detail=""):
 
 # ---------------------------------------------------------------- transfer counters
 
-def count_upload(user_id, ip, username=None):
+# An auto slow/block rule lasts this many hours, so the "already escalated"
+# claim marker lives exactly as long: one escalation per stage per hour,
+# independent of where the threshold happens to sit.
+AUTO_RULE_HOURS = 1
+
+
+def transfer_stage(n, limit):
+    """0 = within limits, 1 = slow lane, 2 = block.
+
+    Deliberately a plain comparison instead of `n == limit + 1`: after an
+    admin lowers a threshold mid-window the counter is already past it and the
+    exact-crossing test would silently never fire again.
+    """
+    if n > 2 * limit:
+        return 2
+    if n > limit:
+        return 1
+    return 0
+
+
+def claim_stage(r, marker_key, ttl):
+    """Atomic once-per-window claim (SET NX). True only for the first caller,
+    also across workers — so repeated hits never add a second violation."""
+    try:
+        return bool(r.set(marker_key, "1", nx=True, ex=max(int(ttl), 1)))
+    except Exception:
+        return True
+
+
+def count_upload(user_id, ip, username=None, snapshot=None):
+    """Account upload volume, counted at the CREATION boundary (see files.py).
+
+    Called once per successfully created upload — not per tus HEAD/PATCH or
+    per failed attempt — so a batch in progress is not miscounted as dozens of
+    uploads. Request-level abuse is still covered by the endpoint limiter and
+    the flood guard.
+    """
     if not user_id:
         return
     try:
         r = _client()
-        n = _incr_ttl(r, f"xfer:up:u{user_id}", 1, 3600)
-        limit = settings.SEC_UPLOAD_HOURLY_LIMIT
-        if n == limit + 1 or n == 2 * limit + 1:
-            action = "slow" if n == limit + 1 else "block"
+        snap = snapshot or security_policy.current()
+        key = f"xfer:up:u{user_id}"
+        window = snap.value("volume.upload_window_seconds")
+        n = _incr_windowed(r, key, 1, window)
+        limit = snap.value("volume.uploads_per_hour_per_account")
+        stage = transfer_stage(n, limit)
+        if stage and claim_stage(r, f"{key}:s{stage}", AUTO_RULE_HOURS * 3600):
+            action = "slow" if stage == 1 else "block"
             if _ensure_auto_rule(r, {"user_id": user_id, "username": username, "ip": None, "token": None},
-                                 action, "transfer", "up", 1):
+                                 action, "transfer", "up", AUTO_RULE_HOURS, snapshot=snap):
                 invalidate_rules_cache()
-                _alert("upload_volume", None, username or f"#{user_id}", "上傳", f"{n} 次/小時",
-                       "上傳限流（慢速）" if action == "slow" else "上傳 block（1h）")
+                _alert("upload_volume", None, username or f"#{user_id}", "上傳",
+                       f"{n} 次/{window}s（閾值 {limit}）",
+                       "上傳限流（慢速）" if action == "slow" else "上傳 block（1h）",
+                       extra={"拒絕來源": "帳號上傳量", "規則範圍": "transfer/up"})
     except Exception:
         pass
 
 
-def count_download(user_id, ip, token=None, username=None):
+def count_download(user_id, ip, token=None, username=None, snapshot=None):
     try:
         r = _client()
+        snap = snapshot or security_policy.current()
         if user_id:
-            n = _incr_ttl(r, f"xfer:dn:u{user_id}", 1, 3600)
-            limit = settings.SEC_DOWNLOAD_HOURLY_LIMIT
+            key = f"xfer:dn:u{user_id}"
+            window = snap.value("volume.download_window_seconds")
+            n = _incr_windowed(r, key, 1, window)
+            limit = snap.value("volume.downloads_per_hour_per_account")
             subject = {"user_id": user_id, "username": username}
         elif ip and token:
-            n = _incr_ttl(r, f"xfer:dn:a{ip}:{token[:8]}", 1, 3600)
-            limit = settings.SEC_ANON_DOWNLOAD_HOURLY_LIMIT
+            key = f"xfer:dn:a{ip}:{token[:8]}"
+            window = snap.value("volume.anon_share_download_window_seconds")
+            n = _incr_windowed(r, key, 1, window)
+            limit = snap.value("volume.anon_share_downloads_per_hour")
             subject = {"ip": ip, "token": token}
             try:
                 hk = f"hotlinks:{normalize_ip(ip) or ip}"
@@ -487,14 +647,17 @@ def count_download(user_id, ip, token=None, username=None):
                 pass
         else:
             return
-        if n == limit + 1 or n == 2 * limit + 1:
-            action = "slow" if n == limit + 1 else "block"
-            if _ensure_auto_rule(r, subject, action, "transfer", "down", 1):
+        stage = transfer_stage(n, limit)
+        if stage and claim_stage(r, f"{key}:s{stage}", AUTO_RULE_HOURS * 3600):
+            action = "slow" if stage == 1 else "block"
+            if _ensure_auto_rule(r, subject, action, "transfer", "down", AUTO_RULE_HOURS, snapshot=snap):
                 invalidate_rules_cache()
                 who = username or f"#{user_id}" if user_id else f"{mask_ip(ip)}→連結#{token[:8] if token else ''}"
                 _alert("download_volume", None if user_id else ip, who, "下載",
-                       f"{n} 次/小時（閾值 {limit}）",
-                       "下載限速" if action == "slow" else "下載 block（1h）")
+                       f"{n} 次/{window}s（閾值 {limit}）",
+                       "下載限速" if action == "slow" else "下載 block（1h）",
+                       extra={"拒絕來源": "帳號下載量" if user_id else "匿名分享下載量",
+                              "規則範圍": "transfer/down"})
     except Exception:
         pass
 
@@ -522,13 +685,39 @@ def clear_pw_failures(token):
         pass
 
 
-def flood_exceeded(ip):
+def should_log_reject(kind, ip, target, window=300):
+    """True only for the FIRST rejection logged per (kind, ip, route).
+
+    A blocked IP retries hard; without this marker one incident would flood
+    the audit log. Counters keep counting every rejected request — only the
+    admin-facing record is de-duplicated.
+    """
     try:
         r = _client()
-        n = _incr_ttl(r, f"glb:{ip}", 1, 3600)
-        if n == settings.SEC_GLOBAL_HOURLY_LIMIT + 1:
-            record_event("flood", ip, None, None, f"超過全域 {settings.SEC_GLOBAL_HOURLY_LIMIT} 次/小時")
-        return n > settings.SEC_GLOBAL_HOURLY_LIMIT
+        key = f"secLogged:{kind}:{normalize_ip(ip) or ip}:{target or '-'}"
+        return bool(r.set(key, "1", nx=True, ex=max(int(window), 1)))
+    except Exception:
+        return True
+
+
+def flood_exceeded(ip, actor_display=None, target=None, snapshot=None, method=None):
+    try:
+        r = _client()
+        snap = snapshot or security_policy.current()
+        limit = snap.value("global.flood_requests_per_ip")
+        window = snap.value("global.flood_window_seconds")
+        n = _incr_windowed(r, f"glb:{ip}", 1, window)
+        # First rejection inside this window (SET NX marker) rather than
+        # `n == limit + 1`: after a threshold is lowered mid-window the
+        # counter is already past the new limit and the exact-crossing test
+        # would never report again.
+        if n > limit and should_log_reject("flood", ip, None, window):
+            record_event("flood", ip, None, target,
+                         f"超過全域 {limit} 次/小時（第 {n} 次）",
+                         actor_display=actor_display,
+                         extra={"HTTP方法": method, "拒絕來源": "全站 flood",
+                                "門檻": f"{limit}/{window}s", "規則範圍": "全站", "處分": "HTTP 429"})
+        return n > limit
     except Exception:
         return False
 
@@ -555,6 +744,41 @@ def get_ip_scores(limit=10):
     return out
 
 
-def record_event_async(kind, ip, actor=None, target=None, detail=""):
+def recent_ip_actors(ip, limit=20):
+    """Accounts recently observed acting from `ip` (admin display only).
+
+    This is correlation, NOT proof of who triggered a given request — keep it
+    out of the attribution path (see UNVERIFIED_ACTOR).
+    """
+    if not ip:
+        return []
+    out = []
+    try:
+        r = _client()
+        key = f"ipActors:{normalize_ip(ip)}"
+        for uid, ts in (r.hgetall(key) or {}).items():
+            uid = uid.decode() if isinstance(uid, bytes) else uid
+            try:
+                ts = int(ts)
+            except (TypeError, ValueError):
+                continue
+            name = None
+            try:
+                raw = r.get(f"session_data:{uid}")
+                if raw:
+                    name = json.loads(raw.decode() if isinstance(raw, bytes) else raw).get("username")
+            except Exception:
+                name = None
+            out.append({"user_id": int(uid), "username": name or f"#{uid}",
+                        "last_seen": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")})
+        out.sort(key=lambda x: x["last_seen"], reverse=True)
+    except Exception:
+        return []
+    return out[:limit]
+
+
+def record_event_async(kind, ip, actor=None, target=None, detail="",
+                       actor_display=None, extra=None, score=True):
     """Fire-and-forget for async (middleware/handler) contexts."""
-    asyncio.create_task(asyncio.to_thread(record_event, kind, ip, actor, target, detail))
+    asyncio.create_task(asyncio.to_thread(
+        record_event, kind, ip, actor, target, detail, actor_display, extra, score))

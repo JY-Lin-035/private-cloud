@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,9 @@ from app.models.folder import Folder
 from app.constants import Identity
 from app.models.ip_control import IpControl
 from app.services import security_engine as sec
+from app.services import security_policy
 from app.utils import logger as log
+from app.utils.client_ip import request_client_ip
 from app.utils.security_log import write_event
 
 router = APIRouter(prefix="/api/ipcontrol", tags=["ipcontrol"])
@@ -224,6 +226,7 @@ async def admin_list(request: Request, db: Session = Depends(get_db)):
 @router.post("/admin")
 async def admin_create(payload: ControlCreate, request: Request, db: Session = Depends(get_db)):
     admin = require_admin(request)
+    snapshot = security_policy.for_request(request)
     if payload.subject_type not in ("ip", "ip_token", "user"):
         raise HTTPException(status_code=400, detail="無效的主鍵類型")
     if payload.action not in ("slow", "block") or payload.scope not in ("transfer", "full", "stream"):
@@ -259,11 +262,11 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
     rule = IpControl(
         subject_type=payload.subject_type, ip=ip, token=token, user_id=user_id, username=username,
         action=payload.action, scope=payload.scope, direction=payload.direction,
-        delay_ms=payload.delay_ms if payload.delay_ms is not None else settings.SEC_DEFAULT_UPLOAD_DELAY_MS,
+        delay_ms=payload.delay_ms if payload.delay_ms is not None else snapshot.value("slow.upload_delay_ms"),
         upload_kbps=payload.upload_kbps if payload.upload_kbps is not None else (
-            settings.SEC_DEFAULT_UPLOAD_KBPS if payload.direction in ("up", "both") else None),
+            snapshot.value("slow.upload_kbps") if payload.direction in ("up", "both") else None),
         download_kbps=payload.download_kbps if payload.download_kbps is not None else (
-            settings.SEC_DEFAULT_DOWNLOAD_KBPS if payload.direction in ("down", "both") else None),
+            snapshot.value("slow.download_kbps") if payload.direction in ("down", "both") else None),
         reason=payload.reason, auto=False, created_by=admin.get("id"),
         expires_at=_parse_abs_expires(payload.expires_at) if payload.expires_at else (
             (datetime.utcnow() + timedelta(hours=payload.expires_in_hours)) if payload.expires_in_hours else None),
@@ -285,7 +288,7 @@ async def admin_create(payload: ControlCreate, request: Request, db: Session = D
     return {"id": rule.id, "linked_accounts": linked}
 
 
-@router.put("/admin/{rule_id}")
+@router.put("/admin/{rule_id:int}")
 async def admin_update(rule_id: int, payload: ControlUpdate, request: Request, db: Session = Depends(get_db)):
     admin = require_admin(request)
     rule = db.get(IpControl, rule_id)
@@ -397,3 +400,144 @@ async def admin_hotlinks(request: Request, ip: str = Query(..., max_length=45), 
             owner = db.get(Account, d.owner_id)
             links.append({"token": token, "item": d.name, "type": "folder", "owner": owner.name if owner else "?"})
     return {"links": links}
+
+
+@router.get("/admin/ipactors")
+async def admin_ip_actors(request: Request, db: Session = Depends(get_db),
+                          ip: Optional[str] = Query(None, max_length=45),
+                          rule_id: Optional[int] = Query(None)):
+    """Accounts recently observed acting from an IP (with last activity).
+
+    Correlation context ONLY: an entry here never proves who triggered a given
+    rejection — that is the event's own verified actor, and shared egress IPs
+    legitimately show several accounts. Accepts `rule_id` so the admin UI can
+    ask per listed rule without ever receiving the unmasked address.
+    """
+    require_admin(request)
+    raw = ip
+    if rule_id is not None:
+        rule = db.get(IpControl, rule_id)
+        if rule is None:
+            raise HTTPException(status_code=404, detail="找不到該規則")
+        raw = rule.ip
+    if not raw:
+        raise HTTPException(status_code=400, detail="需要提供 ip 或 rule_id")
+    return {"ip": sec.mask_ip(raw), "accounts": sec.recent_ip_actors(raw)}
+
+
+# ---------------------------------------------------------------- risk thresholds
+# "門檻" = how future requests will be judged (versioned, auditable,
+# revertible). "規則" (endpoints above) = what is already in effect today.
+
+class PolicyUpdate(BaseModel):
+    changes: dict[str, StrictInt] = Field(max_length=64)
+    reset_ids: list[str] = Field(default_factory=list, max_length=64)
+    expected_version: int
+    reason: Optional[str] = Field(None, max_length=200)
+
+
+class PolicyReset(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=64)
+    expected_version: int
+    reason: Optional[str] = Field(None, max_length=200)
+
+
+class PolicyRollback(BaseModel):
+    to_version: int
+    expected_version: int
+    reason: Optional[str] = Field(None, max_length=200)
+
+
+def _admin_stamp(request: Request) -> tuple[str, Optional[int]]:
+    user = request.state.user
+    return (str(user.get("username") or user.get("id") or "admin"), user.get("id"))
+
+
+def _stale(exc: security_policy.StaleVersion) -> HTTPException:
+    return HTTPException(status_code=409,
+                         detail=f"設定已被其他頁面更新（目前 v{exc.current_version}），請重新載入後再改")
+
+
+@router.get("/admin/policies")
+async def admin_policies(request: Request):
+    """Every registered threshold with its effective value and provenance."""
+    require_admin(request)
+    return security_policy.public_snapshot()
+
+
+@router.get("/admin/policies/history")
+async def admin_policy_history(request: Request, limit: int = Query(30, ge=1, le=200)):
+    require_admin(request)
+    return {"history": security_policy.history(limit)}
+
+
+@router.put("/admin/policies")
+async def admin_policy_update(payload: PolicyUpdate, request: Request):
+    """Apply a validated group of edits as one new version (all or nothing)."""
+    admin = require_admin(request)
+    actor, actor_id = _admin_stamp(request)
+    try:
+        result = security_policy.commit(payload.changes, reset_ids=payload.reset_ids, actor=actor, actor_id=actor_id,
+                                       reason=payload.reason,
+                                       expected_version=payload.expected_version)
+    except security_policy.StaleVersion as exc:
+        raise _stale(exc)
+    except security_policy.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    write_event("policy_update", request_client_ip(request), admin.get("username"),
+                f"v{result['version']}",
+                f"{payload.reason or ''}｜" + "、".join(
+                    f"{d['label']}:{d['before']}→{d['after']}" for d in result["changed"].values())
+                or "無實際變更")
+    sec.invalidate_rules_cache()
+    return result
+
+
+@router.post("/admin/policies/reset")
+async def admin_policy_reset(payload: PolicyReset, request: Request):
+    """Drop admin overrides -> deployment setting -> code default."""
+    admin = require_admin(request)
+    actor, actor_id = _admin_stamp(request)
+    try:
+        result = security_policy.reset_to_defaults(payload.ids, actor=actor, actor_id=actor_id,
+                                                  reason=payload.reason,
+                                                  expected_version=payload.expected_version)
+    except security_policy.StaleVersion as exc:
+        raise _stale(exc)
+    except security_policy.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    write_event("policy_reset", request_client_ip(request), admin.get("username"),
+                f"v{result['version']}",
+                f"恢復預設：{', '.join(result.get('reset') or []) or '-'}")
+    sec.invalidate_rules_cache()
+    return result
+
+
+@router.get("/admin/policies/rollback-preview")
+def admin_policy_rollback_preview(request: Request, to_version: int, expected_version: int):
+    require_admin(request)
+    try:
+        return security_policy.preview_rollback(to_version, expected_version)
+    except security_policy.StaleVersion as exc:
+        raise _stale(exc)
+    except security_policy.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/admin/policies/rollback")
+async def admin_policy_rollback(payload: PolicyRollback, request: Request):
+    """Re-publish an older version as a NEW version (history stays append-only)."""
+    admin = require_admin(request)
+    actor, actor_id = _admin_stamp(request)
+    try:
+        result = security_policy.rollback_to(payload.to_version, actor=actor, actor_id=actor_id,
+                                             reason=payload.reason,
+                                             expected_version=payload.expected_version)
+    except security_policy.StaleVersion as exc:
+        raise _stale(exc)
+    except security_policy.PolicyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    write_event("policy_rollback", request_client_ip(request), admin.get("username"),
+                f"v{result['version']}", f"回滾至 v{payload.to_version}")
+    sec.invalidate_rules_cache()
+    return result

@@ -5,5 +5,7 @@ from app.models.collaboration import Collaboration
 from app.models.feature_flag import FeatureFlag
 from app.models.announcement import Announcement
 from app.models.ip_control import IpControl
+from app.models.security_policy import SecurityPolicyVersion
 
-__all__ = ["Account", "File", "Folder", "Collaboration", "FeatureFlag", "Announcement", "IpControl"]
+__all__ = ["Account", "File", "Folder", "Collaboration", "FeatureFlag", "Announcement", "IpControl",
+           "SecurityPolicyVersion"]
